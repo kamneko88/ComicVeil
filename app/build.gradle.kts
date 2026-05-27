@@ -69,6 +69,9 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     annotationProcessor("androidx.room:room-compiler:2.6.1")
 
+    // RAR展開
+    implementation("com.github.junrar:junrar:7.5.5")
+
     // テスト
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

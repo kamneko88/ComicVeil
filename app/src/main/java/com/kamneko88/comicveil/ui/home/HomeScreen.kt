@@ -1,9 +1,12 @@
 package com.kamneko88.comicveil.ui.home
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -56,7 +59,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.FileItemType
-import java.io.File
+import com.kamneko88.comicveil.data.LocalFileRepository
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -68,35 +71,64 @@ fun HomeScreen(
     val files by viewModel.files.collectAsState()
     val currentPath by viewModel.currentPath.collectAsState()
     var isListMode by remember { mutableStateOf(true) }
+    var hasPermission by remember { mutableStateOf(false) }
 
-    // ルートフォルダかどうか
-    val rootFolder = Environment.getExternalStorageDirectory()
-    val isRoot = currentPath == null || currentPath?.absolutePath == rootFolder.absolutePath
+    val rootFolder = Environment.getExternalStoragePublicDirectory(
+        Environment.DIRECTORY_DOWNLOADS
+    )
+    val isRoot = currentPath == null ||
+            currentPath?.absolutePath == rootFolder.absolutePath
 
-    // 権限設定
-    val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        Manifest.permission.READ_MEDIA_IMAGES
-    } else {
-        Manifest.permission.READ_EXTERNAL_STORAGE
-    }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) viewModel.loadInitialFolder()
-    }
-
-    LaunchedEffect(Unit) {
-        if (ContextCompat.checkSelfPermission(context, permission)
-            == PackageManager.PERMISSION_GRANTED
-        ) {
+    // MANAGE_EXTERNAL_STORAGE権限のランチャー
+    val manageStorageLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (Environment.isExternalStorageManager()) {
+            hasPermission = true
             viewModel.loadInitialFolder()
-        } else {
-            permissionLauncher.launch(permission)
         }
     }
 
-    // Androidの戻るボタン対応
+    // 通常権限のランチャー
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            hasPermission = true
+            viewModel.loadInitialFolder()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        when {
+            // Android 11以上：全ファイルアクセス権限
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {
+                if (Environment.isExternalStorageManager()) {
+                    hasPermission = true
+                    viewModel.loadInitialFolder()
+                } else {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                        data = Uri.parse("package:${context.packageName}")
+                    }
+                    manageStorageLauncher.launch(intent)
+                }
+            }
+            // Android 10以下：通常の読み取り権限
+            else -> {
+                if (ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.READ_EXTERNAL_STORAGE
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    hasPermission = true
+                    viewModel.loadInitialFolder()
+                } else {
+                    permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
+                }
+            }
+        }
+    }
+
     BackHandler(enabled = !isRoot) {
         viewModel.navigateUp()
     }
@@ -106,13 +138,11 @@ fun HomeScreen(
             TopAppBar(
                 title = {
                     if (isRoot) {
-                        // ホーム画面：HOME表示
                         Text(
                             text = "HOME",
                             style = MaterialTheme.typography.titleLarge
                         )
                     } else {
-                        // サブフォルダ：現在のフォルダ名を表示
                         Text(
                             text = currentPath?.name ?: "",
                             style = MaterialTheme.typography.titleMedium,
@@ -123,7 +153,6 @@ fun HomeScreen(
                 },
                 navigationIcon = {
                     if (!isRoot) {
-                        // 戻るボタン
                         IconButton(onClick = { viewModel.navigateUp() }) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowBack,
@@ -182,7 +211,10 @@ fun HomeScreen(
                     .padding(innerPadding),
                 contentAlignment = Alignment.Center
             ) {
-                Text("ファイルが見つかりません")
+                Text(
+                    text = if (hasPermission) "ファイルが見つかりません"
+                    else "権限を確認中..."
+                )
             }
         } else {
             LazyColumn(
@@ -194,8 +226,16 @@ fun HomeScreen(
                     FileListItem(
                         fileItem = fileItem,
                         onClick = {
-                            if (fileItem.isFolder) {
-                                viewModel.loadFolder(fileItem.file)
+                            when {
+                                fileItem.isFolder -> {
+                                    viewModel.loadFolder(fileItem.file)
+                                }
+                                fileItem.isComic -> {
+                                    val encodedPath = java.net.URLEncoder.encode(
+                                        fileItem.path, "UTF-8"
+                                    )
+                                    navController.navigate("viewer/$encodedPath")
+                                }
                             }
                         }
                     )
@@ -211,33 +251,62 @@ fun FileListItem(
     fileItem: FileItem,
     onClick: () -> Unit
 ) {
+    val repository = remember { LocalFileRepository() }
+    val (title, author) = remember(fileItem.name) {
+        repository.parseFileName(fileItem.name)
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = when (fileItem.type) {
-                FileItemType.FOLDER -> Icons.Default.Folder
-                else -> Icons.Default.InsertDriveFile
-            },
-            contentDescription = null,
+        Box(
             modifier = Modifier
-                .size(40.dp)
+                .size(56.dp)
                 .padding(end = 8.dp),
-            tint = when (fileItem.type) {
-                FileItemType.FOLDER -> MaterialTheme.colorScheme.primary
-                else -> MaterialTheme.colorScheme.secondary
-            }
-        )
-        Column(modifier = Modifier.weight(1f)) {
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = when (fileItem.type) {
+                    FileItemType.FOLDER -> Icons.Default.Folder
+                    else -> Icons.Default.InsertDriveFile
+                },
+                contentDescription = null,
+                modifier = Modifier.size(40.dp),
+                tint = when (fileItem.type) {
+                    FileItemType.FOLDER -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.secondary
+                }
+            )
+        }
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
             Text(
-                text = fileItem.name,
+                text = title,
                 style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
+            )
+            if (author != null) {
+                Text(
+                    text = author,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text(
+                text = if (fileItem.isFolder) "フォルダ"
+                else fileItem.file.extension.uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

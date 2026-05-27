@@ -19,8 +19,10 @@ class HomeViewModel : ViewModel() {
     val currentPath: StateFlow<File?> = _currentPath
 
     fun loadInitialFolder() {
-        val initialFolder = Environment.getExternalStorageDirectory()
-        loadFolder(initialFolder)
+        val downloadFolder = Environment.getExternalStoragePublicDirectory(
+            Environment.DIRECTORY_DOWNLOADS
+        )
+        loadFolder(downloadFolder)
     }
 
     fun loadFolder(folder: File) {
