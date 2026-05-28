@@ -1,44 +1,58 @@
 package com.kamneko88.comicveil.ui.viewer
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.zip.ZipFile
-import androidx.compose.foundation.layout.statusBarsPadding
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun ViewerScreen(
     filePath: String,
@@ -47,9 +61,8 @@ fun ViewerScreen(
     var pages by remember { mutableStateOf<List<ByteArray>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
-
-    // バウンスON/OFFの切り替え状態
-    var bounceEnabled by remember { mutableStateOf(true) }
+    var menuVisible by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     BackHandler { onClose() }
 
@@ -71,31 +84,27 @@ fun ViewerScreen(
     }
 
     when {
-        isLoading -> {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) { CircularProgressIndicator() }
-        }
-        error != null -> {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) { Text("エラー：$error") }
-        }
-        pages.isEmpty() -> {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) { Text("ページが見つかりません") }
-        }
+        isLoading -> Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) { CircularProgressIndicator() }
+
+        error != null -> Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) { Text("エラー：$error") }
+
+        pages.isEmpty() -> Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) { Text("ページが見つかりません") }
+
         else -> {
             val pagerState = rememberPagerState(
                 initialPage = 0,
                 pageCount = { pages.size }
             )
 
-            // バウンスON：スプリングアニメーション
             val springFling = PagerDefaults.flingBehavior(
                 state = pagerState,
                 snapAnimationSpec = spring(
@@ -104,69 +113,23 @@ fun ViewerScreen(
                 )
             )
 
-            // バウンスOFF：通常アニメーション
-            val normalFling = PagerDefaults.flingBehavior(
-                state = pagerState,
-                snapAnimationSpec = tween(durationMillis = 200)
-            )
-
-            Column(modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
             ) {
-
-                // 上部バー
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.7f))
-                        .padding(4.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 閉じるボタン
-                        Button(
-                            onClick = onClose,
-                            modifier = Modifier.padding(end = 8.dp)
-                        ) {
-                            Text("✕ 閉じる")
-                        }
-
-                        // バウンス切り替えボタン
-                        Button(
-                            onClick = { bounceEnabled = !bounceEnabled },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (bounceEnabled)
-                                    Color(0xFF4CAF50)  // ON時：緑
-                                else
-                                    Color(0xFF9E9E9E)  // OFF時：グレー
-                            )
-                        ) {
-                            Text(
-                                text = if (bounceEnabled) "バウンス ON" else "バウンス OFF"
-                            )
-                        }
-                    }
-
-                    // ページ番号
-                    Text(
-                        text = "${pagerState.currentPage + 1} / ${pages.size}",
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .padding(end = 16.dp)
-                    )
-                }
-
-                // ページャー
+                // ページャー（タップでメニュー表示）
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures {
+                                menuVisible = !menuVisible
+                            }
+                        },
                     reverseLayout = true,
-                    flingBehavior = if (bounceEnabled) springFling else normalFling
+                    flingBehavior = springFling
                 ) { pageIndex ->
                     Box(
                         modifier = Modifier.fillMaxSize(),
@@ -177,6 +140,94 @@ fun ViewerScreen(
                             contentDescription = "ページ ${pageIndex + 1}",
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Fit
+                        )
+                    }
+                }
+
+                // メニュー表示時：画面を暗くする
+                AnimatedVisibility(
+                    visible = menuVisible,
+                    enter = fadeIn(tween(200)),
+                    exit = fadeOut(tween(200))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.4f))
+                    )
+                }
+
+                // メニュー表示時：中央の閉じるボタン
+                AnimatedVisibility(
+                    visible = menuVisible,
+                    enter = fadeIn(tween(200)),
+                    exit = fadeOut(tween(200)),
+                    modifier = Modifier.align(Alignment.Center)
+                ) {
+                    Button(
+                        onClick = onClose,
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = null
+                        )
+                        Text(
+                            text = "  本を閉じる",
+                            fontSize = 16.sp
+                        )
+                    }
+                }
+
+                // メニュー表示時：下部スライダー
+                AnimatedVisibility(
+                    visible = menuVisible,
+                    enter = slideInVertically(tween(200)) { it },
+                    exit = slideOutVertically(tween(200)) { it },
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.7f))
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        // スライダー値（ページ番号より前に宣言してリアルタイム連動）
+                        var sliderValue by remember {
+                            mutableFloatStateOf((pages.size - 1).toFloat())
+                        }
+                        LaunchedEffect(pagerState.currentPage) {
+                            sliderValue = (pages.size - 1 - pagerState.currentPage).toFloat()
+                        }
+
+                        // ページ番号表示（スライダーに連動）
+                        Text(
+                            text = "${pages.size - sliderValue.toInt()} / ${pages.size}",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                        )
+
+                        // ページスライダー（右端=先頭、左端=最終）
+                        Slider(
+                            value = sliderValue,
+                            onValueChange = { sliderValue = it },
+                            onValueChangeFinished = {
+                                scope.launch {
+                                    val targetPage = pages.size - 1 - sliderValue.toInt()
+                                    pagerState.animateScrollToPage(targetPage)
+                                }
+                            },
+                            valueRange = 0f..(pages.size - 1).toFloat(),
+                            steps = pages.size - 2,
+                            modifier = Modifier.fillMaxWidth(),
+                            thumb = {
+                                Box(
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .background(Color.White, CircleShape)
+                                )
+                            }
                         )
                     }
                 }
