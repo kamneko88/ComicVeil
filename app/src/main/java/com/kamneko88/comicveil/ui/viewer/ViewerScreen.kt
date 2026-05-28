@@ -46,9 +46,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.github.junrar.Archive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.zip.ZipFile
 
@@ -72,6 +74,7 @@ fun ViewerScreen(
                 val file = File(filePath)
                 val extractedPages = when (file.extension.lowercase()) {
                     "zip", "cbz" -> extractZip(file)
+                    "rar", "cbr" -> extractRar(file)
                     else -> emptyList()
                 }
                 pages = extractedPages
@@ -118,7 +121,6 @@ fun ViewerScreen(
                     .fillMaxSize()
                     .statusBarsPadding()
             ) {
-                // ページャー（タップでメニュー表示）
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier
@@ -144,7 +146,6 @@ fun ViewerScreen(
                     }
                 }
 
-                // メニュー表示時：画面を暗くする
                 AnimatedVisibility(
                     visible = menuVisible,
                     enter = fadeIn(tween(200)),
@@ -157,7 +158,6 @@ fun ViewerScreen(
                     )
                 }
 
-                // メニュー表示時：中央の閉じるボタン
                 AnimatedVisibility(
                     visible = menuVisible,
                     enter = fadeIn(tween(200)),
@@ -179,7 +179,6 @@ fun ViewerScreen(
                     }
                 }
 
-                // メニュー表示時：下部スライダー
                 AnimatedVisibility(
                     visible = menuVisible,
                     enter = slideInVertically(tween(200)) { it },
@@ -192,7 +191,6 @@ fun ViewerScreen(
                             .background(Color.Black.copy(alpha = 0.7f))
                             .padding(horizontal = 16.dp, vertical = 8.dp)
                     ) {
-                        // スライダー値（ページ番号より前に宣言してリアルタイム連動）
                         var sliderValue by remember {
                             mutableFloatStateOf((pages.size - 1).toFloat())
                         }
@@ -200,7 +198,6 @@ fun ViewerScreen(
                             sliderValue = (pages.size - 1 - pagerState.currentPage).toFloat()
                         }
 
-                        // ページ番号表示（スライダーに連動）
                         Text(
                             text = "${pages.size - sliderValue.toInt()} / ${pages.size}",
                             color = Color.White,
@@ -208,7 +205,6 @@ fun ViewerScreen(
                             modifier = Modifier.align(Alignment.CenterHorizontally)
                         )
 
-                        // ページスライダー（右端=先頭、左端=最終）
                         Slider(
                             value = sliderValue,
                             onValueChange = { sliderValue = it },
@@ -236,6 +232,7 @@ fun ViewerScreen(
     }
 }
 
+// ZIP/CBZ展開
 private fun extractZip(file: File): List<ByteArray> {
     val pages = mutableListOf<Pair<String, ByteArray>>()
     ZipFile(file).use { zip ->
@@ -250,6 +247,28 @@ private fun extractZip(file: File): List<ByteArray> {
             zip.getInputStream(entry).use { stream ->
                 pages.add(Pair(entry.name, stream.readBytes()))
             }
+        }
+    }
+    return pages.map { it.second }
+}
+
+// RAR/CBR展開
+private fun extractRar(file: File): List<ByteArray> {
+    val pages = mutableListOf<Pair<String, ByteArray>>()
+    val archive = Archive(file)
+    archive.use {
+        val headers = archive.fileHeaders
+            .filter { header ->
+                val ext = header.fileName
+                    .substringAfterLast(".").lowercase()
+                ext in setOf("jpg", "jpeg", "png", "webp")
+            }
+            .sortedBy { it.fileName.lowercase() }
+
+        for (header in headers) {
+            val outputStream = ByteArrayOutputStream()
+            archive.extractFile(header, outputStream)
+            pages.add(Pair(header.fileName, outputStream.toByteArray()))
         }
     }
     return pages.map { it.second }
