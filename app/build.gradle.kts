@@ -12,8 +12,8 @@ android {
         applicationId = "com.kamneko88.comicveil"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 3        // ← Play Store 用の連番（配布のたびに+1）
+        versionName = "0.3.0"  // ← 今日から 0.3.0
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
