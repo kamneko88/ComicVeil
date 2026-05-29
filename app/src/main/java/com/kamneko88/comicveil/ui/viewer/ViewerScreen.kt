@@ -1,5 +1,6 @@
 package com.kamneko88.comicveil.ui.viewer
 
+import android.app.Application
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
@@ -27,11 +28,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -43,70 +46,72 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
-import com.github.junrar.Archive
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
-import java.io.File
-import java.util.zip.ZipFile
 
-@OptIn(ExperimentalFoundationApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun ViewerScreen(
     filePath: String,
     onClose: () -> Unit
 ) {
-    var pages by remember { mutableStateOf<List<ByteArray>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+
+    // ViewModelをファクトリで生成（filePath を渡すため）
+    val viewModel: ViewerViewModel = viewModel(
+        factory = ViewerViewModel.Factory(
+            application = context.applicationContext as Application,
+            filePath = filePath
+        )
+    )
+    val uiState by viewModel.uiState.collectAsState()
     var menuVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     BackHandler { onClose() }
 
-    LaunchedEffect(filePath) {
-        withContext(Dispatchers.IO) {
-            try {
-                val file = File(filePath)
-                val extractedPages = when (file.extension.lowercase()) {
-                    "zip", "cbz" -> extractZip(file)
-                    "rar", "cbr" -> extractRar(file)
-                    else -> emptyList()
-                }
-                pages = extractedPages
-                isLoading = false
-            } catch (e: Exception) {
-                error = e.message
-                isLoading = false
-            }
-        }
-    }
-
     when {
-        isLoading -> Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) { CircularProgressIndicator() }
+        // ページ読み込み中 or DB読み込み前はローディング表示
+        // （両方揃ってから pagerState を生成する必要があるため）
+        uiState.isLoading || !uiState.isSavedPageLoaded -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) { CircularProgressIndicator() }
+        }
 
-        error != null -> Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) { Text("エラー：$error") }
+        uiState.error != null -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) { Text("エラー：${uiState.error}") }
+        }
 
-        pages.isEmpty() -> Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) { Text("ページが見つかりません") }
+        uiState.pages.isEmpty() -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) { Text("ページが見つかりません") }
+        }
 
         else -> {
+            val pages = uiState.pages
+
+            // initialPage をここで決定する。pagerState は一度作ったら変更不可なため、
+            // DB読み込みが終わってから（isSavedPageLoaded == true）生成する必要がある
             val pagerState = rememberPagerState(
-                initialPage = 0,
+                initialPage = uiState.initialPage.coerceIn(0, pages.size - 1),
                 pageCount = { pages.size }
             )
+
+            // ページが変わるたびにDBへ保存
+            LaunchedEffect(pagerState.currentPage) {
+                viewModel.savePage(pagerState.currentPage)
+            }
 
             val springFling = PagerDefaults.flingBehavior(
                 state = pagerState,
@@ -121,16 +126,15 @@ fun ViewerScreen(
                     .fillMaxSize()
                     .statusBarsPadding()
             ) {
+                // ─── ページ表示（HorizontalPager）───────────────────────────
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(Unit) {
-                            detectTapGestures {
-                                menuVisible = !menuVisible
-                            }
+                            detectTapGestures { menuVisible = !menuVisible }
                         },
-                    reverseLayout = true,
+                    reverseLayout = true,       // 右綴じ（右→左）
                     flingBehavior = springFling
                 ) { pageIndex ->
                     Box(
@@ -146,6 +150,7 @@ fun ViewerScreen(
                     }
                 }
 
+                // ─── メニュー表示時の暗転オーバーレイ ─────────────────────
                 AnimatedVisibility(
                     visible = menuVisible,
                     enter = fadeIn(tween(200)),
@@ -158,6 +163,7 @@ fun ViewerScreen(
                     )
                 }
 
+                // ─── 中央：「本を閉じる」ボタン ───────────────────────────
                 AnimatedVisibility(
                     visible = menuVisible,
                     enter = fadeIn(tween(200)),
@@ -168,17 +174,12 @@ fun ViewerScreen(
                         onClick = onClose,
                         modifier = Modifier.padding(16.dp)
                     ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = null
-                        )
-                        Text(
-                            text = "  本を閉じる",
-                            fontSize = 16.sp
-                        )
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                        Text(text = "  本を閉じる", fontSize = 16.sp)
                     }
                 }
 
+                // ─── 下部：ページスライダー ───────────────────────────────
                 AnimatedVisibility(
                     visible = menuVisible,
                     enter = slideInVertically(tween(200)) { it },
@@ -191,15 +192,17 @@ fun ViewerScreen(
                             .background(Color.Black.copy(alpha = 0.7f))
                             .padding(horizontal = 16.dp, vertical = 8.dp)
                     ) {
+                        // スライダーの値は右綴じ用に反転（右端=1ページ目）
                         var sliderValue by remember {
-                            mutableFloatStateOf((pages.size - 1).toFloat())
+                            mutableFloatStateOf((pages.size - 1 - pagerState.currentPage).toFloat())
                         }
+                        // pager の currentPage が変わったらスライダーも同期
                         LaunchedEffect(pagerState.currentPage) {
                             sliderValue = (pages.size - 1 - pagerState.currentPage).toFloat()
                         }
 
                         Text(
-                            text = "${pages.size - sliderValue.toInt()} / ${pages.size}",
+                            text = "${pagerState.currentPage + 1} / ${pages.size}",
                             color = Color.White,
                             fontSize = 14.sp,
                             modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -215,7 +218,7 @@ fun ViewerScreen(
                                 }
                             },
                             valueRange = 0f..(pages.size - 1).toFloat(),
-                            steps = pages.size - 2,
+                            steps = if (pages.size > 2) pages.size - 2 else 0,
                             modifier = Modifier.fillMaxWidth(),
                             thumb = {
                                 Box(
@@ -230,46 +233,4 @@ fun ViewerScreen(
             }
         }
     }
-}
-
-// ZIP/CBZ展開
-private fun extractZip(file: File): List<ByteArray> {
-    val pages = mutableListOf<Pair<String, ByteArray>>()
-    ZipFile(file).use { zip ->
-        val entries = zip.entries().asSequence()
-            .filter { entry ->
-                val ext = entry.name.substringAfterLast(".").lowercase()
-                ext in setOf("jpg", "jpeg", "png", "webp")
-            }
-            .sortedBy { it.name.lowercase() }
-
-        for (entry in entries) {
-            zip.getInputStream(entry).use { stream ->
-                pages.add(Pair(entry.name, stream.readBytes()))
-            }
-        }
-    }
-    return pages.map { it.second }
-}
-
-// RAR/CBR展開
-private fun extractRar(file: File): List<ByteArray> {
-    val pages = mutableListOf<Pair<String, ByteArray>>()
-    val archive = Archive(file)
-    archive.use {
-        val headers = archive.fileHeaders
-            .filter { header ->
-                val ext = header.fileName
-                    .substringAfterLast(".").lowercase()
-                ext in setOf("jpg", "jpeg", "png", "webp")
-            }
-            .sortedBy { it.fileName.lowercase() }
-
-        for (header in headers) {
-            val outputStream = ByteArrayOutputStream()
-            archive.extractFile(header, outputStream)
-            pages.add(Pair(header.fileName, outputStream.toByteArray()))
-        }
-    }
-    return pages.map { it.second }
 }

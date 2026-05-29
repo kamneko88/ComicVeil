@@ -1,15 +1,12 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
 
 android {
     namespace = "com.kamneko88.comicveil"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.kamneko88.comicveil"
@@ -40,12 +37,8 @@ android {
 }
 
 dependencies {
-    // 既存
     implementation(platform(libs.androidx.compose.bom))
-
-    // Material Icons
     implementation("androidx.compose.material:material-icons-extended:1.6.7")
-
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui)
@@ -65,9 +58,9 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.4")
 
     // Room（データベース）
-    implementation("androidx.room:room-runtime:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
-    annotationProcessor("androidx.room:room-compiler:2.6.1")
+    implementation("androidx.room:room-runtime:2.7.0")
+    implementation("androidx.room:room-ktx:2.7.0")
+    ksp("androidx.room:room-compiler:2.7.0")  // ← annotationProcessor から ksp に変更
 
     // RAR展開
     implementation("com.github.junrar:junrar:7.5.5")
