@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -60,6 +61,7 @@ import androidx.navigation.NavController
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.FileItemType
 import com.kamneko88.comicveil.data.LocalFileRepository
+import java.net.URLEncoder
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,6 +72,7 @@ fun HomeScreen(
     val context = LocalContext.current
     val files by viewModel.files.collectAsState()
     val currentPath by viewModel.currentPath.collectAsState()
+    val dialogState by viewModel.dialogState.collectAsState()
     var isListMode by remember { mutableStateOf(true) }
     var hasPermission by remember { mutableStateOf(false) }
 
@@ -79,7 +82,15 @@ fun HomeScreen(
     val isRoot = currentPath == null ||
             currentPath?.absolutePath == rootFolder.absolutePath
 
-    // MANAGE_EXTERNAL_STORAGE権限のランチャー
+    // ─── ビューワーへの遷移イベントを受け取る ─────────────────────────
+    LaunchedEffect(Unit) {
+        viewModel.navigateEvent.collect { filePath ->
+            val encodedPath = URLEncoder.encode(filePath, "UTF-8")
+            navController.navigate("viewer/$encodedPath")
+        }
+    }
+
+    // ─── 権限まわり（変更なし）─────────────────────────────────────────
     val manageStorageLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
@@ -89,7 +100,6 @@ fun HomeScreen(
         }
     }
 
-    // 通常権限のランチャー
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -101,19 +111,19 @@ fun HomeScreen(
 
     LaunchedEffect(Unit) {
         when {
-            // Android 11以上：全ファイルアクセス権限
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {
                 if (Environment.isExternalStorageManager()) {
                     hasPermission = true
                     viewModel.loadInitialFolder()
                 } else {
-                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION
+                    ).apply {
                         data = Uri.parse("package:${context.packageName}")
                     }
                     manageStorageLauncher.launch(intent)
                 }
             }
-            // Android 10以下：通常の読み取り権限
             else -> {
                 if (ContextCompat.checkSelfPermission(
                         context,
@@ -133,6 +143,42 @@ fun HomeScreen(
         viewModel.navigateUp()
     }
 
+    // ─── 「再開 or 最初から」ダイアログ ───────────────────────────────
+    dialogState?.let { state ->
+        val fileRepository = remember { LocalFileRepository() }
+        val (title, _) = remember(state.fileItem.name) {
+            fileRepository.parseFileName(state.fileItem.name)
+        }
+        // 表示用ページ番号は1始まりに変換
+        val displayPage = state.savedPage + 1
+        val displayTotal = if (state.totalPages > 0) " / ${state.totalPages}" else ""
+
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissDialog() },
+            title = {
+                Text(
+                    text = title,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
+            text = {
+                Text(text = "前回の続きから読みますか？")
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.resumeReading() }) {
+                    Text("${displayPage}${displayTotal}ページから再開")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.readFromBeginning() }) {
+                    Text("最初から読む")
+                }
+            }
+        )
+    }
+
+    // ─── メイン画面 ────────────────────────────────────────────────────
     Scaffold(
         topBar = {
             TopAppBar(
@@ -227,15 +273,9 @@ fun HomeScreen(
                         fileItem = fileItem,
                         onClick = {
                             when {
-                                fileItem.isFolder -> {
-                                    viewModel.loadFolder(fileItem.file)
-                                }
-                                fileItem.isComic -> {
-                                    val encodedPath = java.net.URLEncoder.encode(
-                                        fileItem.path, "UTF-8"
-                                    )
-                                    navController.navigate("viewer/$encodedPath")
-                                }
+                                fileItem.isFolder -> viewModel.loadFolder(fileItem.file)
+                                // コミックタップ → ViewModelに委譲（DB確認 → ダイアログ or 直接遷移）
+                                fileItem.isComic -> viewModel.onComicTapped(fileItem)
                             }
                         }
                     )

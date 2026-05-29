@@ -26,12 +26,14 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -60,8 +62,6 @@ fun ViewerScreen(
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
-
-    // ViewModelをファクトリで生成（filePath を渡すため）
     val viewModel: ViewerViewModel = viewModel(
         factory = ViewerViewModel.Factory(
             application = context.applicationContext as Application,
@@ -75,8 +75,7 @@ fun ViewerScreen(
     BackHandler { onClose() }
 
     when {
-        // ページ読み込み中 or DB読み込み前はローディング表示
-        // （両方揃ってから pagerState を生成する必要があるため）
+        // ローディング中（ページ読み込み or DB読み込みのどちらかが未完了）
         uiState.isLoading || !uiState.isSavedPageLoaded -> {
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -84,31 +83,45 @@ fun ViewerScreen(
             ) { CircularProgressIndicator() }
         }
 
+        // エラー発生
         uiState.error != null -> {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) { Text("エラー：${uiState.error}") }
+            AlertDialog(
+                onDismissRequest = onClose,
+                title = { Text("読み込みエラー") },
+                text = { Text("ファイルを開けませんでした。\n${uiState.error}") },
+                confirmButton = {
+                    TextButton(onClick = onClose) { Text("閉じる") }
+                }
+            )
         }
 
+        // 空ページ（二重圧縮など非対応ファイル）
         uiState.pages.isEmpty() -> {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) { Text("ページが見つかりません") }
+            AlertDialog(
+                onDismissRequest = onClose,
+                title = { Text("非対応のファイル形式") },
+                text = {
+                    Text(
+                        "画像ページが見つかりませんでした。\n\n" +
+                                "ZIPの中にZIP・RARが入っている\n" +
+                                "「二重圧縮」ファイルには対応していません。"
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = onClose) { Text("閉じる") }
+                }
+            )
         }
 
+        // 正常表示
         else -> {
             val pages = uiState.pages
-
-            // initialPage をここで決定する。pagerState は一度作ったら変更不可なため、
-            // DB読み込みが終わってから（isSavedPageLoaded == true）生成する必要がある
             val pagerState = rememberPagerState(
                 initialPage = uiState.initialPage.coerceIn(0, pages.size - 1),
                 pageCount = { pages.size }
             )
 
-            // ページが変わるたびにDBへ保存
+            // ページが変わったら自動保存
             LaunchedEffect(pagerState.currentPage) {
                 viewModel.savePage(pagerState.currentPage)
             }
@@ -126,7 +139,7 @@ fun ViewerScreen(
                     .fillMaxSize()
                     .statusBarsPadding()
             ) {
-                // ─── ページ表示（HorizontalPager）───────────────────────────
+                // ─── ページ表示 ────────────────────────────────────────
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier
@@ -134,7 +147,7 @@ fun ViewerScreen(
                         .pointerInput(Unit) {
                             detectTapGestures { menuVisible = !menuVisible }
                         },
-                    reverseLayout = true,       // 右綴じ（右→左）
+                    reverseLayout = true,
                     flingBehavior = springFling
                 ) { pageIndex ->
                     Box(
@@ -150,7 +163,7 @@ fun ViewerScreen(
                     }
                 }
 
-                // ─── メニュー表示時の暗転オーバーレイ ─────────────────────
+                // ─── 暗転オーバーレイ ──────────────────────────────────
                 AnimatedVisibility(
                     visible = menuVisible,
                     enter = fadeIn(tween(200)),
@@ -163,7 +176,7 @@ fun ViewerScreen(
                     )
                 }
 
-                // ─── 中央：「本を閉じる」ボタン ───────────────────────────
+                // ─── 中央：「本を閉じる」ボタン ────────────────────────
                 AnimatedVisibility(
                     visible = menuVisible,
                     enter = fadeIn(tween(200)),
@@ -179,7 +192,7 @@ fun ViewerScreen(
                     }
                 }
 
-                // ─── 下部：ページスライダー ───────────────────────────────
+                // ─── 下部：ページスライダー ────────────────────────────
                 AnimatedVisibility(
                     visible = menuVisible,
                     enter = slideInVertically(tween(200)) { it },
@@ -192,11 +205,11 @@ fun ViewerScreen(
                             .background(Color.Black.copy(alpha = 0.7f))
                             .padding(horizontal = 16.dp, vertical = 8.dp)
                     ) {
-                        // スライダーの値は右綴じ用に反転（右端=1ページ目）
                         var sliderValue by remember {
-                            mutableFloatStateOf((pages.size - 1 - pagerState.currentPage).toFloat())
+                            mutableFloatStateOf(
+                                (pages.size - 1 - pagerState.currentPage).toFloat()
+                            )
                         }
-                        // pager の currentPage が変わったらスライダーも同期
                         LaunchedEffect(pagerState.currentPage) {
                             sliderValue = (pages.size - 1 - pagerState.currentPage).toFloat()
                         }
