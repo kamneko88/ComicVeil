@@ -10,6 +10,7 @@ import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,8 +21,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
@@ -48,19 +51,25 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import coil3.compose.AsyncImage
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.FileItemType
 import com.kamneko88.comicveil.data.LocalFileRepository
+import com.kamneko88.comicveil.data.ThumbnailRepository
+import java.io.File
 import java.net.URLEncoder
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -76,13 +85,18 @@ fun HomeScreen(
     var isListMode by remember { mutableStateOf(true) }
     var hasPermission by remember { mutableStateOf(false) }
 
+    // ThumbnailRepository を1つ生成してリスト全体で共有する
+    val thumbnailRepository = remember {
+        ThumbnailRepository(File(context.cacheDir, "thumbnails"))
+    }
+
     val rootFolder = Environment.getExternalStoragePublicDirectory(
         Environment.DIRECTORY_DOWNLOADS
     )
     val isRoot = currentPath == null ||
             currentPath?.absolutePath == rootFolder.absolutePath
 
-    // ─── ビューワーへの遷移イベントを受け取る ─────────────────────────
+    // ─── ビューワーへの遷移イベント ───────────────────────────────────────
     LaunchedEffect(Unit) {
         viewModel.navigateEvent.collect { filePath ->
             val encodedPath = URLEncoder.encode(filePath, "UTF-8")
@@ -90,7 +104,7 @@ fun HomeScreen(
         }
     }
 
-    // ─── 権限まわり（変更なし）─────────────────────────────────────────
+    // ─── 権限まわり ────────────────────────────────────────────────────────
     val manageStorageLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
@@ -143,24 +157,19 @@ fun HomeScreen(
         viewModel.navigateUp()
     }
 
-    // ─── 「再開 or 最初から」ダイアログ ───────────────────────────────
+    // ─── 「再開 or 最初から」ダイアログ ───────────────────────────────────
     dialogState?.let { state ->
         val fileRepository = remember { LocalFileRepository() }
         val (title, _) = remember(state.fileItem.name) {
             fileRepository.parseFileName(state.fileItem.name)
         }
-        // 表示用ページ番号は1始まりに変換
         val displayPage = state.savedPage + 1
         val displayTotal = if (state.totalPages > 0) " / ${state.totalPages}" else ""
 
         AlertDialog(
             onDismissRequest = { viewModel.dismissDialog() },
             title = {
-                Text(
-                    text = title,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Text(text = title, maxLines = 2, overflow = TextOverflow.Ellipsis)
             },
             text = {
                 Text(text = "前回の続きから読みますか？")
@@ -178,16 +187,13 @@ fun HomeScreen(
         )
     }
 
-    // ─── メイン画面 ────────────────────────────────────────────────────
+    // ─── メイン画面 ────────────────────────────────────────────────────────
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     if (isRoot) {
-                        Text(
-                            text = "HOME",
-                            style = MaterialTheme.typography.titleLarge
-                        )
+                        Text("HOME", style = MaterialTheme.typography.titleLarge)
                     } else {
                         Text(
                             text = currentPath?.name ?: "",
@@ -200,10 +206,7 @@ fun HomeScreen(
                 navigationIcon = {
                     if (!isRoot) {
                         IconButton(onClick = { viewModel.navigateUp() }) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "戻る"
-                            )
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
                         }
                     }
                 },
@@ -211,9 +214,7 @@ fun HomeScreen(
                     IconButton(onClick = { }) {
                         Icon(Icons.Default.Search, contentDescription = "検索")
                     }
-                    TextButton(onClick = { }) {
-                        Text("名前▼")
-                    }
+                    TextButton(onClick = { }) { Text("名前▼") }
                     IconButton(onClick = { isListMode = !isListMode }) {
                         Icon(
                             if (isListMode) Icons.Default.GridView
@@ -221,9 +222,7 @@ fun HomeScreen(
                             contentDescription = "表示切替"
                         )
                     }
-                    TextButton(onClick = { }) {
-                        Text("編集")
-                    }
+                    TextButton(onClick = { }) { Text("編集") }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
@@ -258,8 +257,7 @@ fun HomeScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = if (hasPermission) "ファイルが見つかりません"
-                    else "権限を確認中..."
+                    text = if (hasPermission) "ファイルが見つかりません" else "権限を確認中..."
                 )
             }
         } else {
@@ -271,10 +269,10 @@ fun HomeScreen(
                 items(files) { fileItem ->
                     FileListItem(
                         fileItem = fileItem,
+                        thumbnailRepository = thumbnailRepository,
                         onClick = {
                             when {
                                 fileItem.isFolder -> viewModel.loadFolder(fileItem.file)
-                                // コミックタップ → ViewModelに委譲（DB確認 → ダイアログ or 直接遷移）
                                 fileItem.isComic -> viewModel.onComicTapped(fileItem)
                             }
                         }
@@ -289,6 +287,7 @@ fun HomeScreen(
 @Composable
 fun FileListItem(
     fileItem: FileItem,
+    thumbnailRepository: ThumbnailRepository,
     onClick: () -> Unit
 ) {
     val repository = remember { LocalFileRepository() }
@@ -296,36 +295,62 @@ fun FileListItem(
         repository.parseFileName(fileItem.name)
     }
 
+    // サムネイルを非同期で読み込む
+    // key1 = fileItem.path にすることで、別ファイルに変わったときに再実行される
+    val thumbnailFile by produceState<File?>(
+        initialValue = null,
+        key1 = fileItem.path
+    ) {
+        value = thumbnailRepository.getOrGenerateThumbnail(fileItem)
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // ─── サムネイルエリア（56×80dp）─────────────────────────────────
         Box(
             modifier = Modifier
-                .size(56.dp)
-                .padding(end = 8.dp),
+                .width(56.dp)
+                .height(80.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                imageVector = when (fileItem.type) {
-                    FileItemType.FOLDER -> Icons.Default.Folder
-                    else -> Icons.Default.InsertDriveFile
-                },
-                contentDescription = null,
-                modifier = Modifier.size(40.dp),
-                tint = when (fileItem.type) {
-                    FileItemType.FOLDER -> MaterialTheme.colorScheme.primary
-                    else -> MaterialTheme.colorScheme.secondary
-                }
-            )
+            if (thumbnailFile != null) {
+                // サムネイル画像を表示
+                AsyncImage(
+                    model = thumbnailFile,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                // 読み込み中 or 生成失敗 → アイコンでフォールバック
+                Icon(
+                    imageVector = when (fileItem.type) {
+                        FileItemType.FOLDER -> Icons.Default.Folder
+                        else -> Icons.Default.InsertDriveFile
+                    },
+                    contentDescription = null,
+                    modifier = Modifier.size(32.dp),
+                    tint = when (fileItem.type) {
+                        FileItemType.FOLDER -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.secondary
+                    }
+                )
+            }
         }
 
+        // ─── テキストエリア ────────────────────────────────────────────
         Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             Text(
                 text = title,

@@ -75,7 +75,6 @@ fun ViewerScreen(
     BackHandler { onClose() }
 
     when {
-        // ローディング中（ページ読み込み or DB読み込みのどちらかが未完了）
         uiState.isLoading || !uiState.isSavedPageLoaded -> {
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -83,7 +82,6 @@ fun ViewerScreen(
             ) { CircularProgressIndicator() }
         }
 
-        // エラー発生
         uiState.error != null -> {
             AlertDialog(
                 onDismissRequest = onClose,
@@ -95,7 +93,6 @@ fun ViewerScreen(
             )
         }
 
-        // 空ページ（二重圧縮など非対応ファイル）
         uiState.pages.isEmpty() -> {
             AlertDialog(
                 onDismissRequest = onClose,
@@ -113,7 +110,6 @@ fun ViewerScreen(
             )
         }
 
-        // 正常表示
         else -> {
             val pages = uiState.pages
             val pagerState = rememberPagerState(
@@ -121,7 +117,6 @@ fun ViewerScreen(
                 pageCount = { pages.size }
             )
 
-            // ページが変わったら自動保存
             LaunchedEffect(pagerState.currentPage) {
                 viewModel.savePage(pagerState.currentPage)
             }
@@ -139,7 +134,6 @@ fun ViewerScreen(
                     .fillMaxSize()
                     .statusBarsPadding()
             ) {
-                // ─── ページ表示 ────────────────────────────────────────
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier
@@ -148,7 +142,8 @@ fun ViewerScreen(
                             detectTapGestures { menuVisible = !menuVisible }
                         },
                     reverseLayout = true,
-                    flingBehavior = springFling
+                    flingBehavior = springFling,
+                    beyondViewportPageCount = 2  // ★ Day 9：前後2ページを先読み
                 ) { pageIndex ->
                     Box(
                         modifier = Modifier.fillMaxSize(),
@@ -163,7 +158,6 @@ fun ViewerScreen(
                     }
                 }
 
-                // ─── 暗転オーバーレイ ──────────────────────────────────
                 AnimatedVisibility(
                     visible = menuVisible,
                     enter = fadeIn(tween(200)),
@@ -176,7 +170,6 @@ fun ViewerScreen(
                     )
                 }
 
-                // ─── 中央：「本を閉じる」ボタン ────────────────────────
                 AnimatedVisibility(
                     visible = menuVisible,
                     enter = fadeIn(tween(200)),
@@ -192,7 +185,6 @@ fun ViewerScreen(
                     }
                 }
 
-                // ─── 下部：ページスライダー ────────────────────────────
                 AnimatedVisibility(
                     visible = menuVisible,
                     enter = slideInVertically(tween(200)) { it },
