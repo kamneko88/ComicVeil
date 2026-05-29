@@ -30,12 +30,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
@@ -64,6 +66,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -93,6 +96,7 @@ fun HomeScreen(
     val isLoading       by viewModel.isLoading.collectAsState()
     val downloadingMsg  by viewModel.downloadingMessage.collectAsState()
     val nasError        by viewModel.nasError.collectAsState()
+    val isStreamingMode by viewModel.isStreamingMode.collectAsState()  // ★ DL/STR
 
     var isListMode       by remember { mutableStateOf(true) }
     var hasPermission    by remember { mutableStateOf(false) }
@@ -102,7 +106,8 @@ fun HomeScreen(
         ThumbnailRepository(File(context.cacheDir, "thumbnails"))
     }
 
-    val isRoot = currentLocation is ViewLocation.Home
+    val isRoot  = currentLocation is ViewLocation.Home
+    val isNas   = currentLocation is ViewLocation.NasFolder
 
     val screenTitle = when (val loc = currentLocation) {
         is ViewLocation.Home        -> "HOME"
@@ -110,7 +115,6 @@ fun HomeScreen(
         is ViewLocation.NasFolder   -> loc.displayTitle
     }
 
-    // ─── ビューワーへの遷移 ──────────────────────────────────────────────
     LaunchedEffect(Unit) {
         viewModel.navigateEvent.collect { filePath ->
             val encodedPath = URLEncoder.encode(filePath, "UTF-8")
@@ -118,7 +122,6 @@ fun HomeScreen(
         }
     }
 
-    // ─── 権限 ──────────────────────────────────────────────────────────────
     val manageStorageLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
@@ -158,14 +161,10 @@ fun HomeScreen(
 
     BackHandler(enabled = !isRoot) { viewModel.navigateUp() }
 
-    // ─── ダイアログ類 ────────────────────────────────────────────────────
     if (showAddNasDialog) {
         AddNasServerDialog(
             onDismiss = { showAddNasDialog = false },
-            onConfirm = { server ->
-                viewModel.addNasServer(server)
-                showAddNasDialog = false
-            }
+            onConfirm = { server -> viewModel.addNasServer(server); showAddNasDialog = false }
         )
     }
 
@@ -174,8 +173,8 @@ fun HomeScreen(
         val (title, _) = remember(state.fileItem.name) { repo.parseFileName(state.fileItem.name) }
         AlertDialog(
             onDismissRequest = { viewModel.dismissDialog() },
-            title   = { Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-            text    = { Text("前回の続きから読みますか？") },
+            title = { Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            text  = { Text("前回の続きから読みますか？") },
             confirmButton = {
                 TextButton(onClick = { viewModel.resumeReading() }) {
                     Text("${state.savedPage + 1} / ${state.totalPages}ページから再開")
@@ -190,15 +189,14 @@ fun HomeScreen(
     nasError?.let { errorMsg ->
         AlertDialog(
             onDismissRequest = { viewModel.clearNasError() },
-            title   = { Text("NAS接続エラー") },
-            text    = { Text(errorMsg) },
+            title = { Text("NAS接続エラー") },
+            text  = { Text(errorMsg) },
             confirmButton = {
                 TextButton(onClick = { viewModel.clearNasError() }) { Text("閉じる") }
             }
         )
     }
 
-    // ─── メイン画面 ──────────────────────────────────────────────────────
     Scaffold(
         topBar = {
             TopAppBar(
@@ -219,9 +217,7 @@ fun HomeScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { }) {
-                        Icon(Icons.Default.Search, contentDescription = "検索")
-                    }
+                    IconButton(onClick = { }) { Icon(Icons.Default.Search, contentDescription = "検索") }
                     TextButton(onClick = { }) { Text("名前▼") }
                     IconButton(onClick = { isListMode = !isListMode }) {
                         Icon(
@@ -237,18 +233,46 @@ fun HomeScreen(
             )
         },
         bottomBar = {
-            BottomAppBar(modifier = Modifier.height(56.dp)) {
+            BottomAppBar {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),  // ← Rowに移動
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = { }) {
                         Icon(Icons.Default.MoreVert, contentDescription = "About")
                     }
-                    // サーバーボタン → サーバー追加ダイアログ
                     TextButton(onClick = { showAddNasDialog = true }) { Text("サーバー") }
-                    TextButton(onClick = { }) { Text("C") }
+
+                    // ─── DL/STR切替（NASフォルダのみ）/ それ以外は C ───────
+                    if (isNas) {
+                        // STR ↔ DL トグルボタン
+                        IconButton(onClick = { viewModel.toggleMode() }) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    imageVector = if (isStreamingMode) Icons.Default.Wifi
+                                    else Icons.Default.Download,
+                                    contentDescription = if (isStreamingMode) "ストリーミング中"
+                                    else "ダウンロードモード",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = if (isStreamingMode) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.tertiary
+                                )
+                                Text(
+                                    text      = if (isStreamingMode) "STR" else "DL",
+                                    fontSize  = 9.sp,
+                                    color     = if (isStreamingMode) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.tertiary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    } else {
+                        TextButton(onClick = { }) { Text("C") }
+                    }
+
                     TextButton(onClick = { }) { Text("D") }
                     IconButton(onClick = { }) {
                         Icon(Icons.Default.Settings, contentDescription = "設定")
@@ -259,7 +283,6 @@ fun HomeScreen(
     ) { innerPadding ->
         Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
 
-            // ─── NASロード中スピナー ─────────────────────────────────
             if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -270,8 +293,6 @@ fun HomeScreen(
                 }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
-
-                    // ─── Home のみ：NASサーバー一覧セクション ────────
                     if (isRoot && nasServers.isNotEmpty()) {
                         item {
                             Text(
@@ -282,17 +303,11 @@ fun HomeScreen(
                             )
                         }
                         items(nasServers) { server ->
-                            NasServerListItem(
-                                server  = server,
-                                onClick = { viewModel.navigateToNas(server) }
-                            )
+                            NasServerListItem(server = server, onClick = { viewModel.navigateToNas(server) })
                             HorizontalDivider()
                         }
                         item {
-                            HorizontalDivider(
-                                thickness = 4.dp,
-                                color = MaterialTheme.colorScheme.surfaceVariant
-                            )
+                            HorizontalDivider(thickness = 4.dp, color = MaterialTheme.colorScheme.surfaceVariant)
                             Text(
                                 text     = "ローカル",
                                 style    = MaterialTheme.typography.labelMedium,
@@ -302,7 +317,6 @@ fun HomeScreen(
                         }
                     }
 
-                    // ─── ファイル一覧 ─────────────────────────────────
                     if (files.isEmpty() && !isLoading) {
                         item {
                             Box(
@@ -310,8 +324,7 @@ fun HomeScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text  = if (hasPermission) "ファイルが見つかりません"
-                                    else "権限を確認中…",
+                                    text  = if (hasPermission) "ファイルが見つかりません" else "権限を確認中…",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -324,14 +337,8 @@ fun HomeScreen(
                                 onClick = {
                                     when {
                                         fileItem.isFolder -> {
-                                            if (fileItem.isNas) {
-                                                viewModel.navigateToNas(
-                                                    fileItem.nasServer!!,
-                                                    fileItem.nasPath
-                                                )
-                                            } else {
-                                                viewModel.loadFolder(fileItem.file!!)
-                                            }
+                                            if (fileItem.isNas) viewModel.navigateToNas(fileItem.nasServer!!, fileItem.nasPath)
+                                            else viewModel.loadFolder(fileItem.file!!)
                                         }
                                         fileItem.isComic -> viewModel.onComicTapped(fileItem)
                                     }
@@ -343,12 +350,10 @@ fun HomeScreen(
                 }
             }
 
-            // ─── ダウンロード中オーバーレイ ──────────────────────────
+            // ダウンロード中オーバーレイ
             if (downloadingMsg != null) {
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.7f)),
+                    modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.7f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -358,7 +363,7 @@ fun HomeScreen(
                             text      = downloadingMsg!!,
                             color     = Color.White,
                             fontSize  = 14.sp,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
@@ -366,8 +371,6 @@ fun HomeScreen(
         }
     }
 }
-
-// ─── NASサーバーのリストアイテム ──────────────────────────────────────────
 
 @Composable
 fun NasServerListItem(server: NasServer, onClick: () -> Unit) {
@@ -379,18 +382,14 @@ fun NasServerListItem(server: NasServer, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
-            imageVector = Icons.Default.Dns,
+            imageVector       = Icons.Default.Dns,
             contentDescription = null,
-            modifier = Modifier.size(40.dp),
-            tint = MaterialTheme.colorScheme.primary
+            modifier          = Modifier.size(40.dp),
+            tint              = MaterialTheme.colorScheme.primary
         )
         Spacer(Modifier.width(12.dp))
         Column {
-            Text(
-                text  = server.displayName,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium
-            )
+            Text(text = server.displayName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
             Text(
                 text  = "${server.host} / ${server.shareName}",
                 style = MaterialTheme.typography.bodySmall,
@@ -399,8 +398,6 @@ fun NasServerListItem(server: NasServer, onClick: () -> Unit) {
         }
     }
 }
-
-// ─── ファイルのリストアイテム ─────────────────────────────────────────────
 
 @Composable
 fun FileListItem(
@@ -422,7 +419,6 @@ fun FileListItem(
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // サムネイル or アイコン
         Box(
             modifier = Modifier
                 .width(56.dp)
@@ -433,20 +429,20 @@ fun FileListItem(
         ) {
             if (thumbnailFile != null) {
                 AsyncImage(
-                    model = thumbnailFile,
+                    model            = thumbnailFile,
                     contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                    modifier         = Modifier.fillMaxSize(),
+                    contentScale     = ContentScale.Crop
                 )
             } else {
                 Icon(
-                    imageVector = when (fileItem.type) {
+                    imageVector       = when (fileItem.type) {
                         FileItemType.FOLDER -> Icons.Default.Folder
                         else -> Icons.Default.InsertDriveFile
                     },
                     contentDescription = null,
-                    modifier = Modifier.size(32.dp),
-                    tint = when (fileItem.type) {
+                    modifier          = Modifier.size(32.dp),
+                    tint              = when (fileItem.type) {
                         FileItemType.FOLDER -> MaterialTheme.colorScheme.primary
                         else -> if (fileItem.isNas) MaterialTheme.colorScheme.tertiary
                         else MaterialTheme.colorScheme.secondary
@@ -455,27 +451,14 @@ fun FileListItem(
             }
         }
 
-        // テキスト
         Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 12.dp),
+            modifier = Modifier.weight(1f).padding(start = 12.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            Text(
-                text     = title,
-                style    = MaterialTheme.typography.bodyMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
+            Text(text = title, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (author != null) {
-                Text(
-                    text     = author,
-                    style    = MaterialTheme.typography.bodySmall,
-                    color    = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Text(text = author, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Text(
                 text  = when {

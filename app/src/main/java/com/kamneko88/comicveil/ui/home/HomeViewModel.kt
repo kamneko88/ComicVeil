@@ -22,18 +22,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
-// ─── 画面位置を表すシールドクラス ──────────────────────────────────────────
-
 sealed class ViewLocation {
-    /** ホーム（Downloadsルート + NASサーバー一覧） */
     object Home : ViewLocation()
-
-    /** ローカルサブフォルダ（Downloads配下） */
     data class LocalFolder(val folder: File) : ViewLocation()
-
-    /** NASフォルダ */
     data class NasFolder(val server: NasServer, val path: String) : ViewLocation() {
-        /** 表示用タイトル */
         val displayTitle: String get() =
             if (path.isEmpty()) server.displayName else path.substringAfterLast("/")
     }
@@ -47,7 +39,6 @@ data class ResumeDialogState(
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
-    // ─── リポジトリ ────────────────────────────────────────────────────────
     private val fileRepository     = LocalFileRepository()
     private val progressRepository : ReadingProgressRepository
     private val smbRepository      = SmbRepository()
@@ -57,7 +48,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         Environment.DIRECTORY_DOWNLOADS
     )
 
-    // ─── 状態 ─────────────────────────────────────────────────────────────
     private val _currentLocation = MutableStateFlow<ViewLocation>(ViewLocation.Home)
     val currentLocation: StateFlow<ViewLocation> = _currentLocation.asStateFlow()
 
@@ -67,30 +57,39 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _nasServers = MutableStateFlow<List<NasServer>>(emptyList())
     val nasServers: StateFlow<List<NasServer>> = _nasServers.asStateFlow()
 
-    /** NASのロード中フラグ */
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    /** NASファイルダウンロード中のメッセージ（nullなら非表示） */
     private val _downloadingMessage = MutableStateFlow<String?>(null)
     val downloadingMessage: StateFlow<String?> = _downloadingMessage.asStateFlow()
 
-    /** NAS接続エラー（nullなら問題なし） */
     private val _nasError = MutableStateFlow<String?>(null)
     val nasError: StateFlow<String?> = _nasError.asStateFlow()
 
-    /** 再開ダイアログ（ローカルファイル用） */
     private val _dialogState = MutableStateFlow<ResumeDialogState?>(null)
     val dialogState: StateFlow<ResumeDialogState?> = _dialogState.asStateFlow()
 
-    /** ビューワーへの遷移イベント */
     private val _navigateEvent = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
     val navigateEvent: SharedFlow<String> = _navigateEvent.asSharedFlow()
+
+    /**
+     * DL/STRモード
+     * true  = STR（ストリーミング）：アプリキャッシュに一時保存・デフォルト
+     * false = DL（ダウンロード）  ：Downloads/ComicVeil/ に永続保存
+     */
+    private val _isStreamingMode = MutableStateFlow(true)
+    val isStreamingMode: StateFlow<Boolean> = _isStreamingMode.asStateFlow()
 
     init {
         val dao = ComicVeilDatabase.getDatabase(application).readingProgressDao()
         progressRepository = ReadingProgressRepository(dao)
         refreshNasServers()
+    }
+
+    // ─── DL/STRモード ────────────────────────────────────────────────────
+
+    fun toggleMode() {
+        _isStreamingMode.value = !_isStreamingMode.value
     }
 
     // ─── NASサーバー管理 ──────────────────────────────────────────────────
@@ -115,10 +114,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── ローカルナビゲーション ───────────────────────────────────────────
 
-    /**
-     * 初期フォルダ（Downloads）を読み込む。
-     * すでにどこかのフォルダを表示中なら何もしない（ViewerScreenから戻ったときの誤リセット防止）。
-     */
     fun loadInitialFolder() {
         if (_currentLocation.value !is ViewLocation.Home) return
         _files.value = fileRepository.getFiles(downloadsFolder)
@@ -151,14 +146,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // ─── 共通バック処理 ──────────────────────────────────────────────────
+    // ─── バック処理 ──────────────────────────────────────────────────────
 
     fun navigateUp(): Boolean {
         return when (val loc = _currentLocation.value) {
             is ViewLocation.Home -> false
 
             is ViewLocation.LocalFolder -> {
-                // 親フォルダへ（Downloadsルートに戻ったらHome扱い）
                 val parent = loc.folder.parentFile
                 if (parent != null) loadFolder(parent) else {
                     _currentLocation.value = ViewLocation.Home
@@ -169,11 +163,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
             is ViewLocation.NasFolder -> {
                 if (loc.path.isEmpty()) {
-                    // NASルート → ホームへ
                     _currentLocation.value = ViewLocation.Home
                     _files.value = fileRepository.getFiles(downloadsFolder)
                 } else {
-                    // 親NASパスへ
                     val parentPath = loc.path.substringBeforeLast("/", "")
                     navigateToNas(loc.server, parentPath)
                 }
@@ -187,19 +179,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun onComicTapped(fileItem: FileItem) {
         viewModelScope.launch {
             if (fileItem.isNas) {
-                // NASファイル：キャッシュにダウンロードしてからビューワーへ
                 openNasComic(fileItem)
             } else {
-                // ローカルファイル：DB確認→ダイアログ or 直接ビューワーへ
                 val progress = withContext(Dispatchers.IO) {
                     progressRepository.getProgress(fileItem.path)
                 }
                 if (progress != null && progress.currentPage > 0) {
-                    _dialogState.value = ResumeDialogState(
-                        fileItem   = fileItem,
-                        savedPage  = progress.currentPage,
-                        totalPages = progress.totalPages
-                    )
+                    _dialogState.value = ResumeDialogState(fileItem, progress.currentPage, progress.totalPages)
                 } else {
                     _navigateEvent.tryEmit(fileItem.path)
                 }
@@ -210,22 +196,35 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun openNasComic(fileItem: FileItem) {
         val server = fileItem.nasServer ?: return
         val ext    = fileItem.name.substringAfterLast(".")
-        // キャッシュファイルのパスは決定的（同じNASファイルは同じキャッシュを再利用）
-        val cacheDir = File(getApplication<Application>().cacheDir, "nas_cache")
-        val destFile = File(cacheDir, "nas_${fileItem.nasPath.hashCode()}.$ext")
 
+        val destFile = if (_isStreamingMode.value) {
+            // STRモード：アプリキャッシュに一時保存（アプリ削除時・キャッシュ消去時に削除）
+            val dir = File(getApplication<Application>().cacheDir, "nas_cache")
+            File(dir, "nas_${fileItem.nasPath.hashCode()}.$ext")
+        } else {
+            // DLモード：Downloads/ComicVeil/ に永続保存（ファイルブラウザからも見える）
+            val dir = File(downloadsFolder, "ComicVeil")
+            File(dir, fileItem.name)
+        }
+
+        // すでにファイルが存在する場合はダウンロードをスキップ
         if (destFile.exists() && destFile.length() > 0) {
-            // キャッシュヒット → そのまま開く
             _navigateEvent.tryEmit(destFile.absolutePath)
             return
         }
 
-        _downloadingMessage.value = "ダウンロード中…\n${fileItem.name}"
+        _downloadingMessage.value = if (_isStreamingMode.value) {
+            "読み込み中…\n${fileItem.name}"
+        } else {
+            "ダウンロード中…\n${fileItem.name}"
+        }
+
         try {
             smbRepository.downloadFile(server, fileItem.nasPath, destFile)
             _navigateEvent.tryEmit(destFile.absolutePath)
         } catch (e: Exception) {
-            _nasError.value = "ダウンロードに失敗しました\n${e.message}"
+            _nasError.value = "接続に失敗しました\n${e.message}"
+            runCatching { destFile.delete() } // 不完全ファイルを削除
         } finally {
             _downloadingMessage.value = null
         }
