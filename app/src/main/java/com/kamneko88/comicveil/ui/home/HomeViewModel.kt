@@ -11,6 +11,8 @@ import com.kamneko88.comicveil.data.db.ReadingProgressRepository
 import com.kamneko88.comicveil.data.nas.NasServer
 import com.kamneko88.comicveil.data.nas.NasServerPrefs
 import com.kamneko88.comicveil.data.nas.SmbRepository
+import com.kamneko88.comicveil.ui.transfer.TransferViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +39,27 @@ data class ResumeDialogState(
     val totalPages: Int
 )
 
+/** STRモードのダウンロード進捗 */
+data class DownloadProgress(
+    val fileName: String,
+    val downloaded: Long,
+    val total: Long
+) {
+    val fraction: Float? get() = if (total > 0) downloaded.toFloat() / total else null
+
+    val progressText: String get() = when {
+        total > 0 -> "${formatBytes(downloaded)} / ${formatBytes(total)}"
+        else      -> formatBytes(downloaded)
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes >= 1_000_000_000L -> "%.1f GB".format(bytes / 1_000_000_000.0)
+        bytes >= 1_000_000L     -> "%.1f MB".format(bytes / 1_000_000.0)
+        bytes >= 1_000L         -> "%.1f KB".format(bytes / 1_000.0)
+        else                    -> "$bytes B"
+    }
+}
+
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val fileRepository     = LocalFileRepository()
@@ -60,17 +83,23 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    private val _downloadingMessage = MutableStateFlow<String?>(null)
-    val downloadingMessage: StateFlow<String?> = _downloadingMessage.asStateFlow()
+    /** STRモードのダウンロード進捗（null = 非表示）*/
+    private val _downloadProgress = MutableStateFlow<DownloadProgress?>(null)
+    val downloadProgress: StateFlow<DownloadProgress?> = _downloadProgress.asStateFlow()
 
     private val _nasError = MutableStateFlow<String?>(null)
     val nasError: StateFlow<String?> = _nasError.asStateFlow()
 
+    /** 再開ダイアログの状態（null = 非表示）*/
     private val _dialogState = MutableStateFlow<ResumeDialogState?>(null)
     val dialogState: StateFlow<ResumeDialogState?> = _dialogState.asStateFlow()
 
     private val _navigateEvent = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
     val navigateEvent: SharedFlow<String> = _navigateEvent.asSharedFlow()
+
+    /** TransferScreen への遷移イベント（fromFolderName を渡す）*/
+    private val _navigateToTransfer = MutableSharedFlow<String?>(replay = 0, extraBufferCapacity = 1)
+    val navigateToTransfer: SharedFlow<String?> = _navigateToTransfer.asSharedFlow()
 
     /**
      * DL/STRモード
@@ -79,6 +108,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val _isStreamingMode = MutableStateFlow(true)
     val isStreamingMode: StateFlow<Boolean> = _isStreamingMode.asStateFlow()
+
+    /** STRモードの実行中ダウンロードJob */
+    private var downloadJob: Job? = null
+
+    /** TransferViewModel への参照（DLモード時に委譲）*/
+    var transferViewModel: TransferViewModel? = null
 
     init {
         val dao = ComicVeilDatabase.getDatabase(application).readingProgressDao()
@@ -179,13 +214,22 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun onComicTapped(fileItem: FileItem) {
         viewModelScope.launch {
             if (fileItem.isNas) {
-                openNasComic(fileItem)
+                if (_isStreamingMode.value) {
+                    // STRモード：再開ダイアログを先に出す
+                    openNasComicStr(fileItem)
+                } else {
+                    // DLモード：TransferViewModelにキューイングしてTransferScreenへ遷移
+                    openNasComicDl(fileItem)
+                }
             } else {
+                // ローカル：再開ダイアログ
                 val progress = withContext(Dispatchers.IO) {
                     progressRepository.getProgress(fileItem.path)
                 }
                 if (progress != null && progress.currentPage > 0) {
-                    _dialogState.value = ResumeDialogState(fileItem, progress.currentPage, progress.totalPages)
+                    _dialogState.value = ResumeDialogState(
+                        fileItem, progress.currentPage, progress.totalPages
+                    )
                 } else {
                     _navigateEvent.tryEmit(fileItem.path)
                 }
@@ -193,59 +237,141 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun openNasComic(fileItem: FileItem) {
-        val server = fileItem.nasServer ?: return
-        val ext    = fileItem.name.substringAfterLast(".")
+    /**
+     * STRモード：再開ダイアログを出す
+     * ダイアログでの選択後に startStrDownload() でダウンロード開始
+     */
+    private suspend fun openNasComicStr(fileItem: FileItem) {
+        val ext      = fileItem.name.substringAfterLast(".")
+        val destFile = File(
+            File(getApplication<Application>().cacheDir, "nas_cache"),
+            "nas_${fileItem.nasPath.hashCode()}.$ext"
+        )
 
-        val destFile = if (_isStreamingMode.value) {
-            // STRモード：アプリキャッシュに一時保存（アプリ削除時・キャッシュ消去時に削除）
-            val dir = File(getApplication<Application>().cacheDir, "nas_cache")
-            File(dir, "nas_${fileItem.nasPath.hashCode()}.$ext")
-        } else {
-            // DLモード：Downloads/ComicVeil/ に永続保存（ファイルブラウザからも見える）
-            val dir = File(downloadsFolder, "ComicVeil")
-            File(dir, fileItem.name)
-        }
-
-        // すでにファイルが存在する場合はダウンロードをスキップ
+        // キャッシュ済みなら即ビューワーへ（ダイアログは出さない）
         if (destFile.exists() && destFile.length() > 0) {
-            _navigateEvent.tryEmit(destFile.absolutePath)
+            val progress = withContext(Dispatchers.IO) {
+                progressRepository.getProgress(destFile.absolutePath)
+            }
+            if (progress != null && progress.currentPage > 0) {
+                _dialogState.value = ResumeDialogState(
+                    fileItem.copy(file = destFile),
+                    progress.currentPage,
+                    progress.totalPages
+                )
+            } else {
+                _navigateEvent.tryEmit(destFile.absolutePath)
+            }
             return
         }
 
-        _downloadingMessage.value = if (_isStreamingMode.value) {
-            "読み込み中…\n${fileItem.name}"
-        } else {
-            "ダウンロード中…\n${fileItem.name}"
-        }
+        // 未キャッシュ：ダイアログを出してからダウンロード
+        // ダイアログの「再開」「最初から」どちらを選んでも同じファイルを開くので
+        // ここでは「ダウンロード待ちの fileItem」としてダイアログを出す
+        _dialogState.value = ResumeDialogState(
+            fileItem = fileItem,
+            savedPage  = 0,
+            totalPages = 0   // 未取得なので 0（ダイアログ側で非表示扱い）
+        )
+    }
 
-        try {
-            smbRepository.downloadFile(server, fileItem.nasPath, destFile)
-            _navigateEvent.tryEmit(destFile.absolutePath)
-        } catch (e: Exception) {
-            _nasError.value = "接続に失敗しました\n${e.message}"
-            runCatching { destFile.delete() } // 不完全ファイルを削除
-        } finally {
-            _downloadingMessage.value = null
+    /**
+     * DLモード：TransferViewModel にキューイングして TransferScreen へ遷移
+     */
+    private fun openNasComicDl(fileItem: FileItem) {
+        transferViewModel?.enqueue(fileItem, isStreaming = false)
+        val folderName = (currentLocation.value as? ViewLocation.NasFolder)?.displayTitle ?: ""
+        _navigateToTransfer.tryEmit(folderName)
+    }
+
+    /**
+     * STRモードで実際にダウンロードを開始する
+     * ダイアログで選択後に呼ばれる
+     */
+    fun startStrDownload(fileItem: FileItem) {
+        val ext      = fileItem.name.substringAfterLast(".")
+        val destFile = File(
+            File(getApplication<Application>().cacheDir, "nas_cache"),
+            "nas_${fileItem.nasPath.hashCode()}.$ext"
+        )
+        val server = fileItem.nasServer ?: return
+
+        downloadJob?.cancel()
+        downloadJob = viewModelScope.launch {
+            _downloadProgress.value = DownloadProgress(
+                fileName   = fileItem.name,
+                downloaded = 0L,
+                total      = -1L
+            )
+            try {
+                smbRepository.downloadFile(
+                    server     = server,
+                    nasPath    = fileItem.nasPath,
+                    destFile   = destFile,
+                    onProgress = { downloaded, total ->
+                        _downloadProgress.value = DownloadProgress(
+                            fileName   = fileItem.name,
+                            downloaded = downloaded,
+                            total      = total
+                        )
+                    }
+                )
+                _navigateEvent.tryEmit(destFile.absolutePath)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                runCatching { destFile.delete() }
+            } catch (e: Exception) {
+                _nasError.value = "接続に失敗しました\n${e.message}"
+                runCatching { destFile.delete() }
+            } finally {
+                _downloadProgress.value = null
+                downloadJob = null
+            }
         }
+    }
+
+    /** STRダウンロードを中止する */
+    fun cancelStrDownload() {
+        downloadJob?.cancel()
+    }
+
+    /** 転送状況ボタンタップ（HOMEから開く場合は folderName = null）*/
+    fun openTransferScreen() {
+        val folderName = (currentLocation.value as? ViewLocation.NasFolder)?.displayTitle ?: ""
+        _navigateToTransfer.tryEmit(folderName)
     }
 
     // ─── ダイアログ操作 ──────────────────────────────────────────────────
 
+    /**
+     * 再開ダイアログで「再開」または「最初から」を選択
+     * STR未キャッシュの場合はここでダウンロード開始
+     */
     fun resumeReading() {
         val state = _dialogState.value ?: return
         _dialogState.value = null
-        _navigateEvent.tryEmit(state.fileItem.path)
+
+        if (state.fileItem.isNas && _isStreamingMode.value) {
+            // NAS×STR：ダウンロード開始
+            startStrDownload(state.fileItem)
+        } else {
+            _navigateEvent.tryEmit(state.fileItem.path)
+        }
     }
 
     fun readFromBeginning() {
         val state = _dialogState.value ?: return
         _dialogState.value = null
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                progressRepository.saveProgress(state.fileItem.path, 0, state.totalPages)
+
+        if (state.fileItem.isNas && _isStreamingMode.value) {
+            // NAS×STR：ダウンロード開始（最初から＝進捗リセットはビューワー側で対応）
+            startStrDownload(state.fileItem)
+        } else {
+            viewModelScope.launch {
+                withContext(Dispatchers.IO) {
+                    progressRepository.saveProgress(state.fileItem.path, 0, state.totalPages)
+                }
+                _navigateEvent.tryEmit(state.fileItem.path)
             }
-            _navigateEvent.tryEmit(state.fileItem.path)
         }
     }
 
