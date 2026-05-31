@@ -6,7 +6,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.LocalFileRepository
+import com.kamneko88.comicveil.data.db.ComicFileRepository
 import com.kamneko88.comicveil.data.db.ComicVeilDatabase
+import com.kamneko88.comicveil.data.db.ReadStatus
 import com.kamneko88.comicveil.data.db.ReadingProgressRepository
 import com.kamneko88.comicveil.data.nas.NasServer
 import com.kamneko88.comicveil.data.nas.NasServerPrefs
@@ -60,12 +62,21 @@ data class DownloadProgress(
     }
 }
 
+/** ファイル情報ポップアップの状態 */
+data class FileInfoState(
+    val fileItem: FileItem,
+    val title: String,
+    val author: String?,
+    val status: ReadStatus
+)
+
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val fileRepository     = LocalFileRepository()
-    private val progressRepository : ReadingProgressRepository
-    private val smbRepository      = SmbRepository()
-    private val nasServerPrefs     = NasServerPrefs(application)
+    private val fileRepository      = LocalFileRepository()
+    private val progressRepository  : ReadingProgressRepository
+    private val comicFileRepository : ComicFileRepository
+    private val smbRepository       = SmbRepository()
+    private val nasServerPrefs      = NasServerPrefs(application)
 
     private val downloadsFolder = Environment.getExternalStoragePublicDirectory(
         Environment.DIRECTORY_DOWNLOADS
@@ -94,10 +105,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _dialogState = MutableStateFlow<ResumeDialogState?>(null)
     val dialogState: StateFlow<ResumeDialogState?> = _dialogState.asStateFlow()
 
+    /** ファイル情報ポップアップの状態（null = 非表示）*/
+    private val _fileInfoState = MutableStateFlow<FileInfoState?>(null)
+    val fileInfoState: StateFlow<FileInfoState?> = _fileInfoState.asStateFlow()
+
     private val _navigateEvent = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
     val navigateEvent: SharedFlow<String> = _navigateEvent.asSharedFlow()
 
-    /** TransferScreen への遷移イベント（fromFolderName を渡す）*/
+    /** TransferScreen への遷移イベント */
     private val _navigateToTransfer = MutableSharedFlow<String?>(replay = 0, extraBufferCapacity = 1)
     val navigateToTransfer: SharedFlow<String?> = _navigateToTransfer.asSharedFlow()
 
@@ -116,8 +131,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     var transferViewModel: TransferViewModel? = null
 
     init {
-        val dao = ComicVeilDatabase.getDatabase(application).readingProgressDao()
-        progressRepository = ReadingProgressRepository(dao)
+        val db = ComicVeilDatabase.getDatabase(application)
+        progressRepository  = ReadingProgressRepository(db.readingProgressDao())
+        comicFileRepository = ComicFileRepository(db.comicFileDao())
         refreshNasServers()
     }
 
@@ -215,14 +231,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             if (fileItem.isNas) {
                 if (_isStreamingMode.value) {
-                    // STRモード：再開ダイアログを先に出す
                     openNasComicStr(fileItem)
                 } else {
-                    // DLモード：TransferViewModelにキューイングしてTransferScreenへ遷移
                     openNasComicDl(fileItem)
                 }
             } else {
-                // ローカル：再開ダイアログ
                 val progress = withContext(Dispatchers.IO) {
                     progressRepository.getProgress(fileItem.path)
                 }
@@ -237,10 +250,47 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * STRモード：再開ダイアログを出す
-     * ダイアログでの選択後に startStrDownload() でダウンロード開始
-     */
+    // ─── ファイル情報ポップアップ ─────────────────────────────────────────
+
+    /** Ⓘボタンタップ：ファイル情報ポップアップを開く */
+    fun openFileInfo(fileItem: FileItem) {
+        viewModelScope.launch {
+            val (title, author) = fileRepository.parseFileName(fileItem.name)
+            val status = comicFileRepository.getStatus(fileItem.path)
+            _fileInfoState.value = FileInfoState(
+                fileItem = fileItem,
+                title    = title,
+                author   = author,
+                status   = status
+            )
+        }
+    }
+
+    /** ファイル情報ポップアップで状態を変更 */
+    fun updateFileStatus(fileItem: FileItem, status: ReadStatus) {
+        viewModelScope.launch {
+            comicFileRepository.updateStatus(fileItem.path, status)
+            // 未読に変更した場合は読書位置もリセット
+            if (status == ReadStatus.UNREAD) {
+                withContext(Dispatchers.IO) {
+                    progressRepository.saveProgress(fileItem.path, 0, 0)
+                }
+            }
+            _fileInfoState.value = _fileInfoState.value?.copy(status = status)
+        }
+    }
+
+    /** ファイル情報ポップアップを閉じる */
+    fun dismissFileInfo() {
+        _fileInfoState.value = null
+    }
+
+    /** FileListItem から個別に状態を取得する（produceState用）*/
+    suspend fun getStatusForItem(filePath: String): ReadStatus =
+        comicFileRepository.getStatus(filePath)
+
+    // ─── STR/DLモード内部処理 ────────────────────────────────────────────
+
     private suspend fun openNasComicStr(fileItem: FileItem) {
         val ext      = fileItem.name.substringAfterLast(".")
         val destFile = File(
@@ -248,7 +298,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             "nas_${fileItem.nasPath.hashCode()}.$ext"
         )
 
-        // キャッシュ済みなら即ビューワーへ（ダイアログは出さない）
         if (destFile.exists() && destFile.length() > 0) {
             val progress = withContext(Dispatchers.IO) {
                 progressRepository.getProgress(destFile.absolutePath)
@@ -265,29 +314,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // 未キャッシュ：ダイアログを出してからダウンロード
-        // ダイアログの「再開」「最初から」どちらを選んでも同じファイルを開くので
-        // ここでは「ダウンロード待ちの fileItem」としてダイアログを出す
         _dialogState.value = ResumeDialogState(
-            fileItem = fileItem,
+            fileItem   = fileItem,
             savedPage  = 0,
-            totalPages = 0   // 未取得なので 0（ダイアログ側で非表示扱い）
+            totalPages = 0
         )
     }
 
-    /**
-     * DLモード：TransferViewModel にキューイングして TransferScreen へ遷移
-     */
     private fun openNasComicDl(fileItem: FileItem) {
         transferViewModel?.enqueue(fileItem, isStreaming = false)
         val folderName = (currentLocation.value as? ViewLocation.NasFolder)?.displayTitle ?: ""
         _navigateToTransfer.tryEmit(folderName)
     }
 
-    /**
-     * STRモードで実際にダウンロードを開始する
-     * ダイアログで選択後に呼ばれる
-     */
     fun startStrDownload(fileItem: FileItem) {
         val ext      = fileItem.name.substringAfterLast(".")
         val destFile = File(
@@ -329,12 +368,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** STRダウンロードを中止する */
     fun cancelStrDownload() {
         downloadJob?.cancel()
     }
 
-    /** 転送状況ボタンタップ（HOMEから開く場合は folderName = null）*/
     fun openTransferScreen() {
         val folderName = (currentLocation.value as? ViewLocation.NasFolder)?.displayTitle ?: ""
         _navigateToTransfer.tryEmit(folderName)
@@ -342,16 +379,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── ダイアログ操作 ──────────────────────────────────────────────────
 
-    /**
-     * 再開ダイアログで「再開」または「最初から」を選択
-     * STR未キャッシュの場合はここでダウンロード開始
-     */
     fun resumeReading() {
         val state = _dialogState.value ?: return
         _dialogState.value = null
 
         if (state.fileItem.isNas && _isStreamingMode.value) {
-            // NAS×STR：ダウンロード開始
             startStrDownload(state.fileItem)
         } else {
             _navigateEvent.tryEmit(state.fileItem.path)
@@ -363,7 +395,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _dialogState.value = null
 
         if (state.fileItem.isNas && _isStreamingMode.value) {
-            // NAS×STR：ダウンロード開始（最初から＝進捗リセットはビューワー側で対応）
             startStrDownload(state.fileItem)
         } else {
             viewModelScope.launch {
