@@ -31,7 +31,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -71,8 +75,21 @@ fun ViewerScreen(
     val uiState by viewModel.uiState.collectAsState()
     var menuVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     BackHandler { onClose() }
+
+    // 先頭・最終ページイベントを受け取ってSnackbarを表示
+    LaunchedEffect(Unit) {
+        viewModel.pageLimitEvent.collect { event ->
+            val message = when (event) {
+                PageLimitEvent.FIRST -> "先頭ページです"
+                PageLimitEvent.LAST  -> "最終ページです"
+            }
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(message)
+        }
+    }
 
     when {
         uiState.isLoading || !uiState.isSavedPageLoaded -> {
@@ -129,110 +146,142 @@ fun ViewerScreen(
                 )
             )
 
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-            ) {
-                HorizontalPager(
-                    state = pagerState,
+            Scaffold(
+                snackbarHost = {
+                    SnackbarHost(hostState = snackbarHostState) { data ->
+                        Snackbar(
+                            snackbarData   = data,
+                            containerColor = Color.Black.copy(alpha = 0.75f),
+                            contentColor   = Color.White,
+                            modifier       = Modifier.padding(bottom = 80.dp)
+                        )
+                    }
+                },
+                containerColor = Color.Black
+            ) { innerPadding ->
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(Unit) {
-                            detectTapGestures { menuVisible = !menuVisible }
-                        },
-                    reverseLayout = true,
-                    flingBehavior = springFling,
-                    beyondViewportPageCount = 2  // ★ Day 9：前後2ページを先読み
-                ) { pageIndex ->
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        AsyncImage(
-                            model = pages[pageIndex],
-                            contentDescription = "ページ ${pageIndex + 1}",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit
-                        )
-                    }
-                }
-
-                AnimatedVisibility(
-                    visible = menuVisible,
-                    enter = fadeIn(tween(200)),
-                    exit = fadeOut(tween(200))
+                        .padding(innerPadding)
+                        .statusBarsPadding()
                 ) {
-                    Box(
+                    HorizontalPager(
+                        state = pagerState,
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(Color.Black.copy(alpha = 0.4f))
-                    )
-                }
+                            .pointerInput(pagerState.currentPage) {
+                                detectTapGestures { offset ->
+                                    val isFirst   = pagerState.currentPage == 0
+                                    val isLast    = pagerState.currentPage == pages.size - 1
+                                    // reverseLayout=true なので右が「前」左が「次」
+                                    val isRightTap = offset.x > size.width * 0.66f
+                                    val isLeftTap  = offset.x < size.width * 0.33f
 
-                AnimatedVisibility(
-                    visible = menuVisible,
-                    enter = fadeIn(tween(200)),
-                    exit = fadeOut(tween(200)),
-                    modifier = Modifier.align(Alignment.Center)
-                ) {
-                    Button(
-                        onClick = onClose,
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
-                        Text(text = "  本を閉じる", fontSize = 16.sp)
-                    }
-                }
-
-                AnimatedVisibility(
-                    visible = menuVisible,
-                    enter = slideInVertically(tween(200)) { it },
-                    exit = slideOutVertically(tween(200)) { it },
-                    modifier = Modifier.align(Alignment.BottomCenter)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color.Black.copy(alpha = 0.7f))
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        var sliderValue by remember {
-                            mutableFloatStateOf(
-                                (pages.size - 1 - pagerState.currentPage).toFloat()
-                            )
-                        }
-                        LaunchedEffect(pagerState.currentPage) {
-                            sliderValue = (pages.size - 1 - pagerState.currentPage).toFloat()
-                        }
-
-                        Text(
-                            text = "${pagerState.currentPage + 1} / ${pages.size}",
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            modifier = Modifier.align(Alignment.CenterHorizontally)
-                        )
-
-                        Slider(
-                            value = sliderValue,
-                            onValueChange = { sliderValue = it },
-                            onValueChangeFinished = {
-                                scope.launch {
-                                    val targetPage = pages.size - 1 - sliderValue.toInt()
-                                    pagerState.animateScrollToPage(targetPage)
+                                    when {
+                                        isRightTap && isFirst ->
+                                            viewModel.onPageLimitReached(PageLimitEvent.FIRST)
+                                        isLeftTap && isLast ->
+                                            viewModel.onPageLimitReached(PageLimitEvent.LAST)
+                                        else ->
+                                            menuVisible = !menuVisible
+                                    }
                                 }
                             },
-                            valueRange = 0f..(pages.size - 1).toFloat(),
-                            steps = if (pages.size > 2) pages.size - 2 else 0,
-                            modifier = Modifier.fillMaxWidth(),
-                            thumb = {
-                                Box(
-                                    modifier = Modifier
-                                        .size(28.dp)
-                                        .background(Color.White, CircleShape)
+                        reverseLayout = true,
+                        flingBehavior = springFling,
+                        beyondViewportPageCount = 2
+                    ) { pageIndex ->
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            AsyncImage(
+                                model = pages[pageIndex],
+                                contentDescription = "ページ ${pageIndex + 1}",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
+                    }
+
+                    AnimatedVisibility(
+                        visible = menuVisible,
+                        enter = fadeIn(tween(200)),
+                        exit = fadeOut(tween(200))
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.4f))
+                        )
+                    }
+
+                    AnimatedVisibility(
+                        visible = menuVisible,
+                        enter = fadeIn(tween(200)),
+                        exit = fadeOut(tween(200)),
+                        modifier = Modifier.align(Alignment.Center)
+                    ) {
+                        Button(
+                            onClick = onClose,
+                            modifier = Modifier.padding(16.dp)
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                            Text(text = "  本を閉じる", fontSize = 16.sp)
+                        }
+                    }
+
+                    AnimatedVisibility(
+                        visible = menuVisible,
+                        enter = slideInVertically(tween(200)) { it },
+                        exit = slideOutVertically(tween(200)) { it },
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color.Black.copy(alpha = 0.7f))
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            var sliderValue by remember {
+                                mutableFloatStateOf(
+                                    (pages.size - 1 - pagerState.currentPage).toFloat()
                                 )
                             }
-                        )
+                            LaunchedEffect(pagerState.currentPage) {
+                                sliderValue =
+                                    (pages.size - 1 - pagerState.currentPage).toFloat()
+                            }
+
+                            Text(
+                                text = "${pagerState.currentPage + 1} / ${pages.size}",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                modifier = Modifier.align(Alignment.CenterHorizontally)
+                            )
+
+                            Slider(
+                                value = sliderValue,
+                                onValueChange = { sliderValue = it },
+                                onValueChangeFinished = {
+                                    scope.launch {
+                                        val targetPage =
+                                            pages.size - 1 - sliderValue.toInt()
+                                        pagerState.animateScrollToPage(targetPage)
+                                    }
+                                },
+                                valueRange = 0f..(pages.size - 1).toFloat(),
+                                steps = if (pages.size > 2) pages.size - 2 else 0,
+                                modifier = Modifier.fillMaxWidth(),
+                                thumb = {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .background(Color.White, CircleShape)
+                                    )
+                                }
+                            )
+                        }
                     }
                 }
             }

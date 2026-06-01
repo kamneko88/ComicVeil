@@ -60,7 +60,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -110,6 +109,7 @@ fun HomeScreen(
     val nasError         by viewModel.nasError.collectAsState()
     val isStreamingMode  by viewModel.isStreamingMode.collectAsState()
     val fileInfoState    by viewModel.fileInfoState.collectAsState()
+    val fileStatuses     by viewModel.fileStatuses.collectAsState()
 
     viewModel.transferViewModel = transferViewModel
 
@@ -144,6 +144,11 @@ fun HomeScreen(
             val encoded = URLEncoder.encode(name, "UTF-8")
             navController.navigate("transfer/$encoded")
         }
+    }
+
+    // ファイルリストが変わったら状態を一括読み込み
+    LaunchedEffect(files) {
+        viewModel.loadFileStatuses(files)
     }
 
     val manageStorageLauncher = rememberLauncherForActivityResult(
@@ -397,12 +402,7 @@ fun HomeScreen(
                         }
                     } else {
                         items(files) { fileItem ->
-                            val itemStatus by produceState(
-                                initialValue = ReadStatus.UNREAD,
-                                key1         = fileItem.path
-                            ) {
-                                value = viewModel.getStatusForItem(fileItem.path)
-                            }
+                            val itemStatus = fileStatuses[fileItem.path] ?: ReadStatus.UNREAD
                             FileListItem(
                                 fileItem            = fileItem,
                                 thumbnailRepository = thumbnailRepository,
@@ -521,7 +521,6 @@ fun FileInfoDialog(
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ReadStatus.entries.forEach { status ->
-                        // 「読書中」は手動選択不可（自動遷移のみ）
                         val isSelectable = status != ReadStatus.READING
                         FilterChip(
                             selected = info.status == status,
@@ -687,8 +686,10 @@ fun FileListItem(
     val repository = remember { LocalFileRepository() }
     val (title, author) = remember(fileItem.name) { repository.parseFileName(fileItem.name) }
 
-    val thumbnailFile by produceState<File?>(initialValue = null, key1 = fileItem.path) {
-        value = thumbnailRepository.getOrGenerateThumbnail(fileItem)
+    // produceState を使わず LaunchedEffect + remember で実装
+    var thumbnailFile by remember(fileItem.path) { mutableStateOf<File?>(null) }
+    LaunchedEffect(fileItem.path) {
+        thumbnailFile = thumbnailRepository.getOrGenerateThumbnail(fileItem)
     }
 
     Row(

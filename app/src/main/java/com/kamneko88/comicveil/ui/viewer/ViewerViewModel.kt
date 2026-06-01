@@ -11,8 +11,11 @@ import com.kamneko88.comicveil.data.db.ComicVeilDatabase
 import com.kamneko88.comicveil.data.db.ReadStatus
 import com.kamneko88.comicveil.data.db.ReadingProgressRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -21,14 +24,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.zip.ZipFile
 
-/**
- * 閲覧画面のUI状態
- * @param pages             展開済み画像データのリスト
- * @param isLoading         ページ読み込み中フラグ
- * @param error             エラーメッセージ（nullなら正常）
- * @param initialPage       DBから復元した前回ページ（0始まり）
- * @param isSavedPageLoaded DB読み込みが完了したフラグ
- */
 data class ViewerUiState(
     val pages: List<ByteArray> = emptyList(),
     val isLoading: Boolean = true,
@@ -37,13 +32,9 @@ data class ViewerUiState(
     val isSavedPageLoaded: Boolean = false
 )
 
-/**
- * 閲覧画面のViewModel
- * - ファイルからページを読み込む（ZIP/RAR）
- * - Roomから前回ページを復元する
- * - ページ変化時にRoomへ自動保存する
- * - 読書状態を自動更新する（開いた→読書中、最終ページ→既読）
- */
+/** 先頭・最終ページ通知イベント */
+enum class PageLimitEvent { FIRST, LAST }
+
 class ViewerViewModel(
     application: Application,
     private val filePath: String
@@ -55,29 +46,29 @@ class ViewerViewModel(
     private val _uiState = MutableStateFlow(ViewerUiState())
     val uiState: StateFlow<ViewerUiState> = _uiState.asStateFlow()
 
-    /** 既読への自動更新を1回だけ実行するためのフラグ */
-    private var readStatusUpdatedToRead = false
+    /** 先頭・最終ページ通知イベント */
+    private val _pageLimitEvent = MutableSharedFlow<PageLimitEvent>(
+        replay = 0, extraBufferCapacity = 1
+    )
+    val pageLimitEvent: SharedFlow<PageLimitEvent> = _pageLimitEvent.asSharedFlow()
 
     /**
-     * ビューワーを閉じるときに呼ばれる
-     * 最終ページより前で閉じた場合は「読書中」に戻す
+     * 既読への自動更新を1回だけ実行するためのフラグ
+     * init の③でDBを確認して初期化する（既読ファイルを開いた場合はtrueで開始）
      */
+    private var readStatusUpdatedToRead = false
+
     override fun onCleared() {
         super.onCleared()
-        val state      = _uiState.value
-        val totalPages = state.pages.size
+        val totalPages = _uiState.value.pages.size
         if (totalPages == 0) return
-
-        // 最終ページに達していた（既読）場合はそのまま維持
         if (readStatusUpdatedToRead) return
 
-        // それ以外（途中で閉じた）は読書中に戻す
-        // onCleared は Main スレッドで呼ばれるため、GlobalScope + IO で実行
+        // 途中で閉じた場合は「読書中」に戻す
         kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
             comicFileRepository.updateStatus(filePath, ReadStatus.READING)
         }
     }
-
 
     init {
         val db = ComicVeilDatabase.getDatabase(application)
@@ -114,12 +105,19 @@ class ViewerViewModel(
             }
         }
 
-        // ③ ビューワーを開いた時点で「読書中」に更新
+        // ③ 読書状態を更新する
         viewModelScope.launch(Dispatchers.IO) {
             val current = comicFileRepository.getStatus(filePath)
-            // 既読は手動設定を尊重してそのまま維持
-            if (current != ReadStatus.READ) {
-                comicFileRepository.updateStatus(filePath, ReadStatus.READING)
+            when (current) {
+                ReadStatus.READ -> {
+                    // 既読ファイルを開いた場合：フラグをtrueにして既読を維持
+                    // onCleared で誤って「読書中」に戻さないようにする
+                    readStatusUpdatedToRead = true
+                }
+                else -> {
+                    // 未読・読書中は「読書中」に更新
+                    comicFileRepository.updateStatus(filePath, ReadStatus.READING)
+                }
             }
         }
     }
@@ -134,16 +132,22 @@ class ViewerViewModel(
         if (totalPages == 0) return
 
         viewModelScope.launch(Dispatchers.IO) {
-            // 読書位置を保存
             progressRepository.saveProgress(filePath, currentPage, totalPages)
 
-            // 最終ページ到達で「既読」に更新（1回だけ）
             val isLastPage = currentPage >= totalPages - 1
             if (isLastPage && !readStatusUpdatedToRead) {
                 readStatusUpdatedToRead = true
                 comicFileRepository.updateStatus(filePath, ReadStatus.READ)
             }
         }
+    }
+
+    /**
+     * 先頭・最終ページでさらにページ送りしようとしたときに呼ぶ
+     * ViewerScreen のタップゾーン判定から呼び出す
+     */
+    fun onPageLimitReached(event: PageLimitEvent) {
+        _pageLimitEvent.tryEmit(event)
     }
 
     companion object {

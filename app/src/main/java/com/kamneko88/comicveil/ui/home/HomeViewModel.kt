@@ -109,6 +109,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _fileInfoState = MutableStateFlow<FileInfoState?>(null)
     val fileInfoState: StateFlow<FileInfoState?> = _fileInfoState.asStateFlow()
 
+    /**
+     * ファイルパス→ReadStatus のマップ（StateFlow）
+     * Ⓘポップアップで変更した際にリストへ即時反映するために使用
+     */
+    private val _fileStatuses = MutableStateFlow<Map<String, ReadStatus>>(emptyMap())
+    val fileStatuses: StateFlow<Map<String, ReadStatus>> = _fileStatuses.asStateFlow()
+
     private val _navigateEvent = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
     val navigateEvent: SharedFlow<String> = _navigateEvent.asSharedFlow()
 
@@ -178,6 +185,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
         _currentLocation.value = location
         _files.value = fileRepository.getFiles(folder)
+        loadFileStatuses(_files.value)
     }
 
     // ─── NASナビゲーション ────────────────────────────────────────────────
@@ -188,6 +196,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _isLoading.value = true
             try {
                 _files.value = smbRepository.listDirectory(server, nasPath)
+                loadFileStatuses(_files.value)
             } catch (e: Exception) {
                 _nasError.value = "接続に失敗しました\n${e.message}"
                 _files.value = emptyList()
@@ -208,6 +217,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (parent != null) loadFolder(parent) else {
                     _currentLocation.value = ViewLocation.Home
                     _files.value = fileRepository.getFiles(downloadsFolder)
+                    loadFileStatuses(_files.value)
                 }
                 true
             }
@@ -216,12 +226,35 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (loc.path.isEmpty()) {
                     _currentLocation.value = ViewLocation.Home
                     _files.value = fileRepository.getFiles(downloadsFolder)
+                    loadFileStatuses(_files.value)
                 } else {
                     val parentPath = loc.path.substringBeforeLast("/", "")
                     navigateToNas(loc.server, parentPath)
                 }
                 true
             }
+        }
+    }
+
+    // ─── ファイル状態の一括読み込み ─────────────────────────────────────
+
+    /**
+     * ファイルリストの読書状態をDBから一括取得して _fileStatuses に反映する
+     * フォルダ移動・画面復帰時に呼ぶ
+     */
+    fun loadFileStatuses(fileList: List<FileItem> = _files.value) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val map = fileList
+                .filter { it.isComic }
+                .associate { it.path to comicFileRepository.getStatus(it.path) }
+            _fileStatuses.value = map
+        }
+    }
+
+    /** 単一ファイルの状態を _fileStatuses に即時反映する */
+    private fun updateFileStatusInMap(filePath: String, status: ReadStatus) {
+        _fileStatuses.value = _fileStatuses.value.toMutableMap().also {
+            it[filePath] = status
         }
     }
 
@@ -276,7 +309,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     progressRepository.saveProgress(fileItem.path, 0, 0)
                 }
             }
+            // ポップアップとリストの両方を即時更新
             _fileInfoState.value = _fileInfoState.value?.copy(status = status)
+            updateFileStatusInMap(fileItem.path, status)
         }
     }
 
@@ -284,10 +319,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissFileInfo() {
         _fileInfoState.value = null
     }
-
-    /** FileListItem から個別に状態を取得する（produceState用）*/
-    suspend fun getStatusForItem(filePath: String): ReadStatus =
-        comicFileRepository.getStatus(filePath)
 
     // ─── STR/DLモード内部処理 ────────────────────────────────────────────
 
