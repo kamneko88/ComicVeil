@@ -1,6 +1,7 @@
 package com.kamneko88.comicveil.ui.viewer
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -22,7 +23,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.util.zip.ZipFile
 
 data class ViewerUiState(
     val pages: List<ByteArray> = emptyList(),
@@ -53,20 +53,24 @@ class ViewerViewModel(
     val pageLimitEvent: SharedFlow<PageLimitEvent> = _pageLimitEvent.asSharedFlow()
 
     /**
-     * 既読への自動更新を1回だけ実行するためのフラグ
-     * init の③でDBを確認して初期化する（既読ファイルを開いた場合はtrueで開始）
+     * 直前のページ番号を記憶する（onCleared で状態を正しく保存するため）
      */
-    private var readStatusUpdatedToRead = false
+    private var lastSavedPage = 0
 
     override fun onCleared() {
         super.onCleared()
         val totalPages = _uiState.value.pages.size
         if (totalPages == 0) return
-        if (readStatusUpdatedToRead) return
 
-        // 途中で閉じた場合は「読書中」に戻す
-        kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
-            comicFileRepository.updateStatus(filePath, ReadStatus.READING)
+        // 確定仕様に従って閉じたタイミングの状態を保存
+        val status = when {
+            lastSavedPage >= totalPages - 1 -> ReadStatus.READ     // 最終ページ→既読
+            lastSavedPage == 0             -> ReadStatus.UNREAD    // 先頭のまま→未読
+            else                           -> ReadStatus.READING   // 途中→読書中
+        }
+        // onCleared は viewModelScope がキャンセル済みなので runBlocking を使用
+        kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+            comicFileRepository.updateStatus(filePath, status)
         }
     }
 
@@ -80,9 +84,11 @@ class ViewerViewModel(
             val progress = withContext(Dispatchers.IO) {
                 progressRepository.getProgress(filePath)
             }
+            val savedPage = progress?.currentPage ?: 0
+            lastSavedPage = savedPage
             _uiState.update {
                 it.copy(
-                    initialPage       = progress?.currentPage ?: 0,
+                    initialPage       = savedPage,
                     isSavedPageLoaded = true
                 )
             }
@@ -93,30 +99,17 @@ class ViewerViewModel(
             withContext(Dispatchers.IO) {
                 try {
                     val file = File(filePath)
+                    Log.d("ComicVeil", "展開開始: ${file.name} (${file.length()} bytes) exists=${file.exists()}")
                     val pages = when (file.extension.lowercase()) {
                         "zip", "cbz" -> extractZip(file)
                         "rar", "cbr" -> extractRar(file)
                         else         -> emptyList()
                     }
+                    Log.d("ComicVeil", "展開完了: ${pages.size} ページ")
                     _uiState.update { it.copy(pages = pages, isLoading = false) }
                 } catch (e: Exception) {
+                    Log.e("ComicVeil", "展開エラー: ${e::class.simpleName}: ${e.message}", e)
                     _uiState.update { it.copy(error = e.message, isLoading = false) }
-                }
-            }
-        }
-
-        // ③ 読書状態を更新する
-        viewModelScope.launch(Dispatchers.IO) {
-            val current = comicFileRepository.getStatus(filePath)
-            when (current) {
-                ReadStatus.READ -> {
-                    // 既読ファイルを開いた場合：フラグをtrueにして既読を維持
-                    // onCleared で誤って「読書中」に戻さないようにする
-                    readStatusUpdatedToRead = true
-                }
-                else -> {
-                    // 未読・読書中は「読書中」に更新
-                    comicFileRepository.updateStatus(filePath, ReadStatus.READING)
                 }
             }
         }
@@ -124,21 +117,26 @@ class ViewerViewModel(
 
     /**
      * ページが変わったときに呼ぶ。
-     * - DBにページ位置を保存する
-     * - 最終ページに到達したら「既読」に自動更新する
+     * 確定仕様：
+     *   currentPage == 0             → 未読（先頭のまま）
+     *   1 〜 totalPages-2          → 読書中
+     *   currentPage == totalPages-1  → 既読（最終ページ到達）
      */
     fun savePage(currentPage: Int) {
         val totalPages = _uiState.value.pages.size
         if (totalPages == 0) return
 
+        lastSavedPage = currentPage
+
+        val newStatus = when {
+            currentPage >= totalPages - 1 -> ReadStatus.READ
+            currentPage == 0             -> ReadStatus.UNREAD
+            else                         -> ReadStatus.READING
+        }
+
         viewModelScope.launch(Dispatchers.IO) {
             progressRepository.saveProgress(filePath, currentPage, totalPages)
-
-            val isLastPage = currentPage >= totalPages - 1
-            if (isLastPage && !readStatusUpdatedToRead) {
-                readStatusUpdatedToRead = true
-                comicFileRepository.updateStatus(filePath, ReadStatus.READ)
-            }
+            comicFileRepository.updateStatus(filePath, newStatus)
         }
     }
 
@@ -164,22 +162,56 @@ class ViewerViewModel(
 
 // ─── ページ展開関数 ───────────────────────────────────────────────────────────
 
+private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
+
 private fun extractZip(file: File): List<ByteArray> {
     val pages = mutableListOf<Pair<String, ByteArray>>()
-    ZipFile(file).use { zip ->
-        zip.entries().asSequence()
-            .filter { entry ->
-                entry.name.substringAfterLast(".").lowercase() in
-                        setOf("jpg", "jpeg", "png", "webp")
+    // Shift-JIS / UTF-8 を判定して Commons Compress で開く
+    val encoding = detectZipEncoding(file)
+    org.apache.commons.compress.archivers.zip.ZipArchiveInputStream(
+        file.inputStream().buffered(),
+        encoding,
+        true,  // useUnicodeExtraFields
+        true   // allowStoredEntriesWithDataDescriptor
+    ).use { zis ->
+        var entry = zis.nextEntry
+        while (entry != null) {
+            val name = entry.name
+            if (!entry.isDirectory &&
+                !name.substringAfterLast("/").startsWith(".") &&
+                !name.startsWith("__") &&
+                !name.contains("..") &&
+                name.substringAfterLast(".").lowercase() in IMAGE_EXTENSIONS
+            ) {
+                pages.add(Pair(name, zis.readBytes()))
             }
-            .sortedBy { it.name.lowercase() }
-            .forEach { entry ->
-                zip.getInputStream(entry).use { stream ->
-                    pages.add(Pair(entry.name, stream.readBytes()))
-                }
-            }
+            entry = zis.nextEntry
+        }
     }
-    return pages.map { it.second }
+    return pages.sortedBy { it.first.lowercase() }.map { it.second }
+}
+
+/**
+ * ZIPファイルの文字コードを簡易判定する。
+ * 最初のエントリのUTF-8フラグを確認し、なければShift-JISとみなす。
+ */
+private fun detectZipEncoding(file: File): String {
+    return try {
+        org.apache.commons.compress.archivers.zip.ZipArchiveInputStream(
+            file.inputStream().buffered(),
+            "UTF-8",
+            true,
+            true
+        ).use { zis ->
+            val first = zis.nextEntry
+            val isUtf8 = (first as? org.apache.commons.compress.archivers.zip.ZipArchiveEntry)
+                ?.generalPurposeBit?.usesUTF8ForNames() == true
+            if (isUtf8) "UTF-8" else "Shift_JIS"
+        }
+    } catch (e: Exception) {
+        Log.d("ComicVeil", "UTF-8判定失敗、Shift_JISで開く: ${e.message}")
+        "Shift_JIS"
+    }
 }
 
 private fun extractRar(file: File): List<ByteArray> {
@@ -187,8 +219,9 @@ private fun extractRar(file: File): List<ByteArray> {
     Archive(file).use { archive ->
         archive.fileHeaders
             .filter { header ->
-                header.fileName.substringAfterLast(".").lowercase() in
-                        setOf("jpg", "jpeg", "png", "webp")
+                // フォルダエントリを除外
+                !header.isDirectory &&
+                header.fileName.substringAfterLast(".").lowercase() in IMAGE_EXTENSIONS
             }
             .sortedBy { it.fileName.lowercase() }
             .forEach { header ->

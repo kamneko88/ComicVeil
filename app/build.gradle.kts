@@ -76,6 +76,9 @@ dependencies {
     // RAR展開
     implementation("com.github.junrar:junrar:7.5.5")
 
+    // ZIP展開（Shift-JIS対応）
+    implementation("org.apache.commons:commons-compress:1.26.2")
+
     // SMB接続（NASアクセス）
     implementation("com.hierynomus:smbj:0.13.0")
 

@@ -32,4 +32,9 @@ class ComicFileRepository(private val dao: ComicFileDao) {
     suspend fun getComicFile(filePath: String): ComicFile? = withContext(Dispatchers.IO) {
         dao.getComicFile(filePath)
     }
+
+    /** レコードを削除（ファイル削除時） */
+    suspend fun delete(filePath: String) = withContext(Dispatchers.IO) {
+        dao.deleteComicFile(filePath)
+    }
 }

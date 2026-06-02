@@ -12,6 +12,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.kamneko88.comicveil.ui.home.HomeScreen
+import com.kamneko88.comicveil.ui.settings.SettingsScreen
 import com.kamneko88.comicveil.ui.theme.ComicVeilTheme
 import com.kamneko88.comicveil.ui.transfer.TransferScreen
 import com.kamneko88.comicveil.ui.transfer.TransferViewModel
@@ -38,6 +39,9 @@ fun ComicVeilApp() {
     // TransferViewModel をアプリ全体で1つ共有
     val transferViewModel: TransferViewModel = viewModel()
 
+    // HomeViewModel をアプリ全体で1つ共有（設定画面と共有するため）
+    val homeViewModel: com.kamneko88.comicveil.ui.home.HomeViewModel = viewModel()
+
     NavHost(
         navController  = navController,
         startDestination = "home"
@@ -46,6 +50,7 @@ fun ComicVeilApp() {
         composable("home") {
             HomeScreen(
                 navController     = navController,
+                viewModel         = homeViewModel,
                 transferViewModel = transferViewModel
             )
         }
@@ -62,6 +67,14 @@ fun ComicVeilApp() {
             ViewerScreen(
                 filePath = filePath,
                 onClose  = { navController.popBackStack() }
+            )
+        }
+
+        // ─── 設定画面 ───────────────────────────────────────────────────────
+        composable("settings") {
+            SettingsScreen(
+                viewModel = homeViewModel,
+                onClose   = { navController.popBackStack() }
             )
         }
 

@@ -10,8 +10,11 @@ import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +32,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
@@ -92,7 +98,7 @@ import java.util.Locale
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     navController: NavController,
@@ -117,6 +123,11 @@ fun HomeScreen(
     var hasPermission    by remember { mutableStateOf(false) }
     var showAddNasDialog by remember { mutableStateOf(false) }
     var editingServer    by remember { mutableStateOf<NasServer?>(null) }
+
+    // 編集モード関連
+    var isEditMode         by remember { mutableStateOf(false) }
+    var selectedPaths      by remember { mutableStateOf(setOf<String>()) }
+    var showDeleteConfirm  by remember { mutableStateOf(false) }
 
     val thumbnailRepository = remember {
         ThumbnailRepository(File(context.cacheDir, "thumbnails"))
@@ -191,7 +202,16 @@ fun HomeScreen(
         }
     }
 
-    BackHandler(enabled = !isRoot) { viewModel.navigateUp() }
+    BackHandler(enabled = !isRoot || isEditMode) {
+        if (isEditMode) {
+            isEditMode    = false
+            selectedPaths = emptySet()
+        } else {
+            isEditMode    = false
+            selectedPaths = emptySet()
+            viewModel.navigateUp()
+        }
+    }
 
     // NASサーバー追加・編集ダイアログ
     if (showAddNasDialog) {
@@ -247,6 +267,29 @@ fun HomeScreen(
         )
     }
 
+    // 削除確認ダイアログ（NASは表示しない）
+    if (showDeleteConfirm && !isNas) {
+        val selectedItems = files.filter { it.path in selectedPaths }
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("削除の確認") },
+            text  = { Text("${selectedItems.size}件のファイルを削除します。この操作は元に戻せません。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteConfirm = false
+                    viewModel.deleteLocalFiles(selectedItems)
+                    isEditMode    = false
+                    selectedPaths = emptySet()
+                }) {
+                    Text("削除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("キャンセル") }
+            }
+        )
+    }
+
     // NASエラーダイアログ
     nasError?.let { errorMsg ->
         AlertDialog(
@@ -273,24 +316,99 @@ fun HomeScreen(
                 },
                 navigationIcon = {
                     if (!isRoot) {
-                        IconButton(onClick = { viewModel.navigateUp() }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
+                        var showNavMenu by remember { mutableStateOf(false) }
+
+                        Box {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .combinedClickable(
+                                        onClick     = {
+                                            isEditMode    = false
+                                            selectedPaths = emptySet()
+                                            viewModel.navigateUp()
+                                        },
+                                        onLongClick = { showNavMenu = true }
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
+                            }
+                            DropdownMenu(
+                                expanded         = showNavMenu,
+                                onDismissRequest = { showNavMenu = false }
+                            ) {
+                                // 上に表示：共有フォルダルート or Downloads
+                                val rootLabel = when (val loc = currentLocation) {
+                                    is ViewLocation.NasFolder   -> loc.server.displayName
+                                    is ViewLocation.LocalFolder -> "Downloads"
+                                    else                        -> null
+                                }
+                                if (rootLabel != null) {
+                                    DropdownMenuItem(
+                                        text    = { Text(rootLabel) },
+                                        onClick = {
+                                            showNavMenu   = false
+                                            isEditMode    = false
+                                            selectedPaths = emptySet()
+                                            when (val loc = currentLocation) {
+                                                is ViewLocation.NasFolder   ->
+                                                    viewModel.navigateToNas(loc.server, "")
+                                                is ViewLocation.LocalFolder ->
+                                                    viewModel.navigateToRoot()
+                                                else -> {}
+                                            }
+                                        }
+                                    )
+                                    HorizontalDivider()
+                                }
+                                // 下に表示：HOME
+                                DropdownMenuItem(
+                                    text    = { Text("HOME") },
+                                    onClick = {
+                                        showNavMenu   = false
+                                        isEditMode    = false
+                                        selectedPaths = emptySet()
+                                        viewModel.navigateToHome()
+                                    }
+                                )
+                            }
                         }
                     }
                 },
                 actions = {
-                    IconButton(onClick = { }) {
-                        Icon(Icons.Default.Search, contentDescription = "検索")
+                    if (isEditMode) {
+                        // 編集モード中：全選択ボタン
+                        val selectableFiles = files.filter { !it.isFolder && !it.isNas }
+                        TextButton(onClick = {
+                            selectedPaths = if (selectedPaths.size == selectableFiles.size)
+                                emptySet()
+                            else
+                                selectableFiles.map { it.path }.toSet()
+                        }) {
+                            Text(if (selectedPaths.size == selectableFiles.size) "選択解除" else "全選択")
+                        }
+                        TextButton(onClick = {
+                            isEditMode    = false
+                            selectedPaths = emptySet()
+                        }) { Text("完了") }
+                    } else {
+                        IconButton(onClick = { }) {
+                            Icon(Icons.Default.Search, contentDescription = "検索")
+                        }
+                        TextButton(onClick = { }) { Text("名前▼") }
+                        IconButton(onClick = { isListMode = !isListMode }) {
+                            Icon(
+                                if (isListMode) Icons.Default.GridView
+                                else Icons.AutoMirrored.Filled.List,
+                                contentDescription = "表示切替"
+                            )
+                        }
+                        TextButton(onClick = {
+                            isEditMode    = true
+                            selectedPaths = emptySet()
+                        }) { Text("編集") }
                     }
-                    TextButton(onClick = { }) { Text("名前▼") }
-                    IconButton(onClick = { isListMode = !isListMode }) {
-                        Icon(
-                            if (isListMode) Icons.Default.GridView
-                            else Icons.AutoMirrored.Filled.List,
-                            contentDescription = "表示切替"
-                        )
-                    }
-                    TextButton(onClick = { }) { Text("編集") }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
@@ -304,40 +422,62 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment     = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = { }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "About")
-                    }
-                    TextButton(onClick = { showAddNasDialog = true }) { Text("サーバー") }
-
-                    if (isNas) {
-                        IconButton(onClick = { viewModel.toggleMode() }) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(
-                                    imageVector        = if (isStreamingMode) Icons.Default.Wifi
-                                    else Icons.Default.Download,
-                                    contentDescription = null,
-                                    modifier           = Modifier.size(18.dp),
-                                    tint               = if (isStreamingMode) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.tertiary
-                                )
-                                Text(
-                                    text       = if (isStreamingMode) "STR" else "DL",
-                                    fontSize   = 9.sp,
-                                    color      = if (isStreamingMode) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.tertiary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
+                    if (isEditMode && !isNas) {
+                        // 編集モード（ローカル）：削除ボタン
+                        val hasSelection = selectedPaths.isNotEmpty()
+                        IconButton(
+                            onClick = { if (hasSelection) showDeleteConfirm = true },
+                            enabled = hasSelection
+                        ) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "削除",
+                                tint = if (hasSelection) MaterialTheme.colorScheme.error
+                                       else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                            )
                         }
+                        Text(
+                            text  = if (hasSelection) "${selectedPaths.size}件選択中" else "ファイルを選択してください",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     } else {
-                        TextButton(onClick = { }) { Text("C") }
-                    }
+                        // 通常モード
+                        IconButton(onClick = { }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "About")
+                        }
+                        TextButton(onClick = { showAddNasDialog = true }) { Text("サーバー") }
 
-                    IconButton(onClick = { viewModel.openTransferScreen() }) {
-                        Icon(Icons.Default.SwapVert, contentDescription = "転送状況")
-                    }
-                    IconButton(onClick = { }) {
-                        Icon(Icons.Default.Settings, contentDescription = "設定")
+                        if (isNas) {
+                            IconButton(onClick = { viewModel.toggleMode() }) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector        = if (isStreamingMode) Icons.Default.Wifi
+                                        else Icons.Default.Download,
+                                        contentDescription = null,
+                                        modifier           = Modifier.size(18.dp),
+                                        tint               = if (isStreamingMode) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.tertiary
+                                    )
+                                    Text(
+                                        text       = if (isStreamingMode) "STR" else "DL",
+                                        fontSize   = 9.sp,
+                                        color      = if (isStreamingMode) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.tertiary,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        } else {
+                            TextButton(onClick = { }) { Text("C") }
+                        }
+
+                        IconButton(onClick = { viewModel.openTransferScreen() }) {
+                            Icon(Icons.Default.SwapVert, contentDescription = "転送状況")
+                        }
+                        IconButton(onClick = { navController.navigate("settings") }) {
+                            Icon(Icons.Default.Settings, contentDescription = "設定")
+                        }
                     }
                 }
             }
@@ -367,7 +507,11 @@ fun HomeScreen(
                         items(nasServers) { server ->
                             NasServerListItem(
                                 server   = server,
-                                onClick  = { viewModel.navigateToNas(server) },
+                                onClick  = {
+                                    isEditMode    = false
+                                    selectedPaths = emptySet()
+                                    viewModel.navigateToNas(server)
+                                },
                                 onEdit   = { editingServer = it; showAddNasDialog = true },
                                 onDelete = { viewModel.deleteNasServer(it.id) }
                             )
@@ -403,22 +547,38 @@ fun HomeScreen(
                     } else {
                         items(files) { fileItem ->
                             val itemStatus = fileStatuses[fileItem.path] ?: ReadStatus.UNREAD
+                            val isSelected = fileItem.path in selectedPaths
+                            val isCached   = fileItem.isNas && viewModel.isNasCached(fileItem)
                             FileListItem(
                                 fileItem            = fileItem,
                                 thumbnailRepository = thumbnailRepository,
                                 status              = itemStatus,
+                                isEditMode          = isEditMode && !isNas,
+                                isSelected          = isSelected,
+                                isCached            = isCached,
                                 onClick = {
-                                    when {
-                                        fileItem.isFolder -> {
-                                            if (fileItem.isNas) viewModel.navigateToNas(
-                                                fileItem.nasServer!!, fileItem.nasPath
-                                            )
-                                            else viewModel.loadFolder(fileItem.file!!)
+                                    if (isEditMode && !isNas && !fileItem.isFolder) {
+                                        // 編集モード中：選択/解除
+                                        selectedPaths = if (isSelected)
+                                            selectedPaths - fileItem.path
+                                        else
+                                            selectedPaths + fileItem.path
+                                    } else {
+                                        when {
+                                            fileItem.isFolder -> {
+                                                // フォルダ移動時は編集モードを終了
+                                                isEditMode    = false
+                                                selectedPaths = emptySet()
+                                                if (fileItem.isNas) viewModel.navigateToNas(
+                                                    fileItem.nasServer!!, fileItem.nasPath
+                                                )
+                                                else viewModel.loadFolder(fileItem.file!!)
+                                            }
+                                            fileItem.isComic -> viewModel.onComicTapped(fileItem)
                                         }
-                                        fileItem.isComic -> viewModel.onComicTapped(fileItem)
                                     }
                                 },
-                                onInfoClick = { viewModel.openFileInfo(fileItem) }
+                                onInfoClick = { if (!isEditMode) viewModel.openFileInfo(fileItem) }
                             )
                             HorizontalDivider()
                         }
@@ -594,6 +754,25 @@ fun ReadStatusBadge(status: ReadStatus) {
     }
 }
 
+// ─── NASキャッシュバッジ ─────────────────────────────────────────────────────
+
+@Composable
+fun CachedBadge() {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(MaterialTheme.colorScheme.tertiaryContainer)
+            .padding(horizontal = 5.dp, vertical = 1.dp)
+    ) {
+        Text(
+            text     = "Cached",
+            style    = MaterialTheme.typography.labelSmall,
+            color    = MaterialTheme.colorScheme.onTertiaryContainer,
+            fontSize = 10.sp
+        )
+    }
+}
+
 // ─── NASサーバーリストアイテム ────────────────────────────────────────────────
 
 @Composable
@@ -681,24 +860,43 @@ fun FileListItem(
     thumbnailRepository: ThumbnailRepository,
     onClick: () -> Unit,
     onInfoClick: () -> Unit = {},
-    status: ReadStatus = ReadStatus.UNREAD
+    status: ReadStatus = ReadStatus.UNREAD,
+    isEditMode: Boolean = false,
+    isSelected: Boolean = false,
+    isCached: Boolean = false
 ) {
     val repository = remember { LocalFileRepository() }
     val (title, author) = remember(fileItem.name) { repository.parseFileName(fileItem.name) }
 
-    // produceState を使わず LaunchedEffect + remember で実装
     var thumbnailFile by remember(fileItem.path) { mutableStateOf<File?>(null) }
     LaunchedEffect(fileItem.path) {
         thumbnailFile = thumbnailRepository.getOrGenerateThumbnail(fileItem)
     }
 
+    val backgroundColor = if (isSelected)
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+    else
+        Color.Transparent
+
     Row(
         modifier          = Modifier
             .fillMaxWidth()
+            .background(backgroundColor)
             .clickable { onClick() }
             .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // 編集モード時：ファイルにのみチェックボックスを表示
+        if (isEditMode && !fileItem.isFolder) {
+            Icon(
+                imageVector        = if (isSelected) Icons.Default.CheckBox
+                                     else Icons.Default.CheckBoxOutlineBlank,
+                contentDescription = null,
+                modifier           = Modifier.size(24.dp).padding(end = 4.dp),
+                tint               = if (isSelected) MaterialTheme.colorScheme.primary
+                                     else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         Box(
             modifier         = Modifier
                 .width(56.dp)
@@ -764,6 +962,9 @@ fun FileListItem(
                 )
                 if (fileItem.isComic && status != ReadStatus.UNREAD) {
                     ReadStatusBadge(status = status)
+                }
+                if (isCached) {
+                    CachedBadge()
                 }
             }
         }

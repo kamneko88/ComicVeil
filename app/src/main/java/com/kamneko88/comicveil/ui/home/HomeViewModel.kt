@@ -188,6 +188,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         loadFileStatuses(_files.value)
     }
 
+    /** Downloadsルートに戻る */
+    fun navigateToRoot() {
+        _currentLocation.value = ViewLocation.Home
+        _files.value = fileRepository.getFiles(downloadsFolder)
+        loadFileStatuses(_files.value)
+    }
+
+    /** Home画面に戻る（NASサーバー一覧も表示） */
+    fun navigateToHome() {
+        _currentLocation.value = ViewLocation.Home
+        _files.value = fileRepository.getFiles(downloadsFolder)
+        loadFileStatuses(_files.value)
+    }
+
     // ─── NASナビゲーション ────────────────────────────────────────────────
 
     fun navigateToNas(server: NasServer, nasPath: String = "") {
@@ -439,5 +453,72 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissDialog() {
         _dialogState.value = null
+    }
+
+    // ─── ローカルファイル削除 ──────────────────────────────────────────────
+
+    /** ローカルファイルを削除し、DBの読書状態・読書位置も消去する
+     * @return 削除成功になったファイル数
+     */
+    fun deleteLocalFiles(fileItems: List<FileItem>): Int {
+        var count = 0
+        viewModelScope.launch(Dispatchers.IO) {
+            fileItems.forEach { item ->
+                val file = item.file ?: return@forEach
+                if (file.delete()) {
+                    // DBから読書状態・位置も削除
+                    comicFileRepository.delete(item.path)
+                    progressRepository.deleteProgress(item.path)
+                    count++
+                }
+            }
+            // 削除後にファイルリストを更新
+            val loc = _currentLocation.value
+            val folder = when (loc) {
+                is ViewLocation.Home        -> downloadsFolder
+                is ViewLocation.LocalFolder -> loc.folder
+                else                        -> return@launch
+            }
+            withContext(Dispatchers.Main) {
+                _files.value = fileRepository.getFiles(folder)
+                loadFileStatuses(_files.value)
+            }
+        }
+        return count
+    }
+
+    // ─── キャッシュ管理 ─────────────────────────────────────────────────
+
+    /** NAS STRキャッシュフォルダを参照 */
+    private fun nasCacheDir(): File =
+        File(getApplication<Application>().cacheDir, "nas_cache")
+
+    /** 指定ファイルのSTRキャッシュが存在するか確認 */
+    fun isNasCached(fileItem: FileItem): Boolean {
+        if (!fileItem.isNas) return false
+        val ext  = fileItem.name.substringAfterLast(".")
+        val file = File(nasCacheDir(), "nas_${fileItem.nasPath.hashCode()}.$ext")
+        return file.exists() && file.length() > 0
+    }
+
+    /** STRキャッシュを全削除してサイズ（bytes）を返す */
+    fun clearNasCache(): Long {
+        val dir = nasCacheDir()
+        var totalBytes = 0L
+        dir.listFiles()?.forEach {
+            totalBytes += it.length()
+            it.delete()
+        }
+        return totalBytes
+    }
+
+    /** サムネイルキャッシュを全削除してサイズ（bytes）を返す */
+    fun clearThumbnailCache(thumbnailCacheDir: File): Long {
+        var totalBytes = 0L
+        thumbnailCacheDir.listFiles()?.forEach {
+            totalBytes += it.length()
+            it.delete()
+        }
+        return totalBytes
     }
 }
