@@ -20,29 +20,31 @@ import androidx.compose.ui.unit.dp
 import com.kamneko88.comicveil.data.nas.NasServer
 
 /**
- * NASサーバー追加ダイアログ
+ * リモートサーバー追加・編集ダイアログ
  * editServer が null → 新規追加モード
  * editServer がある → 編集モード
+ *
+ * 共有フォルダ名（shareName）は省略可能。
+ * 将来的にはショートカット機能で個別指定できるようにする予定。
  */
 @Composable
 fun AddNasServerDialog(
     onDismiss: () -> Unit,
     onConfirm: (NasServer) -> Unit,
-    editServer: NasServer? = null       // 編集時は既存サーバーを渡す
+    editServer: NasServer? = null
 ) {
-    // 編集モードの場合は既存の値を初期値にセット
-    var displayName by remember { mutableStateOf(editServer?.displayName ?: "自宅NAS") }
+    var displayName by remember { mutableStateOf(editServer?.displayName ?: "") }
     var host        by remember { mutableStateOf(editServer?.host        ?: "") }
     var shareName   by remember { mutableStateOf(editServer?.shareName   ?: "") }
     var username    by remember { mutableStateOf(editServer?.username    ?: "") }
     var password    by remember { mutableStateOf(editServer?.password    ?: "") }
 
-    val isValid    = host.isNotBlank() && shareName.isNotBlank()
+    val isValid    = host.isNotBlank()
     val isEditMode = editServer != null
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (isEditMode) "NASサーバーを編集" else "NASサーバーを追加") },
+        title = { Text(if (isEditMode) "リモートを編集" else "リモートを追加") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
 
@@ -50,7 +52,8 @@ fun AddNasServerDialog(
                 OutlinedTextField(
                     value         = displayName,
                     onValueChange = { displayName = it },
-                    label         = { Text("表示名") },
+                    label         = { Text("表示名（省略可）") },
+                    placeholder   = { Text("例：自宅NAS") },
                     singleLine    = true,
                     modifier      = Modifier.fillMaxWidth()
                 )
@@ -64,21 +67,21 @@ fun AddNasServerDialog(
                     singleLine    = true,
                     modifier      = Modifier.fillMaxWidth()
                 )
-                Text(
-                    text     = "※ プレースホルダーは入力例です。タップして入力してください",
-                    style    = MaterialTheme.typography.labelSmall,
-                    color    = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 4.dp)
-                )
 
                 // ── 共有フォルダ名 ───────────────────────────────────────
                 OutlinedTextField(
                     value         = shareName,
                     onValueChange = { shareName = it },
-                    label         = { Text("共有フォルダ名") },
+                    label         = { Text("共有フォルダ名（省略可）") },
                     placeholder   = { Text("例：share_data") },
                     singleLine    = true,
                     modifier      = Modifier.fillMaxWidth()
+                )
+                Text(
+                    text     = "※ 省略するとサーバーのルートに接続します。共有フォルダはショートカットで個別登録できます（未実装）",
+                    style    = MaterialTheme.typography.labelSmall,
+                    color    = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp)
                 )
 
                 // ── ユーザー名 ───────────────────────────────────────────
@@ -106,7 +109,6 @@ fun AddNasServerDialog(
                 onClick = {
                     onConfirm(
                         NasServer(
-                            // 編集モードの場合は元のIDを引き継ぐ
                             id          = editServer?.id ?: java.util.UUID.randomUUID().toString(),
                             displayName = displayName.ifBlank { host },
                             host        = host.trim(),

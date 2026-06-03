@@ -1,7 +1,9 @@
 package com.kamneko88.comicveil.ui.viewer
 
 import android.app.Application
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.core.view.doOnLayout
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -47,6 +49,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -64,6 +67,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -78,6 +82,7 @@ fun ViewerScreen(
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
     val viewModel: ViewerViewModel = viewModel(
         factory = ViewerViewModel.Factory(
             application = context.applicationContext as Application,
@@ -88,6 +93,31 @@ fun ViewerScreen(
     var menuVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // ビューワー起動中は画面左右端のシステムジェスチャーを無効化し、閉じたら元に戻す
+    DisposableEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val density = view.resources.displayMetrics.density
+            val edgePx  = (40 * density).toInt()
+
+            // View.systemGestureExclusionRects で左右端を除外登録
+            // （insetsController より安定・API 29以上で使用可能）
+            view.doOnLayout {
+                val h = view.height.takeIf { it > 0 } ?: 2000
+                val w = view.width.takeIf  { it > 0 } ?: 1080
+                view.systemGestureExclusionRects = listOf(
+                    android.graphics.Rect(0,        0, edgePx,     h), // 左端
+                    android.graphics.Rect(w - edgePx, 0, w, h)        // 右端
+                )
+            }
+        }
+        onDispose {
+            // ビューワーを閉じたらジェスチャー除外エリアをリセット
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                view.systemGestureExclusionRects = emptyList()
+            }
+        }
+    }
 
     BackHandler { onClose() }
 

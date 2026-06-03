@@ -1,9 +1,9 @@
 package com.kamneko88.comicveil.ui.home
 
 import android.app.Application
-import android.os.Environment
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.LocalFileRepository
 import com.kamneko88.comicveil.data.db.ComicFileRepository
@@ -77,10 +77,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val comicFileRepository : ComicFileRepository
     private val smbRepository       = SmbRepository()
     private val nasServerPrefs      = NasServerPrefs(application)
+    val appPrefs                    = AppPrefs(application)
 
-    private val downloadsFolder = Environment.getExternalStoragePublicDirectory(
-        Environment.DIRECTORY_DOWNLOADS
-    )
+    /** 現在のHomeフォルダ（設定に応じて動的に解決）*/
+    private val homeFolder: File
+        get() = appPrefs.resolveHomeFolder(getApplication())
+
+    /** DL保存先フォルダ（設定に応じて動的に解決）*/
+    private val downloadFolder: File
+        get() = appPrefs.resolveDownloadFolder(getApplication())
 
     private val _currentLocation = MutableStateFlow<ViewLocation>(ViewLocation.Home)
     val currentLocation: StateFlow<ViewLocation> = _currentLocation.asStateFlow()
@@ -174,11 +179,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadInitialFolder() {
         if (_currentLocation.value !is ViewLocation.Home) return
-        _files.value = fileRepository.getFiles(downloadsFolder)
+        _files.value = fileRepository.getFiles(homeFolder)
     }
 
     fun loadFolder(folder: File) {
-        val location = if (folder.absolutePath == downloadsFolder.absolutePath) {
+        val location = if (folder.absolutePath == homeFolder.absolutePath) {
             ViewLocation.Home
         } else {
             ViewLocation.LocalFolder(folder)
@@ -188,17 +193,17 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         loadFileStatuses(_files.value)
     }
 
-    /** Downloadsルートに戻る */
+    /** Homeフォルダルートに戻る */
     fun navigateToRoot() {
         _currentLocation.value = ViewLocation.Home
-        _files.value = fileRepository.getFiles(downloadsFolder)
+        _files.value = fileRepository.getFiles(homeFolder)
         loadFileStatuses(_files.value)
     }
 
     /** Home画面に戻る（NASサーバー一覧も表示） */
     fun navigateToHome() {
         _currentLocation.value = ViewLocation.Home
-        _files.value = fileRepository.getFiles(downloadsFolder)
+        _files.value = fileRepository.getFiles(homeFolder)
         loadFileStatuses(_files.value)
     }
 
@@ -230,7 +235,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val parent = loc.folder.parentFile
                 if (parent != null) loadFolder(parent) else {
                     _currentLocation.value = ViewLocation.Home
-                    _files.value = fileRepository.getFiles(downloadsFolder)
+                    _files.value = fileRepository.getFiles(homeFolder)
                     loadFileStatuses(_files.value)
                 }
                 true
@@ -239,7 +244,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             is ViewLocation.NasFolder -> {
                 if (loc.path.isEmpty()) {
                     _currentLocation.value = ViewLocation.Home
-                    _files.value = fileRepository.getFiles(downloadsFolder)
+                    _files.value = fileRepository.getFiles(homeFolder)
                     loadFileStatuses(_files.value)
                 } else {
                     val parentPath = loc.path.substringBeforeLast("/", "")
@@ -475,7 +480,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             // 削除後にファイルリストを更新
             val loc = _currentLocation.value
             val folder = when (loc) {
-                is ViewLocation.Home        -> downloadsFolder
+                is ViewLocation.Home        -> homeFolder
                 is ViewLocation.LocalFolder -> loc.folder
                 else                        -> return@launch
             }

@@ -446,7 +446,7 @@ fun HomeScreen(
                         IconButton(onClick = { }) {
                             Icon(Icons.Default.MoreVert, contentDescription = "About")
                         }
-                        TextButton(onClick = { showAddNasDialog = true }) { Text("サーバー") }
+                        TextButton(onClick = { showAddNasDialog = true }) { Text("リモート") }
 
                         if (isNas) {
                             IconButton(onClick = { viewModel.toggleMode() }) {

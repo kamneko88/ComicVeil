@@ -27,8 +27,13 @@ class SmbRepository {
                     null
                 )
                 val session = connection.authenticate(auth)
-                val share = session.connectShare(server.shareName) as DiskShare
 
+                // shareName が空 → エラーを返す（将来のショートカット実装時に対応予定）
+                if (server.shareName.isEmpty() && nasPath.isEmpty()) {
+                    throw IllegalStateException("共有フォルダ名が未設定です。\nリモートの編集から共有フォルダ名を設定してください。")
+                }
+
+                val share = session.connectShare(server.shareName) as DiskShare
                 val smbPath = nasPath.replace("/", "\\")
 
                 share.list(smbPath)

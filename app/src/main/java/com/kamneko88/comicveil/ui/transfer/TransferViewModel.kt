@@ -1,9 +1,9 @@
 package com.kamneko88.comicveil.ui.transfer
 
 import android.app.Application
-import android.os.Environment
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.nas.NasServer
 import com.kamneko88.comicveil.data.nas.SmbRepository
@@ -19,10 +19,7 @@ import java.io.File
 class TransferViewModel(application: Application) : AndroidViewModel(application) {
 
     private val smbRepository = SmbRepository()
-
-    private val downloadsFolder = Environment.getExternalStoragePublicDirectory(
-        Environment.DIRECTORY_DOWNLOADS
-    )
+    private val appPrefs       = AppPrefs(application)
 
     /**
      * 全転送アイテムのリスト（アクティブ＋履歴を一元管理）
@@ -54,8 +51,8 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
             val dir = File(getApplication<Application>().cacheDir, "nas_cache")
             File(dir, "nas_${fileItem.nasPath.hashCode()}.$ext")
         } else {
-            val dir = File(downloadsFolder, "ComicVeil")
-            File(dir, fileItem.name)
+            appPrefs.resolveDownloadFolder(getApplication()).also { it.mkdirs() }
+                .let { File(it, fileItem.name) }
         }
 
         val item = TransferItem(
