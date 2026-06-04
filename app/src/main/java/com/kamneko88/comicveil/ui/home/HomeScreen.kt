@@ -267,17 +267,33 @@ fun HomeScreen(
         )
     }
 
-    // 削除確認ダイアログ（NASは表示しない）
-    if (showDeleteConfirm && !isNas) {
-        val selectedItems = files.filter { it.path in selectedPaths }
+    // 削除確認ダイアログ
+    if (showDeleteConfirm) {
+        val selectedFileItems   = files.filter { it.path in selectedPaths }
+        val selectedServerItems = nasServers.filter { it.id in selectedPaths }
+        val totalCount = selectedFileItems.size + selectedServerItems.size
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
             title = { Text("削除の確認") },
-            text  = { Text("${selectedItems.size}件のファイルを削除します。この操作は元に戻せません。") },
+            text  = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("${totalCount}件を削除します。この操作は元に戻せません。")
+                    if (selectedServerItems.isNotEmpty()) {
+                        Text(
+                            text  = "リモート設定 ${selectedServerItems.size}件も含まれます",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteConfirm = false
-                    viewModel.deleteLocalFiles(selectedItems)
+                    if (selectedFileItems.isNotEmpty()) {
+                        viewModel.deleteLocalFiles(selectedFileItems)
+                    }
+                    selectedServerItems.forEach { viewModel.deleteNasServer(it.id) }
                     isEditMode    = false
                     selectedPaths = emptySet()
                 }) {
@@ -379,14 +395,17 @@ fun HomeScreen(
                 actions = {
                     if (isEditMode) {
                         // 編集モード中：全選択ボタン
-                        val selectableFiles = files.filter { !it.isFolder && !it.isNas }
+                        // ファイル・フォルダ（ローカルのみ）とリモートサーバーを対象に含める
+                        val selectableLocal   = files.filter { !it.isNas }
+                        val selectableServers = if (isRoot) nasServers.map { it.id } else emptyList()
+                        val allSelectablePaths = selectableLocal.map { it.path } + selectableServers
                         TextButton(onClick = {
-                            selectedPaths = if (selectedPaths.size == selectableFiles.size)
+                            selectedPaths = if (selectedPaths.size == allSelectablePaths.size)
                                 emptySet()
                             else
-                                selectableFiles.map { it.path }.toSet()
+                                allSelectablePaths.toSet()
                         }) {
-                            Text(if (selectedPaths.size == selectableFiles.size) "選択解除" else "全選択")
+                            Text(if (selectedPaths.size == allSelectablePaths.size) "選択解除" else "全選択")
                         }
                         TextButton(onClick = {
                             isEditMode    = false
@@ -505,8 +524,17 @@ fun HomeScreen(
                             )
                         }
                         items(nasServers) { server ->
+                            val isServerSelected = server.id in selectedPaths
                             NasServerListItem(
-                                server   = server,
+                                server          = server,
+                                isEditMode      = isEditMode,
+                                isSelected      = isServerSelected,
+                                onToggleSelect  = {
+                                    selectedPaths = if (isServerSelected)
+                                        selectedPaths - server.id
+                                    else
+                                        selectedPaths + server.id
+                                },
                                 onClick  = {
                                     isEditMode    = false
                                     selectedPaths = emptySet()
@@ -557,8 +585,8 @@ fun HomeScreen(
                                 isSelected          = isSelected,
                                 isCached            = isCached,
                                 onClick = {
-                                    if (isEditMode && !isNas && !fileItem.isFolder) {
-                                        // 編集モード中：選択/解除
+                                    if (isEditMode && !isNas) {
+                                        // 編集モード中：ファイル・フォルダの選択/解除
                                         selectedPaths = if (isSelected)
                                             selectedPaths - fileItem.path
                                         else
@@ -780,12 +808,15 @@ fun NasServerListItem(
     server: NasServer,
     onClick: () -> Unit,
     onEdit: (NasServer) -> Unit,
-    onDelete: (NasServer) -> Unit
+    onDelete: (NasServer) -> Unit,
+    isEditMode: Boolean = false,
+    isSelected: Boolean = false,
+    onToggleSelect: () -> Unit = {}
 ) {
     var showMenu   by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
 
-    if (showDelete) {
+    if (showDelete && !isEditMode) {
         AlertDialog(
             onDismissRequest = { showDelete = false },
             title = { Text("サーバーを削除") },
@@ -801,13 +832,29 @@ fun NasServerListItem(
         )
     }
 
+    val backgroundColor = if (isSelected)
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+    else Color.Transparent
+
     Row(
         modifier          = Modifier
             .fillMaxWidth()
-            .clickable { onClick() }
+            .background(backgroundColor)
+            .clickable { if (isEditMode) onToggleSelect() else onClick() }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // 編集モード時はチェックボックスを表示
+        if (isEditMode) {
+            Icon(
+                imageVector        = if (isSelected) Icons.Default.CheckBox
+                                     else Icons.Default.CheckBoxOutlineBlank,
+                contentDescription = null,
+                modifier           = Modifier.size(24.dp).padding(end = 4.dp),
+                tint               = if (isSelected) MaterialTheme.colorScheme.primary
+                                     else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         Icon(
             imageVector        = Icons.Default.Dns,
             contentDescription = null,
@@ -886,8 +933,8 @@ fun FileListItem(
             .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 編集モード時：ファイルにのみチェックボックスを表示
-        if (isEditMode && !fileItem.isFolder) {
+        // 編集モード時：ファイル・フォルダどちらもチェックボックスを表示
+        if (isEditMode) {
             Icon(
                 imageVector        = if (isSelected) Icons.Default.CheckBox
                                      else Icons.Default.CheckBoxOutlineBlank,

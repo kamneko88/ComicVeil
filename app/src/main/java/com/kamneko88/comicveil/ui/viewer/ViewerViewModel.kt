@@ -7,6 +7,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.github.junrar.Archive
+import com.kamneko88.comicveil.data.db.Bookmark
+import com.kamneko88.comicveil.data.db.BookmarkRepository
 import com.kamneko88.comicveil.data.db.ComicFileRepository
 import com.kamneko88.comicveil.data.db.ComicVeilDatabase
 import com.kamneko88.comicveil.data.db.ReadStatus
@@ -29,7 +31,9 @@ data class ViewerUiState(
     val isLoading: Boolean = true,
     val error: String? = null,
     val initialPage: Int = 0,
-    val isSavedPageLoaded: Boolean = false
+    val isSavedPageLoaded: Boolean = false,
+    val bookmarks: List<Bookmark> = emptyList(),      // ブックマーク一覧
+    val isCurrentPageBookmarked: Boolean = false      // 現在ページがブックマーク済みか
 )
 
 /** 先頭・最終ページ通知イベント */
@@ -42,6 +46,7 @@ class ViewerViewModel(
 
     private val progressRepository : ReadingProgressRepository
     private val comicFileRepository: ComicFileRepository
+    private val bookmarkRepository : BookmarkRepository
 
     private val _uiState = MutableStateFlow(ViewerUiState())
     val uiState: StateFlow<ViewerUiState> = _uiState.asStateFlow()
@@ -78,6 +83,7 @@ class ViewerViewModel(
         val db = ComicVeilDatabase.getDatabase(application)
         progressRepository  = ReadingProgressRepository(db.readingProgressDao())
         comicFileRepository = ComicFileRepository(db.comicFileDao())
+        bookmarkRepository  = BookmarkRepository(db.bookmarkDao())
 
         // ① DBから前回ページを読み込む
         viewModelScope.launch {
@@ -137,6 +143,48 @@ class ViewerViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             progressRepository.saveProgress(filePath, currentPage, totalPages)
             comicFileRepository.updateStatus(filePath, newStatus)
+            // 現在ページのブックマーク状態を更新
+            val isBookmarked = bookmarkRepository.isBookmarked(filePath, currentPage)
+            _uiState.update { it.copy(isCurrentPageBookmarked = isBookmarked) }
+        }
+    }
+
+    /** 現在ページのブックマークをトグル（登録↔削除） */
+    fun toggleBookmark(currentPage: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            bookmarkRepository.toggleBookmark(filePath, currentPage)
+            val bookmarks   = bookmarkRepository.getBookmarks(filePath)
+            val isBookmarked = bookmarkRepository.isBookmarked(filePath, currentPage)
+            _uiState.update {
+                it.copy(bookmarks = bookmarks, isCurrentPageBookmarked = isBookmarked)
+            }
+        }
+    }
+
+    /** ブックマーク一覧を再読み込み */
+    fun loadBookmarks() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val bookmarks = bookmarkRepository.getBookmarks(filePath)
+            _uiState.update { it.copy(bookmarks = bookmarks) }
+        }
+    }
+
+    /** ブックマークを個別に削除 */
+    fun deleteBookmark(page: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val db = ComicVeilDatabase.getDatabase(getApplication())
+            db.bookmarkDao().deleteBookmark(filePath, page)
+            val bookmarks    = bookmarkRepository.getBookmarks(filePath)
+            val isBookmarked = bookmarkRepository.isBookmarked(filePath, lastSavedPage)
+            _uiState.update { it.copy(bookmarks = bookmarks, isCurrentPageBookmarked = isBookmarked) }
+        }
+    }
+
+    /** ブックマークを全削除 */
+    fun deleteAllBookmarks() {
+        viewModelScope.launch(Dispatchers.IO) {
+            bookmarkRepository.deleteAllBookmarks(filePath)
+            _uiState.update { it.copy(bookmarks = emptyList(), isCurrentPageBookmarked = false) }
         }
     }
 

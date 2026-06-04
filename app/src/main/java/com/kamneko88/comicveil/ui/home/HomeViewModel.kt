@@ -470,8 +470,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             fileItems.forEach { item ->
                 val file = item.file ?: return@forEach
-                if (file.delete()) {
-                    // DBから読書状態・位置も削除
+                val deleted = if (file.isDirectory) file.deleteRecursively() else file.delete()
+                if (deleted) {
                     comicFileRepository.delete(item.path)
                     progressRepository.deleteProgress(item.path)
                     count++
