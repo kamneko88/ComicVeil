@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.LocalFileRepository
+import com.kamneko88.comicveil.data.db.ColorLabel
 import com.kamneko88.comicveil.data.db.ComicFileRepository
 import com.kamneko88.comicveil.data.db.ComicVeilDatabase
 import com.kamneko88.comicveil.data.db.ReadStatus
@@ -67,7 +68,9 @@ data class FileInfoState(
     val fileItem: FileItem,
     val title: String,
     val author: String?,
-    val status: ReadStatus
+    val status: ReadStatus,
+    val rating: Int = 0,
+    val colorLabel: Int = 0
 )
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
@@ -120,6 +123,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val _fileStatuses = MutableStateFlow<Map<String, ReadStatus>>(emptyMap())
     val fileStatuses: StateFlow<Map<String, ReadStatus>> = _fileStatuses.asStateFlow()
+
+    /** ファイルパス→ComicFileのマップ（レーティング・カラーラベルをリストに即時反映） */
+    private val _fileMetaMap = MutableStateFlow<Map<String, com.kamneko88.comicveil.data.db.ComicFile>>(emptyMap())
+    val fileMetaMap: StateFlow<Map<String, com.kamneko88.comicveil.data.db.ComicFile>> = _fileMetaMap.asStateFlow()
 
     private val _navigateEvent = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
     val navigateEvent: SharedFlow<String> = _navigateEvent.asSharedFlow()
@@ -263,10 +270,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun loadFileStatuses(fileList: List<FileItem> = _files.value) {
         viewModelScope.launch(Dispatchers.IO) {
-            val map = fileList
-                .filter { it.isComic }
-                .associate { it.path to comicFileRepository.getStatus(it.path) }
-            _fileStatuses.value = map
+            val comics = fileList.filter { it.isComic }
+            val statusMap = comics.associate { it.path to comicFileRepository.getStatus(it.path) }
+            val metaMap   = comics.mapNotNull { comicFileRepository.getComicFile(it.path) }
+                                  .associateBy { it.filePath }
+            _fileStatuses.value = statusMap
+            _fileMetaMap.value  = metaMap
         }
     }
 
@@ -309,28 +318,55 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val (title, author) = fileRepository.parseFileName(fileItem.name)
             val status = comicFileRepository.getStatus(fileItem.path)
+            val comicFile = withContext(Dispatchers.IO) {
+                comicFileRepository.getComicFile(fileItem.path)
+            }
             _fileInfoState.value = FileInfoState(
-                fileItem = fileItem,
-                title    = title,
-                author   = author,
-                status   = status
+                fileItem   = fileItem,
+                title      = title,
+                author     = author,
+                status     = status,
+                rating     = comicFile?.rating ?: 0,
+                colorLabel = comicFile?.colorLabel ?: 0
             )
         }
     }
 
-    /** ファイル情報ポップアップで状態を変更 */
+    /** ファイル情報ポップアップで読書状態を変更 */
     fun updateFileStatus(fileItem: FileItem, status: ReadStatus) {
         viewModelScope.launch {
             comicFileRepository.updateStatus(fileItem.path, status)
-            // 未読に変更した場合は読書位置もリセット
             if (status == ReadStatus.UNREAD) {
                 withContext(Dispatchers.IO) {
                     progressRepository.saveProgress(fileItem.path, 0, 0)
                 }
             }
-            // ポップアップとリストの両方を即時更新
             _fileInfoState.value = _fileInfoState.value?.copy(status = status)
             updateFileStatusInMap(fileItem.path, status)
+        }
+    }
+
+    /** ファイル情報ポップアップでレーティングを変更 */
+    fun updateRating(fileItem: FileItem, rating: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            comicFileRepository.updateRating(fileItem.path, rating)
+        }
+        _fileInfoState.value = _fileInfoState.value?.copy(rating = rating)
+        _fileMetaMap.value = _fileMetaMap.value.toMutableMap().also { map ->
+            val current = map[fileItem.path]
+            if (current != null) map[fileItem.path] = current.copy(rating = rating)
+        }
+    }
+
+    /** ファイル情報ポップアップでカラーラベルを変更 */
+    fun updateColorLabel(fileItem: FileItem, colorLabel: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            comicFileRepository.updateColorLabel(fileItem.path, colorLabel)
+        }
+        _fileInfoState.value = _fileInfoState.value?.copy(colorLabel = colorLabel)
+        _fileMetaMap.value = _fileMetaMap.value.toMutableMap().also { map ->
+            val current = map[fileItem.path]
+            if (current != null) map[fileItem.path] = current.copy(colorLabel = colorLabel)
         }
     }
 

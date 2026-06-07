@@ -88,8 +88,17 @@ class ThumbnailRepository(private val cacheDir: File) {
         return Bitmap.createScaledBitmap(original, scaledWidth, scaledHeight, true)
     }
 
-    private fun getCacheFile(filePath: String): File = File(cacheDir, "${filePath.hashCode()}.jpg")
-    private fun getMetaFile(filePath: String): File  = File(cacheDir, "${filePath.hashCode()}.meta")
+    private fun getCacheFile(filePath: String): File {
+        // ファイル名+サイズでキャッシュキーを生成する（パス変更に強い）
+        val file = File(filePath)
+        val key  = "${file.name}_${file.length()}".hashCode()
+        return File(cacheDir, "$key.jpg")
+    }
+    private fun getMetaFile(filePath: String): File {
+        val file = File(filePath)
+        val key  = "${file.name}_${file.length()}".hashCode()
+        return File(cacheDir, "$key.meta")
+    }
 
     companion object {
         private const val TARGET_WIDTH  = 240

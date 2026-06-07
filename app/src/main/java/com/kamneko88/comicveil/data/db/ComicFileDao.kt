@@ -23,6 +23,14 @@ interface ComicFileDao {
     @Query("UPDATE files SET status = :status WHERE filePath = :filePath")
     suspend fun updateStatus(filePath: String, status: Int)
 
+    /** レーティングだけ更新 */
+    @Query("UPDATE files SET rating = :rating WHERE filePath = :filePath")
+    suspend fun updateRating(filePath: String, rating: Int)
+
+    /** カラーラベルだけ更新 */
+    @Query("UPDATE files SET colorLabel = :colorLabel WHERE filePath = :filePath")
+    suspend fun updateColorLabel(filePath: String, colorLabel: Int)
+
     /** レコード削除（ファイル削除時など） */
     @Query("DELETE FROM files WHERE filePath = :filePath")
     suspend fun deleteComicFile(filePath: String)

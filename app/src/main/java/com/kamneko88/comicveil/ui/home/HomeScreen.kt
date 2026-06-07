@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.Delete
@@ -44,6 +45,8 @@ import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
@@ -87,6 +90,7 @@ import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.FileItemType
 import com.kamneko88.comicveil.data.LocalFileRepository
 import com.kamneko88.comicveil.data.ThumbnailRepository
+import com.kamneko88.comicveil.data.db.ColorLabel
 import com.kamneko88.comicveil.data.db.ReadStatus
 import com.kamneko88.comicveil.data.nas.NasServer
 import com.kamneko88.comicveil.ui.transfer.TransferViewModel
@@ -116,6 +120,7 @@ fun HomeScreen(
     val isStreamingMode  by viewModel.isStreamingMode.collectAsState()
     val fileInfoState    by viewModel.fileInfoState.collectAsState()
     val fileStatuses     by viewModel.fileStatuses.collectAsState()
+    val fileMetaMap     by viewModel.fileMetaMap.collectAsState()
 
     viewModel.transferViewModel = transferViewModel
 
@@ -261,9 +266,11 @@ fun HomeScreen(
     // ファイル情報ポップアップ
     fileInfoState?.let { info ->
         FileInfoDialog(
-            info           = info,
-            onStatusChange = { status -> viewModel.updateFileStatus(info.fileItem, status) },
-            onDismiss      = { viewModel.dismissFileInfo() }
+            info             = info,
+            onStatusChange   = { status -> viewModel.updateFileStatus(info.fileItem, status) },
+            onRatingChange   = { rating -> viewModel.updateRating(info.fileItem, rating) },
+            onColorLabelChange = { label -> viewModel.updateColorLabel(info.fileItem, label) },
+            onDismiss        = { viewModel.dismissFileInfo() }
         )
     }
 
@@ -577,6 +584,7 @@ fun HomeScreen(
                             val itemStatus = fileStatuses[fileItem.path] ?: ReadStatus.UNREAD
                             val isSelected = fileItem.path in selectedPaths
                             val isCached   = fileItem.isNas && viewModel.isNasCached(fileItem)
+                            val meta       = fileMetaMap[fileItem.path]
                             FileListItem(
                                 fileItem            = fileItem,
                                 thumbnailRepository = thumbnailRepository,
@@ -584,6 +592,8 @@ fun HomeScreen(
                                 isEditMode          = isEditMode && !isNas,
                                 isSelected          = isSelected,
                                 isCached            = isCached,
+                                rating              = meta?.rating ?: 0,
+                                colorLabel          = meta?.colorLabel ?: 0,
                                 onClick = {
                                     if (isEditMode && !isNas) {
                                         // 編集モード中：ファイル・フォルダの選択/解除
@@ -672,6 +682,8 @@ fun HomeScreen(
 fun FileInfoDialog(
     info: FileInfoState,
     onStatusChange: (ReadStatus) -> Unit,
+    onRatingChange: (Int) -> Unit = {},
+    onColorLabelChange: (Int) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val dateFormat = remember { SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()) }
@@ -702,6 +714,7 @@ fun FileInfoDialog(
 
                 HorizontalDivider()
 
+                // ── 読書状態 ─────────────────────────────────────
                 Text(
                     text  = "読書状態",
                     style = MaterialTheme.typography.labelMedium,
@@ -716,6 +729,88 @@ fun FileInfoDialog(
                             onClick  = { if (isSelectable) onStatusChange(status) },
                             label    = { Text(status.label, fontSize = 12.sp) }
                         )
+                    }
+                }
+
+                HorizontalDivider()
+
+                // ── レーティング ───────────────────────────────────────
+                Text(
+                    text  = "レーティング",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    // なしボタン
+                    FilterChip(
+                        selected = info.rating == 0,
+                        onClick  = { onRatingChange(0) },
+                        label    = { Text("なし", fontSize = 12.sp) }
+                    )
+                    // 1〜5星
+                    (1..5).forEach { star ->
+                        IconButton(
+                            onClick  = { onRatingChange(star) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (star <= info.rating)
+                                    androidx.compose.material.icons.Icons.Default.Star
+                                else
+                                    androidx.compose.material.icons.Icons.Default.StarBorder,
+                                contentDescription = "star$star",
+                                tint = if (star <= info.rating)
+                                    Color(0xFFFFD700)
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+
+                // ── カラーラベル ──────────────────────────────────────
+                Text(
+                    text  = "カラーラベル",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ColorLabel.entries.forEach { label ->
+                        val isSelected = info.colorLabel == label.value
+                        val labelColor = Color(label.colorHex)
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(
+                                    if (label == ColorLabel.NONE)
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                    else labelColor
+                                )
+                                .then(
+                                    if (isSelected) Modifier.border(
+                                        2.dp, Color.White,
+                                        androidx.compose.foundation.shape.CircleShape
+                                    ) else Modifier
+                                )
+                                .clickable { onColorLabelChange(label.value) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSelected) {
+                                Icon(
+                                    imageVector        = androidx.compose.material.icons.Icons.Default.Check,
+                                    contentDescription = label.label,
+                                    tint               = if (label == ColorLabel.NONE)
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    else Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -910,7 +1005,9 @@ fun FileListItem(
     status: ReadStatus = ReadStatus.UNREAD,
     isEditMode: Boolean = false,
     isSelected: Boolean = false,
-    isCached: Boolean = false
+    isCached: Boolean = false,
+    rating: Int = 0,
+    colorLabel: Int = 0
 ) {
     val repository = remember { LocalFileRepository() }
     val (title, author) = remember(fileItem.name) { repository.parseFileName(fileItem.name) }
@@ -925,27 +1022,44 @@ fun FileListItem(
     else
         Color.Transparent
 
+    val labelColor = ColorLabel.fromValue(colorLabel)
+
     Row(
         modifier          = Modifier
             .fillMaxWidth()
             .background(backgroundColor)
-            .clickable { onClick() }
-            .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+            .clickable { onClick() },
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 編集モード時：ファイル・フォルダどちらもチェックボックスを表示
+        // カラーラベル左端ライン
+        Box(
+            modifier = Modifier
+                .width(4.dp)
+                .height(92.dp)
+                .background(
+                    if (labelColor != ColorLabel.NONE) Color(labelColor.colorHex)
+                    else Color.Transparent
+                )
+        )
+
+        // 編集モード時：チェックボックス
         if (isEditMode) {
             Icon(
                 imageVector        = if (isSelected) Icons.Default.CheckBox
                                      else Icons.Default.CheckBoxOutlineBlank,
                 contentDescription = null,
-                modifier           = Modifier.size(24.dp).padding(end = 4.dp),
+                modifier           = Modifier
+                    .padding(start = 4.dp)
+                    .size(24.dp),
                 tint               = if (isSelected) MaterialTheme.colorScheme.primary
                                      else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+
+        // サムネイル
         Box(
             modifier         = Modifier
+                .padding(start = 8.dp, top = 6.dp, bottom = 6.dp)
                 .width(56.dp)
                 .height(80.dp)
                 .clip(RoundedCornerShape(4.dp))
@@ -970,14 +1084,17 @@ fun FileListItem(
                     tint               = when (fileItem.type) {
                         FileItemType.FOLDER -> MaterialTheme.colorScheme.primary
                         else -> if (fileItem.isNas) MaterialTheme.colorScheme.tertiary
-                        else MaterialTheme.colorScheme.secondary
+                                else MaterialTheme.colorScheme.secondary
                     }
                 )
             }
         }
 
+        // テキスト情報
         Column(
-            modifier            = Modifier.weight(1f).padding(start = 12.dp),
+            modifier            = Modifier
+                .weight(1f)
+                .padding(start = 12.dp, top = 6.dp, bottom = 6.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             Text(
@@ -1016,6 +1133,25 @@ fun FileListItem(
             }
         }
 
+        // レーティング表示（右端）
+        if (rating > 0 && fileItem.isComic) {
+            Column(
+                modifier            = Modifier.padding(end = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                (1..rating).forEach { _ ->
+                    Icon(
+                        imageVector        = Icons.Default.Star,
+                        contentDescription = null,
+                        tint               = Color(0xFFFFD700),
+                        modifier           = Modifier.size(10.dp)
+                    )
+                }
+            }
+        }
+
+        // 情報ボタン
         if (fileItem.isComic) {
             IconButton(onClick = onInfoClick) {
                 Icon(

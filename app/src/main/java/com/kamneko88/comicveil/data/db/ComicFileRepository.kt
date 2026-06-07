@@ -33,6 +33,16 @@ class ComicFileRepository(private val dao: ComicFileDao) {
         dao.getComicFile(filePath)
     }
 
+    /** レーティングを更新 */
+    suspend fun updateRating(filePath: String, rating: Int) = withContext(Dispatchers.IO) {
+        dao.updateRating(filePath, rating)
+    }
+
+    /** カラーラベルを更新 */
+    suspend fun updateColorLabel(filePath: String, colorLabel: Int) = withContext(Dispatchers.IO) {
+        dao.updateColorLabel(filePath, colorLabel)
+    }
+
     /** レコードを削除（ファイル削除時） */
     suspend fun delete(filePath: String) = withContext(Dispatchers.IO) {
         dao.deleteComicFile(filePath)
