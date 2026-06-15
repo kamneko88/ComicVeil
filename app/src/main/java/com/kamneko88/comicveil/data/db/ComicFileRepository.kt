@@ -33,14 +33,24 @@ class ComicFileRepository(private val dao: ComicFileDao) {
         dao.getComicFile(filePath)
     }
 
-    /** レーティングを更新 */
+    /** レーティングを更新（レコードがなければ新規作成） */
     suspend fun updateRating(filePath: String, rating: Int) = withContext(Dispatchers.IO) {
-        dao.updateRating(filePath, rating)
+        val existing = dao.getComicFile(filePath)
+        if (existing == null) {
+            dao.upsertComicFile(ComicFile(filePath = filePath, rating = rating))
+        } else {
+            dao.updateRating(filePath, rating)
+        }
     }
 
-    /** カラーラベルを更新 */
+    /** カラーラベルを更新（レコードがなければ新規作成） */
     suspend fun updateColorLabel(filePath: String, colorLabel: Int) = withContext(Dispatchers.IO) {
-        dao.updateColorLabel(filePath, colorLabel)
+        val existing = dao.getComicFile(filePath)
+        if (existing == null) {
+            dao.upsertComicFile(ComicFile(filePath = filePath, colorLabel = colorLabel))
+        } else {
+            dao.updateColorLabel(filePath, colorLabel)
+        }
     }
 
     /** レコードを削除（ファイル削除時） */

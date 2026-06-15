@@ -11,6 +11,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 
@@ -28,7 +29,6 @@ class SmbRepository {
                 )
                 val session = connection.authenticate(auth)
 
-                // shareName が空 → エラーを返す（将来のショートカット実装時に対応予定）
                 if (server.shareName.isEmpty() && nasPath.isEmpty()) {
                     throw IllegalStateException("共有フォルダ名が未設定です。\nリモートの編集から共有フォルダ名を設定してください。")
                 }
@@ -46,12 +46,16 @@ class SmbRepository {
                         val isDir = entry.fileAttributes and 0x10L != 0L
                         val entryNasPath = if (nasPath.isEmpty()) entry.fileName
                         else "$nasPath/${entry.fileName}"
+                        val lastModifiedMs = runCatching {
+                            (entry.lastWriteTime.windowsTimeStamp - 116444736000000000L) / 10000L
+                        }.getOrDefault(0L)
                         FileItem.fromNas(
-                            name        = entry.fileName,
-                            nasPath     = entryNasPath,
-                            isDirectory = isDir,
-                            size        = entry.endOfFile,
-                            server      = server
+                            name           = entry.fileName,
+                            nasPath        = entryNasPath,
+                            isDirectory    = isDir,
+                            size           = entry.endOfFile,
+                            server         = server,
+                            lastModifiedMs = lastModifiedMs
                         )
                     }
                     .sortedWith(compareBy({ !it.isFolder }, { it.name.lowercase() }))
@@ -62,12 +66,6 @@ class SmbRepository {
 
     /**
      * ファイルをダウンロードする
-     *
-     * @param server     NASサーバー情報
-     * @param nasPath    NAS上のファイルパス
-     * @param destFile   保存先ファイル
-     * @param onProgress 進捗コールバック (downloadedBytes, totalBytes)
-     *                   totalBytes が -1 の場合はファイルサイズ不明
      */
     suspend fun downloadFile(
         server: NasServer,
@@ -85,7 +83,6 @@ class SmbRepository {
             )
             val session = connection.authenticate(auth)
             val share = session.connectShare(server.shareName) as DiskShare
-
             val smbPath = nasPath.replace("/", "\\")
             val smbFile = share.openFile(
                 smbPath,
@@ -96,20 +93,18 @@ class SmbRepository {
                 null
             )
 
-            // ファイルサイズを取得（取れない場合は -1）
             val totalSize: Long = runCatching {
                 smbFile.getFileInformation().standardInformation.endOfFile
             }.getOrDefault(-1L)
 
             destFile.parentFile?.mkdirs()
 
-            val buffer = ByteArray(256 * 1024) // 256KB バッファ
+            val buffer = ByteArray(256 * 1024)
             var downloaded = 0L
 
             smbFile.inputStream.use { input ->
                 FileOutputStream(destFile).use { output ->
                     while (true) {
-                        // キャンセル確認：コルーチンがキャンセルされていたら中断
                         if (!isActive) {
                             throw CancellationException("ダウンロードがキャンセルされました")
                         }
@@ -122,6 +117,54 @@ class SmbRepository {
                 }
             }
             destFile
+        } finally {
+            runCatching { client.close() }
+        }
+    }
+
+    /**
+     * サムネイル生成用に先頭部分だけ取得する
+     * ZIPの先頭エントリは先頭部分にあるため、大部分のケースでサムネイル取得が可能
+     * 失敗時は null を返す
+     */
+    suspend fun fetchPartialBytes(
+        server: NasServer,
+        nasPath: String,
+        maxBytes: Long = 2 * 1024 * 1024L  // デフォルト 2MB
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        val client = SMBClient()
+        try {
+            val connection = client.connect(server.host)
+            val auth = AuthenticationContext(
+                server.username,
+                server.password.toCharArray(),
+                null
+            )
+            val session = connection.authenticate(auth)
+            val share   = session.connectShare(server.shareName) as DiskShare
+            val smbPath = nasPath.replace("/", "\\")
+            val smbFile = share.openFile(
+                smbPath,
+                setOf(AccessMask.GENERIC_READ),
+                null,
+                setOf(SMB2ShareAccess.FILE_SHARE_READ),
+                SMB2CreateDisposition.FILE_OPEN,
+                null
+            )
+            val baos  = ByteArrayOutputStream()
+            val chunk = ByteArray(64 * 1024) // 64KBずつ読む
+            var total = 0L
+            smbFile.inputStream.use { input ->
+                while (total < maxBytes) {
+                    val read = input.read(chunk)
+                    if (read == -1) break
+                    baos.write(chunk, 0, read)
+                    total += read
+                }
+            }
+            baos.toByteArray()
+        } catch (e: Exception) {
+            null
         } finally {
             runCatching { client.close() }
         }

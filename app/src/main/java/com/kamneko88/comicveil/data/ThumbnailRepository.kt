@@ -4,14 +4,19 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import com.github.junrar.Archive
 import com.kamneko88.comicveil.data.nas.NasServer
+import com.kamneko88.comicveil.data.nas.SmbRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.util.zip.ZipFile
 
 class ThumbnailRepository(private val cacheDir: File) {
+
+    private val smbRepository = SmbRepository()
 
     init {
         cacheDir.mkdirs()
@@ -19,12 +24,16 @@ class ThumbnailRepository(private val cacheDir: File) {
 
     /**
      * サムネイルを取得する。キャッシュがあれば即返し、なければ生成してから返す。
-     * NASファイルは Phase 1 では非対応（nullを返してアイコン表示）
+     * NASファイルは STRキャッシュ → 部分取得 の順で生成する
      */
     suspend fun getOrGenerateThumbnail(fileItem: FileItem): File? =
         withContext(Dispatchers.IO) {
             if (!fileItem.isComic) return@withContext null
-            if (fileItem.isNas) return@withContext null      // ★ NASは非対応
+
+            if (fileItem.isNas) {
+                return@withContext getOrGenerateNasThumbnail(fileItem)
+            }
+
             val file = fileItem.file ?: return@withContext null
 
             val cacheFile = getCacheFile(fileItem.path)
@@ -40,6 +49,41 @@ class ThumbnailRepository(private val cacheDir: File) {
 
             generateAndCache(file, fileItem.lastModified, cacheFile, metaFile)
         }
+
+    /**
+     * NASファイルのサムネイル生成
+     * 1. STRキャッシュ済みならそこから生成
+     * 2. 未キャッシュならNASから先頭2MBだけ取得して生成
+     */
+    private suspend fun getOrGenerateNasThumbnail(fileItem: FileItem): File? {
+        val server  = fileItem.nasServer ?: return null
+        val nasPath = fileItem.nasPath
+        val ext     = fileItem.name.substringAfterLast(".").lowercase()
+
+        // NASサムネイル用キャッシュキー（nasPathのハッシュ値を使用）
+        val cacheFile = File(cacheDir, "nas_${nasPath.hashCode()}.jpg")
+        val metaFile  = File(cacheDir, "nas_${nasPath.hashCode()}.meta")
+
+        // キャッシュがあればそのまま返す
+        if (cacheFile.exists()) return cacheFile
+
+        // 1. STRキャッシュがあればそこから生成
+        val strCacheFile = File(
+            File(cacheDir.parentFile, "nas_cache"),
+            "nas_${nasPath.hashCode()}.$ext"
+        )
+        if (strCacheFile.exists() && strCacheFile.length() > 0) {
+            return generateAndCache(strCacheFile, 0L, cacheFile, metaFile)
+        }
+
+        // 2. NASから先頭部分だけ取得して生成
+        if (ext !in setOf("zip", "cbz")) return null  // ZIPのみ対応（RARは全体必要なためスキップ）
+
+        val partialBytes = smbRepository.fetchPartialBytes(server, nasPath) ?: return null
+        val imageBytes   = extractFirstImageFromZipBytes(partialBytes) ?: return null
+
+        return generateCacheFromBytes(imageBytes, cacheFile)
+    }
 
     fun deleteThumbnail(filePath: String) {
         getCacheFile(filePath).delete()
@@ -65,16 +109,23 @@ class ThumbnailRepository(private val cacheDir: File) {
                 else -> null
             } ?: return null
 
+            generateCacheFromBytes(imageBytes, cacheFile)?.also {
+                metaFile.writeText(lastModified.toString())
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun generateCacheFromBytes(imageBytes: ByteArray, cacheFile: File): File? {
+        return try {
             val original  = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size) ?: return null
             val thumbnail = createScaledBitmap(original, TARGET_WIDTH, TARGET_HEIGHT)
             original.recycle()
-
             FileOutputStream(cacheFile).use { out ->
                 thumbnail.compress(Bitmap.CompressFormat.JPEG, 85, out)
             }
             thumbnail.recycle()
-            metaFile.writeText(lastModified.toString())
-
             cacheFile
         } catch (e: Exception) {
             null
@@ -108,13 +159,62 @@ class ThumbnailRepository(private val cacheDir: File) {
 
 private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
 
-private fun extractFirstImageFromZip(file: File): ByteArray? {
-    return ZipFile(file).use { zip ->
-        zip.entries().asSequence()
-            .filter { it.name.substringAfterLast(".").lowercase() in IMAGE_EXTENSIONS }
-            .minByOrNull { it.name.lowercase() }
-            ?.let { entry -> zip.getInputStream(entry).use { it.readBytes() } }
+private fun extractFirstImageFromZipBytes(bytes: ByteArray): ByteArray? {
+    val candidates = mutableListOf<Pair<String, ByteArray>>()
+    for (cs in listOf(kotlin.text.Charsets.UTF_8, charset("Shift_JIS"))) {
+        candidates.clear()
+        runCatching {
+            ZipArchiveInputStream(
+                ByteArrayInputStream(bytes), cs.name(), false, true
+            ).use { zis ->
+                var entry = zis.nextZipEntry
+                while (entry != null) {
+                    val name = entry.name
+                    val ext  = name.substringAfterLast(".").lowercase()
+                    if (!entry.isDirectory && ext in IMAGE_EXTENSIONS) {
+                        val b = zis.readBytes()
+                        if (b.isNotEmpty()) candidates.add(name to b)
+                    }
+                    entry = zis.nextZipEntry
+                }
+            }
+        }
+        if (candidates.isNotEmpty()) break
     }
+    return candidates.minByOrNull { it.first.lowercase() }?.second
+}
+
+private fun extractFirstImageFromZip(file: File): ByteArray? {
+    // Shift-JISエントリ名に対応するため Apache Commons Compress を使用
+    val candidates = mutableListOf<Pair<String, ByteArray>>()
+    try {
+        val charset = kotlin.text.Charsets.UTF_8
+        fun openStream(cs: java.nio.charset.Charset) =
+            ZipArchiveInputStream(FileInputStream(file), cs.name(), false, true)
+
+        // UTF-8で試行、失敗したら Shift-JIS で再試
+        for (cs in listOf(kotlin.text.Charsets.UTF_8, charset("Shift_JIS"))) {
+            candidates.clear()
+            runCatching {
+                openStream(cs).use { zis ->
+                    var entry = zis.nextZipEntry
+                    while (entry != null) {
+                        val name = entry.name
+                        val ext  = name.substringAfterLast(".").lowercase()
+                        if (!entry.isDirectory && ext in IMAGE_EXTENSIONS) {
+                            val bytes = zis.readBytes()
+                            if (bytes.isNotEmpty()) candidates.add(name to bytes)
+                        }
+                        entry = zis.nextZipEntry
+                    }
+                }
+            }
+            if (candidates.isNotEmpty()) break
+        }
+    } catch (e: Exception) {
+        return null
+    }
+    return candidates.minByOrNull { it.first.lowercase() }?.second
 }
 
 private fun extractFirstImageFromRar(file: File): ByteArray? {

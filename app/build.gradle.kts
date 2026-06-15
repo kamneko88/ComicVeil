@@ -12,8 +12,8 @@ android {
         applicationId = "com.kamneko88.comicveil"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3        // ← Play Store 用の連番（配布のたびに+1）
-        versionName = "0.3.0"  // ← 今日から 0.3.0
+        versionCode = 12       // ← Play Store 用の連番（配布のたびに+1）
+        versionName = "0.11.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -32,6 +32,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     // SMBJ の依存関係に含まれる重複ファイルを除外
     packaging {

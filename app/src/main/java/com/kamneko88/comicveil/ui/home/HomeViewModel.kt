@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.data.FileItem
+import com.kamneko88.comicveil.data.SortPrefs
 import com.kamneko88.comicveil.data.LocalFileRepository
 import com.kamneko88.comicveil.data.db.ColorLabel
 import com.kamneko88.comicveil.data.db.ComicFileRepository
@@ -81,6 +82,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val smbRepository       = SmbRepository()
     private val nasServerPrefs      = NasServerPrefs(application)
     val appPrefs                    = AppPrefs(application)
+    val sortPrefs                   = SortPrefs(application)
 
     /** 現在のHomeフォルダ（設定に応じて動的に解決）*/
     private val homeFolder: File
@@ -93,8 +95,31 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _currentLocation = MutableStateFlow<ViewLocation>(ViewLocation.Home)
     val currentLocation: StateFlow<ViewLocation> = _currentLocation.asStateFlow()
 
+    /** 生のファイルリスト（NASから取得・ローカル読み込みそのまま） */
     private val _files = MutableStateFlow<List<FileItem>>(emptyList())
-    val files: StateFlow<List<FileItem>> = _files.asStateFlow()
+
+    /** ソート・フィルター適用済みの表示用リスト */
+    private val _displayFiles = MutableStateFlow<List<FileItem>>(emptyList())
+    val files: StateFlow<List<FileItem>> = _displayFiles.asStateFlow()
+
+    // ── ソート・フィルター StateFlow ──────────────────────────────────────
+    private val _sortKey     = MutableStateFlow(sortPrefs.sortKey)
+    val sortKey: StateFlow<SortPrefs.SortKey> = _sortKey.asStateFlow()
+
+    private val _ascending   = MutableStateFlow(sortPrefs.ascending)
+    val ascending: StateFlow<Boolean> = _ascending.asStateFlow()
+
+    private val _folderOrder = MutableStateFlow(sortPrefs.folderOrder)
+    val folderOrder: StateFlow<SortPrefs.FolderOrder> = _folderOrder.asStateFlow()
+
+    private val _statusFilter     = MutableStateFlow(sortPrefs.statusFilter)
+    val statusFilter: StateFlow<Set<String>> = _statusFilter.asStateFlow()
+
+    private val _colorLabelFilter = MutableStateFlow(sortPrefs.colorLabelFilter)
+    val colorLabelFilter: StateFlow<Set<String>> = _colorLabelFilter.asStateFlow()
+
+    val hasActiveFilter: Boolean
+        get() = _statusFilter.value.isNotEmpty() || _colorLabelFilter.value.isNotEmpty()
 
     private val _nasServers = MutableStateFlow<List<NasServer>>(emptyList())
     val nasServers: StateFlow<List<NasServer>> = _nasServers.asStateFlow()
@@ -143,6 +168,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _isStreamingMode = MutableStateFlow(true)
     val isStreamingMode: StateFlow<Boolean> = _isStreamingMode.asStateFlow()
 
+    /** DLモード時の選択中ファイルパス */
+    private val _dlSelectedPaths = MutableStateFlow<Set<String>>(emptySet())
+    val dlSelectedPaths: StateFlow<Set<String>> = _dlSelectedPaths.asStateFlow()
+
     /** STRモードの実行中ダウンロードJob */
     private var downloadJob: Job? = null
 
@@ -154,12 +183,148 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         progressRepository  = ReadingProgressRepository(db.readingProgressDao())
         comicFileRepository = ComicFileRepository(db.comicFileDao())
         refreshNasServers()
+
+        // ソート・フィルターの変化を監視して displayFiles を再計算
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                _files, _sortKey, _ascending, _folderOrder,
+                _statusFilter, _colorLabelFilter, _fileStatuses, _fileMetaMap
+            ) { arr ->
+                @Suppress("UNCHECKED_CAST")
+                val rawFiles     = arr[0] as List<FileItem>
+                val key          = arr[1] as SortPrefs.SortKey
+                val asc          = arr[2] as Boolean
+                val order        = arr[3] as SortPrefs.FolderOrder
+                val statusF      = arr[4] as Set<String>
+                val colorF       = arr[5] as Set<String>
+                val statuses     = arr[6] as Map<String, com.kamneko88.comicveil.data.db.ReadStatus>
+                val metas        = arr[7] as Map<String, com.kamneko88.comicveil.data.db.ComicFile>
+                applySort(rawFiles, key, asc, order, statusF, colorF, statuses, metas)
+            }.collect { sorted ->
+                _displayFiles.value = sorted
+            }
+        }
+    }
+
+    // ─── ソート・フィルター ────────────────────────────────────────────────
+
+    fun setSortKey(key: SortPrefs.SortKey) {
+        if (_sortKey.value == key) {
+            // 同じキーをタップ → 昇降順を反転
+            _ascending.value = !_ascending.value
+            sortPrefs.ascending = _ascending.value
+        } else {
+            _sortKey.value = key
+            sortPrefs.sortKey = key
+            // キーが変わったら昇順リセット
+            _ascending.value = true
+            sortPrefs.ascending = true
+        }
+    }
+
+    fun setFolderOrder(order: SortPrefs.FolderOrder) {
+        _folderOrder.value = order
+        sortPrefs.folderOrder = order
+    }
+
+    fun toggleStatusFilter(statusName: String) {
+        val current = _statusFilter.value.toMutableSet()
+        if (statusName in current) current.remove(statusName) else current.add(statusName)
+        _statusFilter.value = current
+        sortPrefs.statusFilter = current
+    }
+
+    fun toggleColorLabelFilter(labelValue: String) {
+        val current = _colorLabelFilter.value.toMutableSet()
+        if (labelValue in current) current.remove(labelValue) else current.add(labelValue)
+        _colorLabelFilter.value = current
+        sortPrefs.colorLabelFilter = current
+    }
+
+    fun clearFilters() {
+        _statusFilter.value     = emptySet()
+        _colorLabelFilter.value = emptySet()
+        sortPrefs.clearFilters()
+    }
+
+    /**
+     * ソート・フィルターを適用して表示用リストを返す
+     * NASフォルダ時はフィルターをスキップ（DBメタデータがない場合もあるため）
+     */
+    private fun applySort(
+        raw: List<FileItem>,
+        key: SortPrefs.SortKey,
+        ascending: Boolean,
+        folderOrder: SortPrefs.FolderOrder,
+        statusFilter: Set<String>,
+        colorLabelFilter: Set<String>,
+        statuses: Map<String, com.kamneko88.comicveil.data.db.ReadStatus>,
+        metas: Map<String, com.kamneko88.comicveil.data.db.ComicFile>
+    ): List<FileItem> {
+        val isNas = _currentLocation.value is ViewLocation.NasFolder
+
+        // ── フィルター（ローカルのみ） ───────────────────────────────────
+        val filtered = if (isNas || (statusFilter.isEmpty() && colorLabelFilter.isEmpty())) {
+            raw
+        } else {
+            raw.filter { item ->
+                if (!item.isComic) return@filter true  // フォルダは常に表示
+                val statusOk = statusFilter.isEmpty() ||
+                    statuses[item.path]?.name in statusFilter
+                val colorOk  = colorLabelFilter.isEmpty() ||
+                    metas[item.path]?.colorLabel?.toString() in colorLabelFilter
+                statusOk && colorOk
+            }
+        }
+
+        // ── ソート ────────────────────────────────────────────────────────
+        val comparator: Comparator<FileItem> = when (key) {
+            SortPrefs.SortKey.NAME   -> compareBy { it.name.lowercase() }
+            SortPrefs.SortKey.DATE   -> compareBy { it.lastModified }
+            SortPrefs.SortKey.RATING -> compareBy { metas[it.path]?.rating ?: 0 }
+        }
+        val sorted = if (ascending) filtered.sortedWith(comparator)
+                     else           filtered.sortedWith(comparator).reversed()
+
+        // ── フォルダ/ファイル優先 ─────────────────────────────────────────
+        return when (folderOrder) {
+            SortPrefs.FolderOrder.FOLDER_FIRST -> sorted.sortedWith(
+                compareByDescending { it.isFolder }
+            )
+            SortPrefs.FolderOrder.FILE_FIRST   -> sorted.sortedWith(
+                compareBy { it.isFolder }
+            )
+            SortPrefs.FolderOrder.MIXED        -> sorted
+        }
     }
 
     // ─── DL/STRモード ────────────────────────────────────────────────────
 
     fun toggleMode() {
         _isStreamingMode.value = !_isStreamingMode.value
+        // DLモードを抜けたときに選択をリセット
+        _dlSelectedPaths.value = emptySet()
+    }
+
+    fun toggleDlSelection(filePath: String) {
+        val current = _dlSelectedPaths.value.toMutableSet()
+        if (filePath in current) current.remove(filePath) else current.add(filePath)
+        _dlSelectedPaths.value = current
+    }
+
+    fun clearDlSelection() {
+        _dlSelectedPaths.value = emptySet()
+    }
+
+    /** 選択中ファイルをダウンロードして選択をクリア */
+    fun downloadSelected() {
+        val selectedFiles = _files.value.filter { it.path in _dlSelectedPaths.value }
+        selectedFiles.forEach { fileItem ->
+            transferViewModel?.enqueue(fileItem, isStreaming = false)
+        }
+        _dlSelectedPaths.value = emptySet()
+        val folderName = (currentLocation.value as? ViewLocation.NasFolder)?.displayTitle ?: ""
+        _navigateToTransfer.tryEmit(folderName)
     }
 
     // ─── NASサーバー管理 ──────────────────────────────────────────────────
@@ -385,26 +550,26 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         if (destFile.exists() && destFile.length() > 0) {
+            // キャッシュ済み：読書位置を確認してダイアログ表示
             val progress = withContext(Dispatchers.IO) {
                 progressRepository.getProgress(destFile.absolutePath)
             }
-            if (progress != null && progress.currentPage > 0) {
-                _dialogState.value = ResumeDialogState(
-                    fileItem.copy(file = destFile),
-                    progress.currentPage,
-                    progress.totalPages
-                )
-            } else {
-                _navigateEvent.tryEmit(destFile.absolutePath)
-            }
-            return
+            val savedPage = if (progress != null && progress.currentPage > 0)
+                progress.currentPage else 0
+            val totalPages = progress?.totalPages ?: 0
+            _dialogState.value = ResumeDialogState(
+                fileItem   = fileItem.copy(file = destFile),
+                savedPage  = savedPage,
+                totalPages = totalPages
+            )
+        } else {
+            // 未キャッシュ：「最初から読む」のみ表示
+            _dialogState.value = ResumeDialogState(
+                fileItem   = fileItem,
+                savedPage  = 0,
+                totalPages = 0
+            )
         }
-
-        _dialogState.value = ResumeDialogState(
-            fileItem   = fileItem,
-            savedPage  = 0,
-            totalPages = 0
-        )
     }
 
     private fun openNasComicDl(fileItem: FileItem) {
@@ -534,12 +699,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private fun nasCacheDir(): File =
         File(getApplication<Application>().cacheDir, "nas_cache")
 
-    /** 指定ファイルのSTRキャッシュが存在するか確認 */
+    /** 指定ファイルのSTRキャッシュが有効な状態で存在するか確認。
+     * 100KB未満のファイルは不完全なダウンロードとみなして非表示 */
     fun isNasCached(fileItem: FileItem): Boolean {
         if (!fileItem.isNas) return false
         val ext  = fileItem.name.substringAfterLast(".")
         val file = File(nasCacheDir(), "nas_${fileItem.nasPath.hashCode()}.$ext")
-        return file.exists() && file.length() > 0
+        return file.exists() && file.length() >= 100 * 1024
     }
 
     /** STRキャッシュを全削除してサイズ（bytes）を返す */

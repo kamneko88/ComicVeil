@@ -50,7 +50,8 @@ data class FileItem(
             nasPath: String,
             isDirectory: Boolean,
             size: Long,
-            server: NasServer
+            server: NasServer,
+            lastModifiedMs: Long = 0L
         ): FileItem {
             val ext = name.substringAfterLast(".").lowercase()
             val type = when {
@@ -64,6 +65,7 @@ data class FileItem(
                 name      = name,
                 path      = "smb://${server.host}/${server.shareName}/$nasPath",
                 size      = size,
+                lastModified = lastModifiedMs,
                 nasServer = server,
                 nasPath   = nasPath
             )

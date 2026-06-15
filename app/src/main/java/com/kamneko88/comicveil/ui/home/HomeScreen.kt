@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -59,11 +60,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -89,6 +92,7 @@ import coil3.compose.AsyncImage
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.FileItemType
 import com.kamneko88.comicveil.data.LocalFileRepository
+import com.kamneko88.comicveil.data.SortPrefs
 import com.kamneko88.comicveil.data.ThumbnailRepository
 import com.kamneko88.comicveil.data.db.ColorLabel
 import com.kamneko88.comicveil.data.db.ReadStatus
@@ -120,7 +124,13 @@ fun HomeScreen(
     val isStreamingMode  by viewModel.isStreamingMode.collectAsState()
     val fileInfoState    by viewModel.fileInfoState.collectAsState()
     val fileStatuses     by viewModel.fileStatuses.collectAsState()
-    val fileMetaMap     by viewModel.fileMetaMap.collectAsState()
+    val fileMetaMap      by viewModel.fileMetaMap.collectAsState()
+    val sortKey           by viewModel.sortKey.collectAsState()
+    val ascending         by viewModel.ascending.collectAsState()
+    val statusFilter      by viewModel.statusFilter.collectAsState()
+    val colorLabelFilter  by viewModel.colorLabelFilter.collectAsState()
+    val folderOrder       by viewModel.folderOrder.collectAsState()
+    val dlSelectedPaths   by viewModel.dlSelectedPaths.collectAsState()
 
     viewModel.transferViewModel = transferViewModel
 
@@ -133,6 +143,7 @@ fun HomeScreen(
     var isEditMode         by remember { mutableStateOf(false) }
     var selectedPaths      by remember { mutableStateOf(setOf<String>()) }
     var showDeleteConfirm  by remember { mutableStateOf(false) }
+    var showSortSheet      by remember { mutableStateOf(false) }
 
     val thumbnailRepository = remember {
         ThumbnailRepository(File(context.cacheDir, "thumbnails"))
@@ -235,26 +246,34 @@ fun HomeScreen(
     dialogState?.let { state ->
         val repo = remember { LocalFileRepository() }
         val (title, _) = remember(state.fileItem.name) { repo.parseFileName(state.fileItem.name) }
-        val isNasStr = state.fileItem.isNas && isStreamingMode
+        val isCached   = state.fileItem.file != null  // fileが設定されている = キャッシュ済み
+        val hasResume  = state.savedPage > 0
         AlertDialog(
             onDismissRequest = { viewModel.dismissDialog() },
             title = { Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-            text = {
+            text  = {
                 Text(
-                    if (isNasStr) "読み込みを開始します"
-                    else "前回の続きから読みますか？"
+                    when {
+                        !isCached  -> "読み込みを開始します"
+                        hasResume  -> "前回の続きから読みますか？"
+                        else       -> "最初から読みます"
+                    }
                 )
             },
             confirmButton = {
                 TextButton(onClick = { viewModel.resumeReading() }) {
                     Text(
-                        if (isNasStr || state.totalPages == 0) "読み込む"
-                        else "${state.savedPage + 1} / ${state.totalPages}ページから再開"
+                        when {
+                            !isCached -> "最初から読む"
+                            hasResume -> "${state.savedPage + 1} / ${state.totalPages}ページから再開"
+                            else      -> "最初から読む"
+                        }
                     )
                 }
             },
             dismissButton = {
-                if (!isNasStr && state.totalPages > 0) {
+                // キャッシュ済みかつ読書位置ありの時のみ「最初から読む」を表示
+                if (isCached && hasResume) {
                     TextButton(onClick = { viewModel.readFromBeginning() }) {
                         Text("最初から読む")
                     }
@@ -422,7 +441,16 @@ fun HomeScreen(
                         IconButton(onClick = { }) {
                             Icon(Icons.Default.Search, contentDescription = "検索")
                         }
-                        TextButton(onClick = { }) { Text("名前▼") }
+                        // ソートボタン：現在のキーと昇降順を表示
+                        val sortLabel = sortKey.label + if (ascending) " ▲" else " ▼"
+                        val hasFilter = viewModel.hasActiveFilter
+                        TextButton(onClick = { showSortSheet = true }) {
+                            Text(
+                                text  = sortLabel,
+                                color = if (hasFilter) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                         IconButton(onClick = { isListMode = !isListMode }) {
                             Icon(
                                 if (isListMode) Icons.Default.GridView
@@ -442,67 +470,90 @@ fun HomeScreen(
             )
         },
         bottomBar = {
-            BottomAppBar {
-                Row(
-                    modifier              = Modifier.fillMaxWidth().height(56.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment     = Alignment.CenterVertically
-                ) {
-                    if (isEditMode && !isNas) {
-                        // 編集モード（ローカル）：削除ボタン
-                        val hasSelection = selectedPaths.isNotEmpty()
-                        IconButton(
-                            onClick = { if (hasSelection) showDeleteConfirm = true },
-                            enabled = hasSelection
+            Column {
+                // DLモード時に選択中ファイルがあれば「選択ファイルをダウンロード」ボタンを表示
+                if (!isStreamingMode && isNas && dlSelectedPaths.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surface)
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        androidx.compose.material3.Button(
+                            onClick  = { viewModel.downloadSelected() },
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "削除",
-                                tint = if (hasSelection) MaterialTheme.colorScheme.error
-                                       else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                imageVector        = Icons.Default.Download,
+                                contentDescription = null,
+                                modifier           = Modifier.size(18.dp)
                             )
+                            Spacer(Modifier.width(8.dp))
+                            Text("選択ファイルをダウンロード（${dlSelectedPaths.size}件）")
                         }
-                        Text(
-                            text  = if (hasSelection) "${selectedPaths.size}件選択中" else "ファイルを選択してください",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        // 通常モード
-                        IconButton(onClick = { }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "About")
-                        }
-                        TextButton(onClick = { showAddNasDialog = true }) { Text("リモート") }
-
-                        if (isNas) {
-                            IconButton(onClick = { viewModel.toggleMode() }) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(
-                                        imageVector        = if (isStreamingMode) Icons.Default.Wifi
-                                        else Icons.Default.Download,
-                                        contentDescription = null,
-                                        modifier           = Modifier.size(18.dp),
-                                        tint               = if (isStreamingMode) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.tertiary
-                                    )
-                                    Text(
-                                        text       = if (isStreamingMode) "STR" else "DL",
-                                        fontSize   = 9.sp,
-                                        color      = if (isStreamingMode) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.tertiary,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
+                    }
+                    HorizontalDivider()
+                }
+                BottomAppBar {
+                    Row(
+                        modifier              = Modifier.fillMaxWidth().height(56.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment     = Alignment.CenterVertically
+                    ) {
+                        if (isEditMode && !isNas) {
+                            val hasSelection = selectedPaths.isNotEmpty()
+                            IconButton(
+                                onClick = { if (hasSelection) showDeleteConfirm = true },
+                                enabled = hasSelection
+                            ) {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = "削除",
+                                    tint = if (hasSelection) MaterialTheme.colorScheme.error
+                                           else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                )
                             }
+                            Text(
+                                text  = if (hasSelection) "${selectedPaths.size}件選択中" else "ファイルを選択してください",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         } else {
-                            TextButton(onClick = { }) { Text("C") }
-                        }
+                            IconButton(onClick = { }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "About")
+                            }
+                            TextButton(onClick = { showAddNasDialog = true }) { Text("リモート") }
 
-                        IconButton(onClick = { viewModel.openTransferScreen() }) {
-                            Icon(Icons.Default.SwapVert, contentDescription = "転送状況")
-                        }
-                        IconButton(onClick = { navController.navigate("settings") }) {
-                            Icon(Icons.Default.Settings, contentDescription = "設定")
+                            if (isNas) {
+                                IconButton(onClick = { viewModel.toggleMode() }) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Icon(
+                                            imageVector        = if (isStreamingMode) Icons.Default.Wifi
+                                            else Icons.Default.Download,
+                                            contentDescription = null,
+                                            modifier           = Modifier.size(18.dp),
+                                            tint               = if (isStreamingMode) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.tertiary
+                                        )
+                                        Text(
+                                            text       = if (isStreamingMode) "STR" else "DL",
+                                            fontSize   = 9.sp,
+                                            color      = if (isStreamingMode) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.tertiary,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            } else {
+                                TextButton(onClick = { }) { Text("C") }
+                            }
+
+                            IconButton(onClick = { viewModel.openTransferScreen() }) {
+                                Icon(Icons.Default.SwapVert, contentDescription = "転送状況")
+                            }
+                            IconButton(onClick = { navController.navigate("settings") }) {
+                                Icon(Icons.Default.Settings, contentDescription = "設定")
+                            }
                         }
                     }
                 }
@@ -581,39 +632,47 @@ fun HomeScreen(
                         }
                     } else {
                         items(files) { fileItem ->
-                            val itemStatus = fileStatuses[fileItem.path] ?: ReadStatus.UNREAD
-                            val isSelected = fileItem.path in selectedPaths
-                            val isCached   = fileItem.isNas && viewModel.isNasCached(fileItem)
-                            val meta       = fileMetaMap[fileItem.path]
+                            val itemStatus   = fileStatuses[fileItem.path] ?: ReadStatus.UNREAD
+                            val isSelected   = fileItem.path in selectedPaths
+                            val isCached     = fileItem.isNas && viewModel.isNasCached(fileItem)
+                            val meta         = fileMetaMap[fileItem.path]
+                            // DLモード時はファイルのみ選択状態色を適用
+                            val isDlSelected = !isStreamingMode && !fileItem.isFolder &&
+                                               fileItem.path in dlSelectedPaths
                             FileListItem(
                                 fileItem            = fileItem,
                                 thumbnailRepository = thumbnailRepository,
                                 status              = itemStatus,
                                 isEditMode          = isEditMode && !isNas,
                                 isSelected          = isSelected,
+                                isDlSelected        = isDlSelected,
                                 isCached            = isCached,
                                 rating              = meta?.rating ?: 0,
                                 colorLabel          = meta?.colorLabel ?: 0,
                                 onClick = {
-                                    if (isEditMode && !isNas) {
-                                        // 編集モード中：ファイル・フォルダの選択/解除
-                                        selectedPaths = if (isSelected)
-                                            selectedPaths - fileItem.path
-                                        else
-                                            selectedPaths + fileItem.path
-                                    } else {
-                                        when {
-                                            fileItem.isFolder -> {
-                                                // フォルダ移動時は編集モードを終了
-                                                isEditMode    = false
-                                                selectedPaths = emptySet()
-                                                if (fileItem.isNas) viewModel.navigateToNas(
-                                                    fileItem.nasServer!!, fileItem.nasPath
-                                                )
-                                                else viewModel.loadFolder(fileItem.file!!)
-                                            }
-                                            fileItem.isComic -> viewModel.onComicTapped(fileItem)
+                                    when {
+                                        // 編集モード
+                                        isEditMode && !isNas -> {
+                                            selectedPaths = if (isSelected)
+                                                selectedPaths - fileItem.path
+                                            else
+                                                selectedPaths + fileItem.path
                                         }
+                                        // DLモード：フォルダは普通に開く、ファイルは選択
+                                        !isStreamingMode && isNas && !fileItem.isFolder -> {
+                                            viewModel.toggleDlSelection(fileItem.path)
+                                        }
+                                        // フォルダ移動
+                                        fileItem.isFolder -> {
+                                            isEditMode    = false
+                                            selectedPaths = emptySet()
+                                            if (fileItem.isNas) viewModel.navigateToNas(
+                                                fileItem.nasServer!!, fileItem.nasPath
+                                            )
+                                            else viewModel.loadFolder(fileItem.file!!)
+                                        }
+                                        // 通常のコミックタップ
+                                        fileItem.isComic -> viewModel.onComicTapped(fileItem)
                                     }
                                 },
                                 onInfoClick = { if (!isEditMode) viewModel.openFileInfo(fileItem) }
@@ -672,6 +731,31 @@ fun HomeScreen(
                     }
                 }
             }
+        }
+    }
+
+    // ── ソート・フィルター BottomSheet ──────────────────────────────
+    if (showSortSheet) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showSortSheet = false },
+            sheetState       = sheetState,
+            dragHandle       = { BottomSheetDefaults.DragHandle() }
+        ) {
+            SortFilterSheet(
+                sortKey          = sortKey,
+                ascending        = ascending,
+                folderOrder      = folderOrder,
+                statusFilter     = statusFilter,
+                colorLabelFilter = colorLabelFilter,
+                isNas            = isNas,
+                onSortKey        = { viewModel.setSortKey(it) },
+                onFolderOrder    = { viewModel.setFolderOrder(it) },
+                onStatusFilter   = { viewModel.toggleStatusFilter(it) },
+                onColorFilter    = { viewModel.toggleColorLabelFilter(it) },
+                onClearFilter    = { viewModel.clearFilters() },
+                onClose          = { showSortSheet = false }
+            )
         }
     }
 }
@@ -847,6 +931,18 @@ private fun formatFileSize(bytes: Long): String = when {
     else                    -> "$bytes B"
 }
 
+private fun formatLastModified(lastModified: Long): String {
+    val now      = System.currentTimeMillis()
+    val diffDays = ((now - lastModified) / (1000L * 60 * 60 * 24)).toInt()
+    return when {
+        diffDays == 0 -> "今日"
+        diffDays == 1 -> "昨日"
+        diffDays <= 99 -> "${diffDays}日前"
+        else -> java.text.SimpleDateFormat("yyyy/MM/dd", java.util.Locale.getDefault())
+            .format(java.util.Date(lastModified))
+    }
+}
+
 // ─── 読書状態バッジ ───────────────────────────────────────────────────────────
 
 @Composable
@@ -1005,6 +1101,7 @@ fun FileListItem(
     status: ReadStatus = ReadStatus.UNREAD,
     isEditMode: Boolean = false,
     isSelected: Boolean = false,
+    isDlSelected: Boolean = false,
     isCached: Boolean = false,
     rating: Int = 0,
     colorLabel: Int = 0
@@ -1017,10 +1114,11 @@ fun FileListItem(
         thumbnailFile = thumbnailRepository.getOrGenerateThumbnail(fileItem)
     }
 
-    val backgroundColor = if (isSelected)
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-    else
-        Color.Transparent
+    val backgroundColor = when {
+        isSelected   -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+        isDlSelected -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+        else         -> Color.Transparent
+    }
 
     val labelColor = ColorLabel.fromValue(colorLabel)
 
@@ -1131,6 +1229,14 @@ fun FileListItem(
                     CachedBadge()
                 }
             }
+            // 更新日
+            if (fileItem.lastModified > 0 && !fileItem.isFolder) {
+                Text(
+                    text  = formatLastModified(fileItem.lastModified),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
 
         // レーティング表示（右端）
@@ -1162,5 +1268,165 @@ fun FileListItem(
                 )
             }
         }
+    }
+}
+
+// ─── ソート・フィルターシート表示トリガー（HomeScreenの内容は上記まで） ──────────────
+// NOTE: showSortSheet が trueのときに ModalBottomSheet を表示する。
+// Scaffold の外（HomeScreen 関数の末尾）に配置済み。
+
+// ─── ソート・フィルターシート ────────────────────────────────────────────────
+
+@Composable
+fun SortFilterSheet(
+    sortKey: SortPrefs.SortKey,
+    ascending: Boolean,
+    folderOrder: SortPrefs.FolderOrder,
+    statusFilter: Set<String>,
+    colorLabelFilter: Set<String>,
+    isNas: Boolean,
+    onSortKey: (SortPrefs.SortKey) -> Unit,
+    onFolderOrder: (SortPrefs.FolderOrder) -> Unit,
+    onStatusFilter: (String) -> Unit,
+    onColorFilter: (String) -> Unit,
+    onClearFilter: () -> Unit,
+    onClose: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        // ── ソート方法 ───────────────────────────────────────
+        Text(
+            text  = "ソート",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SortPrefs.SortKey.entries.forEach { key ->
+                val isSelected = sortKey == key
+                FilterChip(
+                    selected = isSelected,
+                    onClick  = { onSortKey(key) },
+                    label    = {
+                        Text(
+                            text = key.label +
+                                if (isSelected) (if (ascending) " ▲" else " ▼") else ""
+                        )
+                    }
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(12.dp))
+
+        // ── フォルダ表示順 ─────────────────────────────────
+        Text(
+            text  = "フォルダ表示順",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SortPrefs.FolderOrder.entries.forEach { order ->
+                FilterChip(
+                    selected = folderOrder == order,
+                    onClick  = { onFolderOrder(order) },
+                    label    = { Text(order.label) }
+                )
+            }
+        }
+
+        // ── フィルター（ローカルのみ） ───────────────────────────
+        if (!isNas) {
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(12.dp))
+
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment     = Alignment.CenterVertically
+            ) {
+                Text(
+                    text  = "フィルター",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                if (statusFilter.isNotEmpty() || colorLabelFilter.isNotEmpty()) {
+                    TextButton(onClick = onClearFilter) { Text("リセット") }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // 読書状態
+            Text(
+                text  = "読書状態",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ReadStatus.entries.forEach { status ->
+                    FilterChip(
+                        selected = status.name in statusFilter,
+                        onClick  = { onStatusFilter(status.name) },
+                        label    = { Text(status.label) }
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // カラーラベル
+            Text(
+                text  = "カラーラベル",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ColorLabel.entries
+                    .filter { it != ColorLabel.NONE }
+                    .forEach { label ->
+                        val isSelected = label.value.toString() in colorLabelFilter
+                        val labelColor = Color(label.colorHex)
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(labelColor)
+                                .then(
+                                    if (isSelected) Modifier.border(
+                                        3.dp, MaterialTheme.colorScheme.onSurface,
+                                        androidx.compose.foundation.shape.CircleShape
+                                    ) else Modifier
+                                )
+                                .clickable { onColorFilter(label.value.toString()) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSelected) {
+                                Icon(
+                                    imageVector        = Icons.Default.Check,
+                                    contentDescription = label.label,
+                                    tint               = Color.White,
+                                    modifier           = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+        TextButton(
+            onClick  = onClose,
+            modifier = Modifier.align(Alignment.End)
+        ) { Text("閉じる") }
+        Spacer(Modifier.height(16.dp))
     }
 }
