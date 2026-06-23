@@ -27,13 +27,18 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 
 data class ViewerUiState(
-    val pages: List<ByteArray> = emptyList(),
+    val pages: List<ByteArray> = emptyList(),       // 通常モード：メモリ上のページデータ
+    val pageFiles: List<String> = emptyList(),       // Progressiveモード：ファイルパスリスト（メモリ節約）
+    val isProgressiveMode: Boolean = false,          // Progressive Loading中かどうか
+    val availablePageCount: Int = 0,
+    val totalPageCount: Int = 0,
+    val isComplete: Boolean = false,
     val isLoading: Boolean = true,
     val error: String? = null,
     val initialPage: Int = 0,
     val isSavedPageLoaded: Boolean = false,
-    val bookmarks: List<Bookmark> = emptyList(),      // ブックマーク一覧
-    val isCurrentPageBookmarked: Boolean = false      // 現在ページがブックマーク済みか
+    val bookmarks: List<Bookmark> = emptyList(),
+    val isCurrentPageBookmarked: Boolean = false
 )
 
 /** 先頭・最終ページ通知イベント */
@@ -105,19 +110,68 @@ class ViewerViewModel(
             withContext(Dispatchers.IO) {
                 try {
                     val file = File(filePath)
-                    Log.d("ComicVeil", "展開開始: ${file.name} (${file.length()} bytes) exists=${file.exists()}")
-                    val pages = when (file.extension.lowercase()) {
-                        "zip", "cbz" -> extractZip(file)
-                        "rar", "cbr" -> extractRar(file)
-                        else         -> emptyList()
+                    if (file.isDirectory) {
+                        // Progressive Loading モード：ページディレクトリを監視
+                        loadFromPageDirectory(file)
+                    } else {
+                        // 通常モード：ZIP/RARを全部展開
+                        Log.d("ComicVeil", "展開開始: ${file.name} (${file.length()} bytes) exists=${file.exists()}")
+                        val pages = when (file.extension.lowercase()) {
+                            "zip", "cbz" -> extractZip(file)
+                            "rar", "cbr" -> extractRar(file)
+                            else         -> emptyList()
+                        }
+                        Log.d("ComicVeil", "展開完了: ${pages.size} ページ")
+                        _uiState.update {
+                            it.copy(
+                                pages              = pages,
+                                availablePageCount = pages.size,
+                                totalPageCount     = pages.size,
+                                isComplete         = true,
+                                isLoading          = false
+                            )
+                        }
                     }
-                    Log.d("ComicVeil", "展開完了: ${pages.size} ページ")
-                    _uiState.update { it.copy(pages = pages, isLoading = false) }
                 } catch (e: Exception) {
                     Log.e("ComicVeil", "展開エラー: ${e::class.simpleName}: ${e.message}", e)
                     _uiState.update { it.copy(error = e.message, isLoading = false) }
                 }
             }
+        }
+    }
+
+    /**
+     * Progressive Loading モード：ページディレクトリをポーリング
+     * ByteArrayではなくファイルパスのみを保持してメモリ境过を防ぐ
+     */
+    private suspend fun loadFromPageDirectory(pageDir: File) {
+        while (true) {
+            val files = pageDir.listFiles { f -> f.name.endsWith(".jpg") }
+                ?.sortedBy { it.name } ?: emptyList()
+            val isComplete = File(pageDir, "complete").exists()
+
+            // ファイルパスのみを保持（ByteArrayは保持しない）
+            val filePaths = files.map { it.absolutePath }
+
+            _uiState.update {
+                it.copy(
+                    pageFiles          = filePaths,
+                    isProgressiveMode  = true,
+                    availablePageCount = filePaths.size,
+                    isLoading          = filePaths.isEmpty(),
+                    isComplete         = isComplete
+                )
+            }
+
+            if (isComplete) {
+                val total = runCatching {
+                    File(pageDir, "complete").readText().toInt()
+                }.getOrDefault(filePaths.size)
+                _uiState.update { it.copy(totalPageCount = total) }
+                break
+            }
+
+            kotlinx.coroutines.delay(500)
         }
     }
 

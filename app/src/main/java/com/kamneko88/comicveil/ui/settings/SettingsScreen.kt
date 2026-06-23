@@ -51,18 +51,16 @@ fun SettingsScreen(
     val thumbnailCacheDir = remember { File(context.cacheDir, "thumbnails") }
     val appPrefs = remember { viewModel.appPrefs }
 
-    // フォルダ設定状態（即時反映のため remember で保持）
     var homeFolderType     by remember { mutableStateOf(appPrefs.homeFolderType) }
     var downloadFolderType by remember { mutableStateOf(appPrefs.downloadFolderType) }
+    var doubleTapZoom      by remember { mutableStateOf(appPrefs.doubleTapZoom) }
 
-    // キャッシュサイズ（削除後に即時更新）
     var nasCacheSize       by remember { mutableLongStateOf(calcDirSize(File(context.cacheDir, "nas_cache"))) }
     var thumbnailCacheSize by remember { mutableLongStateOf(calcDirSize(thumbnailCacheDir)) }
 
     var showClearNasDialog       by remember { mutableStateOf(false) }
     var showClearThumbnailDialog by remember { mutableStateOf(false) }
 
-    // STRキャッシュ削除確認
     if (showClearNasDialog) {
         AlertDialog(
             onDismissRequest = { showClearNasDialog = false },
@@ -73,9 +71,7 @@ fun SettingsScreen(
                     showClearNasDialog = false
                     viewModel.clearNasCache()
                     nasCacheSize = 0L
-                }) {
-                    Text("削除", color = MaterialTheme.colorScheme.error)
-                }
+                }) { Text("削除", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
                 TextButton(onClick = { showClearNasDialog = false }) { Text("キャンセル") }
@@ -83,7 +79,6 @@ fun SettingsScreen(
         )
     }
 
-    // サムネイルキャッシュ削除確認
     if (showClearThumbnailDialog) {
         AlertDialog(
             onDismissRequest = { showClearThumbnailDialog = false },
@@ -94,9 +89,7 @@ fun SettingsScreen(
                     showClearThumbnailDialog = false
                     viewModel.clearThumbnailCache(thumbnailCacheDir)
                     thumbnailCacheSize = 0L
-                }) {
-                    Text("削除", color = MaterialTheme.colorScheme.error)
-                }
+                }) { Text("削除", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
                 TextButton(onClick = { showClearThumbnailDialog = false }) { Text("キャンセル") }
@@ -128,15 +121,13 @@ fun SettingsScreen(
         ) {
             Spacer(Modifier.height(16.dp))
 
-            // ── フォルダ設定 ────────────────────────────────────────────
+            // ── フォルダ設定 ──────────────────────────────────────────────
             Text(
                 text  = "フォルダ設定",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary
             )
             Spacer(Modifier.height(8.dp))
-
-            // Homeフォルダ
             Text(text = "Homeフォルダ", style = MaterialTheme.typography.bodyMedium)
             Text(
                 text  = "コミックを保存・表示するデフォルトの場所",
@@ -165,7 +156,6 @@ fun SettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            // DL保存先
             Text(text = "DL保存先", style = MaterialTheme.typography.bodyMedium)
             Text(
                 text  = "DLモードでダウンロードしたファイルの保存先",
@@ -201,7 +191,6 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.primary
             )
             Spacer(Modifier.height(8.dp))
-
             SettingsCacheItem(
                 title    = "STRキャッシュ",
                 subtitle = "ストリーミング再生でダウンロードした一時ファイル",
@@ -209,7 +198,6 @@ fun SettingsScreen(
                 onClear  = { showClearNasDialog = true }
             )
             HorizontalDivider()
-
             SettingsCacheItem(
                 title    = "サムネイルキャッシュ",
                 subtitle = "ファイル一覧の表紙画像キャッシュ。削除後はアプリ再起動で再生成されます。",
@@ -218,7 +206,7 @@ fun SettingsScreen(
             )
             HorizontalDivider()
 
-            // ── 今後の設定項目（プレースホルダー）────────────────────────
+            // ── 表示・操作 ────────────────────────────────────────────────
             Spacer(Modifier.height(24.dp))
             Text(
                 text  = "表示・操作",
@@ -226,14 +214,27 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.primary
             )
             Spacer(Modifier.height(8.dp))
-            Text(
-                text  = "（今後実装予定）",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 8.dp)
-            )
 
-            // ── バージョン情報 ────────────────────────────────────────
+            Text(text = "ダブルタップズーム率", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text  = "閲覧中のダブルタップで拡大する倍率",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(4.dp))
+            AppPrefs.DoubleTapZoom.entries.forEach { zoom ->
+                SettingsFolderRadio(
+                    label       = zoom.label,
+                    description = "",
+                    selected    = doubleTapZoom == zoom,
+                    onSelect    = {
+                        doubleTapZoom          = zoom
+                        appPrefs.doubleTapZoom = zoom
+                    }
+                )
+            }
+
+            // ── バージョン情報 ────────────────────────────────────────────
             Spacer(Modifier.height(32.dp))
             HorizontalDivider()
             Spacer(Modifier.height(16.dp))
@@ -269,11 +270,13 @@ private fun SettingsFolderRadio(
         )
         Column(modifier = Modifier.padding(start = 4.dp, top = 8.dp)) {
             Text(text = label, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                text  = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (description.isNotEmpty()) {
+                Text(
+                    text  = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

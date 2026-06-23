@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.core.view.doOnLayout
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -19,6 +20,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -77,7 +80,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -108,23 +113,16 @@ fun ViewerScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // 明るさ調整（-1f = システム準拠、他は 0f～1f）
-    // 起動時は現在の画面輝度を引き継ぐ
     val activity = remember { context as? ComponentActivity }
     val initialBrightness = remember {
-        activity?.window?.attributes?.screenBrightness
-            ?.takeIf { it >= 0f } ?: 0.5f
+        activity?.window?.attributes?.screenBrightness?.takeIf { it >= 0f } ?: 0.5f
     }
-    var brightness by remember { mutableFloatStateOf(initialBrightness) }
+    var brightness           by remember { mutableFloatStateOf(initialBrightness) }
     var showBrightnessSlider by remember { mutableStateOf(false) }
-    var showBookmarkList    by remember { mutableStateOf(false) }
+    var showBookmarkList     by remember { mutableStateOf(false) }
 
-    // 起動時にブックマーク一覧を読み込む
-    LaunchedEffect(Unit) {
-        viewModel.loadBookmarks()
-    }
+    LaunchedEffect(Unit) { viewModel.loadBookmarks() }
 
-    // brightness 変化時にWindowに反映（UIスレッドで実行）
     LaunchedEffect(brightness) {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
             activity?.window?.let { window ->
@@ -135,7 +133,6 @@ fun ViewerScreen(
         }
     }
 
-    // ビューワーを閉じたときに画面輝度をシステム設定に戻す
     DisposableEffect(Unit) {
         onDispose {
             activity?.window?.let { window ->
@@ -146,25 +143,20 @@ fun ViewerScreen(
         }
     }
 
-    // ビューワー起動中は画面左右端のシステムジェスチャーを無効化し、閉じたら元に戻す
     DisposableEffect(Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val density = view.resources.displayMetrics.density
             val edgePx  = (40 * density).toInt()
-
-            // View.systemGestureExclusionRects で左右端を除外登録
-            // （insetsController より安定・API 29以上で使用可能）
             view.doOnLayout {
                 val h = view.height.takeIf { it > 0 } ?: 2000
                 val w = view.width.takeIf  { it > 0 } ?: 1080
                 view.systemGestureExclusionRects = listOf(
-                    android.graphics.Rect(0,        0, edgePx,     h), // 左端
-                    android.graphics.Rect(w - edgePx, 0, w, h)        // 右端
+                    android.graphics.Rect(0, 0, edgePx, h),
+                    android.graphics.Rect(w - edgePx, 0, w, h)
                 )
             }
         }
         onDispose {
-            // ビューワーを閉じたらジェスチャー除外エリアをリセット
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 view.systemGestureExclusionRects = emptyList()
             }
@@ -173,7 +165,6 @@ fun ViewerScreen(
 
     BackHandler { onClose() }
 
-    // 先頭・最終ページイベントを受け取ってSnackbarを表示
     LaunchedEffect(Unit) {
         viewModel.pageLimitEvent.collect { event ->
             val message = when (event) {
@@ -187,54 +178,53 @@ fun ViewerScreen(
 
     when {
         uiState.isLoading || !uiState.isSavedPageLoaded -> {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) { CircularProgressIndicator() }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
         }
 
         uiState.error != null -> {
             AlertDialog(
                 onDismissRequest = onClose,
                 title = { Text("読み込みエラー") },
-                text = { Text("ファイルを開けませんでした。\n${uiState.error}") },
-                confirmButton = {
-                    TextButton(onClick = onClose) { Text("閉じる") }
-                }
+                text  = { Text("ファイルを開けませんでした。\n${uiState.error}") },
+                confirmButton = { TextButton(onClick = onClose) { Text("閉じる") } }
             )
         }
 
-        uiState.pages.isEmpty() -> {
+        uiState.pages.isEmpty() && uiState.pageFiles.isEmpty() -> {
             AlertDialog(
                 onDismissRequest = onClose,
                 title = { Text("非対応のファイル形式") },
-                text = {
+                text  = {
                     Text(
                         "画像ページが見つかりませんでした。\n\n" +
-                                "ZIPの中にZIP・RARが入っている\n" +
-                                "「二重圧縮」ファイルには対応していません。"
+                        "ZIPの中にZIP・RARが入っている\n「二重圧縮」ファイルには対応していません。"
                     )
                 },
-                confirmButton = {
-                    TextButton(onClick = onClose) { Text("閉じる") }
-                }
+                confirmButton = { TextButton(onClick = onClose) { Text("閉じる") } }
             )
         }
 
         else -> {
-            val pages = uiState.pages
+            val pages         = uiState.pages
+            val pageFiles     = uiState.pageFiles
+            val isProgressive = uiState.isProgressiveMode
+            val totalCount    = if (uiState.isComplete) uiState.totalPageCount
+                                else maxOf(uiState.availablePageCount, uiState.totalPageCount)
+            val pagerCount    = when {
+                isProgressive && totalCount > 0 -> totalCount
+                isProgressive                   -> uiState.availablePageCount.coerceAtLeast(1)
+                else                            -> pages.size
+            }.coerceAtLeast(1)
+
             val pagerState = rememberPagerState(
-                initialPage = uiState.initialPage.coerceIn(0, pages.size - 1),
-                pageCount = { pages.size }
+                initialPage = uiState.initialPage.coerceIn(0, pagerCount - 1),
+                pageCount   = { pagerCount }
             )
 
-            LaunchedEffect(pagerState.currentPage) {
-                viewModel.savePage(pagerState.currentPage)
-            }
+            LaunchedEffect(pagerState.currentPage) { viewModel.savePage(pagerState.currentPage) }
 
-            // スワイプで端に達したときの通知
-            // isScrollInProgress が false になった（スワイプ完了）タイミングで判定
-            // hasScrolled フラグで開いた直後の誤通知を防ぐ
             var hasScrolled by remember { mutableStateOf(false) }
             LaunchedEffect(pagerState.isScrollInProgress) {
                 if (pagerState.isScrollInProgress) {
@@ -242,7 +232,7 @@ fun ViewerScreen(
                 } else if (hasScrolled) {
                     when (pagerState.currentPage) {
                         0              -> viewModel.onPageLimitReached(PageLimitEvent.FIRST)
-                        pages.size - 1 -> viewModel.onPageLimitReached(PageLimitEvent.LAST)
+                        pagerCount - 1 -> viewModel.onPageLimitReached(PageLimitEvent.LAST)
                     }
                 }
             }
@@ -251,7 +241,7 @@ fun ViewerScreen(
                 state = pagerState,
                 snapAnimationSpec = spring(
                     dampingRatio = Spring.DampingRatioHighBouncy,
-                    stiffness = Spring.StiffnessVeryLow
+                    stiffness    = Spring.StiffnessVeryLow
                 )
             )
 
@@ -274,49 +264,65 @@ fun ViewerScreen(
                         .padding(innerPadding)
                         .statusBarsPadding()
                 ) {
-                    HorizontalPager(
-                        state = pagerState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .pointerInput(pagerState.currentPage) {
-                                detectTapGestures { offset ->
-                                    val isFirst   = pagerState.currentPage == 0
-                                    val isLast    = pagerState.currentPage == pages.size - 1
-                                    // reverseLayout=true なので右が「前」左が「次」
-                                    val isRightTap = offset.x > size.width * 0.66f
-                                    val isLeftTap  = offset.x < size.width * 0.33f
+                    val resetZoomOnPageChange = true
+                    val appPrefs          = remember { com.kamneko88.comicveil.data.AppPrefs(context) }
+                    val doubleTapZoomScale = appPrefs.doubleTapZoom.scale
 
-                                    when {
-                                        isRightTap && isFirst ->
-                                            viewModel.onPageLimitReached(PageLimitEvent.FIRST)
-                                        isLeftTap && isLast ->
-                                            viewModel.onPageLimitReached(PageLimitEvent.LAST)
-                                        else ->
-                                            menuVisible = !menuVisible
-                                    }
-                                }
-                            },
-                        reverseLayout = true,
-                        flingBehavior = springFling,
+                    HorizontalPager(
+                        state                  = pagerState,
+                        userScrollEnabled      = true,
+                        modifier               = Modifier.fillMaxSize(),
+                        reverseLayout          = true,
+                        flingBehavior          = springFling,
                         beyondViewportPageCount = 2
                     ) { pageIndex ->
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            AsyncImage(
-                                model = pages[pageIndex],
-                                contentDescription = "ページ ${pageIndex + 1}",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Fit
-                            )
+                        when {
+                            isProgressive && pageIndex < pageFiles.size -> {
+                                ZoomablePage(
+                                    imageModel            = pageFiles[pageIndex],
+                                    pageIndex             = pageIndex,
+                                    currentPage           = pagerState.currentPage,
+                                    resetZoomOnPageChange = resetZoomOnPageChange,
+                                    doubleTapZoomScale    = doubleTapZoomScale,
+                                    onMenuToggle          = { menuVisible = !menuVisible },
+                                    onPageLimit           = { viewModel.onPageLimitReached(it) },
+                                    isFirst               = pageIndex == 0,
+                                    isLast                = pageIndex == pagerCount - 1
+                                )
+                            }
+                            !isProgressive && pageIndex < pages.size -> {
+                                ZoomablePage(
+                                    imageModel            = pages[pageIndex],
+                                    pageIndex             = pageIndex,
+                                    currentPage           = pagerState.currentPage,
+                                    resetZoomOnPageChange = resetZoomOnPageChange,
+                                    doubleTapZoomScale    = doubleTapZoomScale,
+                                    onMenuToggle          = { menuVisible = !menuVisible },
+                                    onPageLimit           = { viewModel.onPageLimitReached(it) },
+                                    isFirst               = pageIndex == 0,
+                                    isLast                = pageIndex == pagerCount - 1
+                                )
+                            }
+                            else -> {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        CircularProgressIndicator(color = Color.White)
+                                        Spacer(Modifier.height(8.dp))
+                                        Text(
+                                            text  = "読み込み中... (${pageIndex + 1}ページ)",
+                                            color = Color.White,
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
 
                     AnimatedVisibility(
                         visible = menuVisible,
-                        enter = fadeIn(tween(200)),
-                        exit = fadeOut(tween(200))
+                        enter   = fadeIn(tween(200)),
+                        exit    = fadeOut(tween(200))
                     ) {
                         Box(
                             modifier = Modifier
@@ -325,16 +331,15 @@ fun ViewerScreen(
                         )
                     }
 
-                    // ブックマーク一覧ダイアログ
                     if (showBookmarkList) {
                         val bookmarks = uiState.bookmarks
                         AlertDialog(
                             onDismissRequest = { showBookmarkList = false },
                             title = {
                                 Row(
-                                    verticalAlignment   = Alignment.CenterVertically,
+                                    verticalAlignment     = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween,
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier              = Modifier.fillMaxWidth()
                                 ) {
                                     Text("ブックマーク")
                                     if (bookmarks.isNotEmpty()) {
@@ -352,7 +357,7 @@ fun ViewerScreen(
                                         items(bookmarks) { bookmark ->
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier
+                                                modifier          = Modifier
                                                     .fillMaxWidth()
                                                     .clickable {
                                                         showBookmarkList = false
@@ -362,33 +367,39 @@ fun ViewerScreen(
                                                     }
                                                     .padding(vertical = 8.dp)
                                             ) {
-                                                // サムネイル
                                                 Box(
                                                     modifier = Modifier
                                                         .size(48.dp)
                                                         .clip(RoundedCornerShape(4.dp))
                                                         .background(Color.DarkGray)
                                                 ) {
-                                                    if (bookmark.page in pages.indices) {
+                                                    if (!isProgressive && bookmark.page in pages.indices) {
                                                         AsyncImage(
-                                                            model = pages[bookmark.page],
+                                                            model            = pages[bookmark.page],
                                                             contentDescription = null,
-                                                            contentScale = ContentScale.Crop,
-                                                            modifier = Modifier.fillMaxSize()
+                                                            contentScale     = ContentScale.Crop,
+                                                            modifier         = Modifier.fillMaxSize()
+                                                        )
+                                                    } else if (isProgressive && bookmark.page < pageFiles.size) {
+                                                        AsyncImage(
+                                                            model            = pageFiles[bookmark.page],
+                                                            contentDescription = null,
+                                                            contentScale     = ContentScale.Crop,
+                                                            modifier         = Modifier.fillMaxSize()
                                                         )
                                                     }
                                                 }
                                                 Spacer(modifier = Modifier.width(12.dp))
                                                 Text(
-                                                    text = "${bookmark.page + 1}ページ",
-                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    text     = "${bookmark.page + 1}ページ",
+                                                    style    = MaterialTheme.typography.bodyMedium,
                                                     modifier = Modifier.weight(1f)
                                                 )
                                                 IconButton(onClick = { viewModel.deleteBookmark(bookmark.page) }) {
                                                     Icon(
                                                         Icons.Default.Delete,
                                                         contentDescription = "削除",
-                                                        tint = MaterialTheme.colorScheme.error
+                                                        tint               = MaterialTheme.colorScheme.error
                                                     )
                                                 }
                                             }
@@ -404,44 +415,39 @@ fun ViewerScreen(
                     }
 
                     AnimatedVisibility(
-                        visible = menuVisible,
-                        enter = fadeIn(tween(200)),
-                        exit = fadeOut(tween(200)),
+                        visible  = menuVisible,
+                        enter    = fadeIn(tween(200)),
+                        exit     = fadeOut(tween(200)),
                         modifier = Modifier.align(Alignment.Center)
                     ) {
-                        Button(
-                            onClick = onClose,
-                            modifier = Modifier.padding(16.dp)
-                        ) {
+                        Button(onClick = onClose, modifier = Modifier.padding(16.dp)) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
                             Text(text = "  本を閉じる", fontSize = 16.sp)
                         }
                     }
 
                     AnimatedVisibility(
-                        visible = menuVisible,
-                        enter = slideInVertically(tween(200)) { it },
-                        exit = slideOutVertically(tween(200)) { it },
+                        visible  = menuVisible,
+                        enter    = slideInVertically(tween(200)) { it },
+                        exit     = slideOutVertically(tween(200)) { it },
                         modifier = Modifier.align(Alignment.BottomCenter)
                     ) {
-                        // スライダー操作中のターゲットページ（スライダーに連動してリアルタイム更新）
+                        // pagerCount を使ってスライダー範囲を計算
+                        val maxSlider = (pagerCount - 1).toFloat().coerceAtLeast(0f)
                         var sliderValue by remember {
                             mutableFloatStateOf(
-                                (pages.size - 1 - pagerState.currentPage).toFloat()
+                                (pagerCount - 1 - pagerState.currentPage).toFloat().coerceIn(0f, maxSlider)
                             )
                         }
-                        // sliderValue から逆算したターゲットページ番号（0始まり）
                         val sliderTargetPage by remember {
-                            derivedStateOf { pages.size - 1 - sliderValue.toInt() }
+                            derivedStateOf { (pagerCount - 1 - sliderValue.toInt()).coerceIn(0, pagerCount - 1) }
                         }
-                        // スライダーが動いているかどうか（サムネイル列の表示切り替えに使用）
                         var isSliding by remember { mutableStateOf(false) }
 
-                        // pagerState が変わったときにスライダーを同期（スワイプ操作時）
                         LaunchedEffect(pagerState.currentPage) {
                             if (!isSliding) {
-                                sliderValue =
-                                    (pages.size - 1 - pagerState.currentPage).toFloat()
+                                sliderValue = (pagerCount - 1 - pagerState.currentPage)
+                                    .toFloat().coerceIn(0f, maxSlider)
                             }
                         }
 
@@ -451,12 +457,10 @@ fun ViewerScreen(
                                 .background(Color.Black.copy(alpha = 0.7f))
                                 .padding(horizontal = 16.dp, vertical = 8.dp)
                         ) {
-
-                            // ── サムネイル列（スライダー操作中に表示） ──────────────────
                             AnimatedVisibility(
-                                visible = isSliding,
-                                enter = fadeIn(tween(150)),
-                                exit  = fadeOut(tween(150))
+                                visible = isSliding && !isProgressive,
+                                enter   = fadeIn(tween(150)),
+                                exit    = fadeOut(tween(150))
                             ) {
                                 PageThumbnailStrip(
                                     pages        = pages,
@@ -467,96 +471,85 @@ fun ViewerScreen(
 
                             Spacer(modifier = Modifier.height(4.dp))
 
-                            // ── ブックマークボタン行 ────────────────────────────
                             Row(
                                 verticalAlignment     = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier              = Modifier.fillMaxWidth()
                             ) {
-                                // ブックマーク一覧ボタン
                                 IconButton(onClick = { showBookmarkList = true }) {
                                     Icon(
                                         Icons.Default.BookmarkBorder,
                                         contentDescription = "ブックマーク一覧",
-                                        tint = if (uiState.bookmarks.isNotEmpty())
-                                            Color(0xFFFFD700) else Color.White
+                                        tint = if (uiState.bookmarks.isNotEmpty()) Color(0xFFFFD700) else Color.White
                                     )
                                 }
-                                // ブックマーク登録ボタン
                                 IconButton(onClick = { viewModel.toggleBookmark(pagerState.currentPage) }) {
                                     Icon(
-                                        if (uiState.isCurrentPageBookmarked)
-                                            Icons.Default.Bookmark
-                                        else
-                                            Icons.Default.BookmarkBorder,
+                                        if (uiState.isCurrentPageBookmarked) Icons.Default.Bookmark
+                                        else Icons.Default.BookmarkBorder,
                                         contentDescription = "ブックマーク",
-                                        tint = if (uiState.isCurrentPageBookmarked)
-                                            Color(0xFFFFD700) else Color.White
+                                        tint = if (uiState.isCurrentPageBookmarked) Color(0xFFFFD700) else Color.White
                                     )
                                 }
                             }
 
-                            // ── ページ番号表示 ─────────────────────────────────────────
-                            // スライダー操作中はターゲットページ番号を表示
                             val displayPage = if (isSliding) sliderTargetPage + 1
                                              else pagerState.currentPage + 1
                             Text(
-                                text     = "$displayPage / ${pages.size}",
-                                color    = Color.White,
-                                fontSize = 14.sp,
+                                text       = "$displayPage / $pagerCount",
+                                color      = Color.White,
+                                fontSize   = 14.sp,
                                 fontWeight = FontWeight.Bold,
-                                modifier = Modifier.align(Alignment.CenterHorizontally)
+                                modifier   = Modifier.align(Alignment.CenterHorizontally)
                             )
 
-                            // ── ページスライダー + 明るさボタン ─────────────────────────
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier          = Modifier.fillMaxWidth()
                             ) {
-                                Slider(
-                                    value    = sliderValue,
-                                    onValueChange = { newValue ->
-                                        sliderValue = newValue
-                                        isSliding   = true
-                                        showBrightnessSlider = false
-                                    },
-                                    onValueChangeFinished = {
-                                        isSliding = false
-                                        scope.launch {
-                                            pagerState.animateScrollToPage(sliderTargetPage)
+                                if (maxSlider > 0f) {
+                                    Slider(
+                                        value    = sliderValue,
+                                        onValueChange = { newValue ->
+                                            sliderValue = newValue
+                                            isSliding   = true
+                                            showBrightnessSlider = false
+                                        },
+                                        onValueChangeFinished = {
+                                            isSliding = false
+                                            scope.launch {
+                                                pagerState.animateScrollToPage(sliderTargetPage)
+                                            }
+                                        },
+                                        valueRange = 0f..maxSlider,
+                                        steps      = if (pagerCount > 2) pagerCount - 2 else 0,
+                                        modifier   = Modifier.weight(1f),
+                                        thumb = {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(28.dp)
+                                                    .background(Color.White, CircleShape)
+                                            )
                                         }
-                                    },
-                                    valueRange = 0f..(pages.size - 1).toFloat(),
-                                    steps      = if (pages.size > 2) pages.size - 2 else 0,
-                                    modifier   = Modifier.weight(1f),
-                                    thumb = {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(28.dp)
-                                                .background(Color.White, CircleShape)
-                                        )
-                                    }
-                                )
-                                // 明るさボタン
-                                IconButton(
-                                    onClick = { showBrightnessSlider = !showBrightnessSlider }
-                                ) {
+                                    )
+                                } else {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                                IconButton(onClick = { showBrightnessSlider = !showBrightnessSlider }) {
                                     Icon(
                                         imageVector = when {
                                             brightness < 0.33f -> Icons.Default.Brightness4
                                             brightness < 0.66f -> Icons.Default.Brightness7
-                                            else              -> Icons.Default.BrightnessHigh
+                                            else               -> Icons.Default.BrightnessHigh
                                         },
                                         contentDescription = "明るさ",
                                         tint = if (showBrightnessSlider)
                                             androidx.compose.ui.graphics.Color.Yellow
-                                        else
-                                            Color.White
+                                        else Color.White
                                     )
                                 }
                             }
 
-                            // ── 明るさスライダー（明るさボタンを押したときのみ表示） ─────
                             AnimatedVisibility(
                                 visible = showBrightnessSlider,
                                 enter   = fadeIn(tween(150)),
@@ -564,7 +557,7 @@ fun ViewerScreen(
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
+                                    modifier          = Modifier
                                         .fillMaxWidth()
                                         .padding(horizontal = 8.dp)
                                 ) {
@@ -598,21 +591,13 @@ fun ViewerScreen(
 
 // ─── サムネイルストリップ ─────────────────────────────────────────────────────
 
-/**
- * スライダー操作中にページサムネイルを横一列に表示するコンポーザブル。
- *
- * @param pages        全ページの ByteArray リスト
- * @param targetPage   中央に表示するページ番号（0始まり）
- * @param visibleCount 表示するサムネイル枚数（奇数推奨。例：5→中央±2枚）
- */
 @Composable
 private fun PageThumbnailStrip(
     pages: List<ByteArray>,
     targetPage: Int,
     visibleCount: Int = 5
 ) {
-    val half = visibleCount / 2
-    // 表示するページインデックスのリスト（範囲外はnullで埋める）
+    val half    = visibleCount / 2
     val indices = (-half..half).map { offset ->
         val idx = targetPage + offset
         if (idx in pages.indices) idx else null
@@ -627,7 +612,6 @@ private fun PageThumbnailStrip(
     ) {
         indices.forEachIndexed { i, pageIdx ->
             val isCenter    = (i == half)
-            // 中央サムネイルは大きく・明るく、前後は小さく・暗め
             val thumbWidth  = if (isCenter) 72.dp else 52.dp
             val thumbAlpha  = if (isCenter) 1.0f   else 0.55f
             val borderColor = if (isCenter) Color.White else Color.Transparent
@@ -635,7 +619,7 @@ private fun PageThumbnailStrip(
             Box(
                 modifier = Modifier
                     .width(thumbWidth)
-                    .aspectRatio(0.71f)                      // 縦横比：マンガページ相当
+                    .aspectRatio(0.71f)
                     .clip(RoundedCornerShape(4.dp))
                     .border(1.5.dp, borderColor, RoundedCornerShape(4.dp))
                     .alpha(thumbAlpha)
@@ -649,7 +633,6 @@ private fun PageThumbnailStrip(
                         modifier           = Modifier.fillMaxSize()
                     )
                 }
-                // 中央サムネイルの下部にページ番号を表示
                 if (isCenter && pageIdx != null) {
                     Text(
                         text       = "${pageIdx + 1}",
@@ -664,10 +647,86 @@ private fun PageThumbnailStrip(
                 }
             }
 
-            // サムネイル間のスペース（最後の要素の後ろには不要）
-            if (i < indices.lastIndex) {
-                Spacer(modifier = Modifier.width(4.dp))
-            }
+            if (i < indices.lastIndex) Spacer(modifier = Modifier.width(4.dp))
         }
+    }
+}
+
+// ─── ズーム可能なページコンポーザブル ────────────────────────────────────────
+
+private const val MIN_SCALE     = 1.0f
+private const val MAX_SCALE     = 3.0f
+private const val DBL_TAP_SCALE = 1.2f
+
+@Composable
+private fun ZoomablePage(
+    imageModel: Any,  // ByteArray（通常）または String（Progressive・Coilがファイルパスを直接読む）
+    pageIndex: Int,
+    currentPage: Int,
+    resetZoomOnPageChange: Boolean,
+    doubleTapZoomScale: Float,
+    onMenuToggle: () -> Unit,
+    onPageLimit: (PageLimitEvent) -> Unit,
+    isFirst: Boolean,
+    isLast: Boolean
+) {
+    val scope  = rememberCoroutineScope()
+    var scale  by remember { mutableFloatStateOf(MIN_SCALE) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
+    LaunchedEffect(currentPage) {
+        if (resetZoomOnPageChange) {
+            scale  = MIN_SCALE
+            offset = Offset.Zero
+        }
+    }
+
+    val transformableState = rememberTransformableState { zoomChange, panChange, _ ->
+        val newScale = (scale * zoomChange).coerceIn(MIN_SCALE, MAX_SCALE)
+        scale = newScale
+        if (scale > MIN_SCALE) offset = offset + panChange
+        else                   offset = Offset.Zero
+    }
+    val isZoomed = scale > MIN_SCALE
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .transformable(state = transformableState, enabled = isZoomed)
+            .pointerInput(pageIndex) {
+                detectTapGestures(
+                    onDoubleTap = {
+                        scope.launch {
+                            if (scale > MIN_SCALE) { scale = MIN_SCALE; offset = Offset.Zero }
+                            else                     scale = doubleTapZoomScale
+                        }
+                    },
+                    onTap = { tapOffset ->
+                        if (isZoomed) { onMenuToggle(); return@detectTapGestures }
+                        val isRightTap = tapOffset.x > size.width * 0.66f
+                        val isLeftTap  = tapOffset.x < size.width * 0.33f
+                        when {
+                            isRightTap && isFirst -> onPageLimit(PageLimitEvent.FIRST)
+                            isLeftTap  && isLast  -> onPageLimit(PageLimitEvent.LAST)
+                            else                  -> onMenuToggle()
+                        }
+                    }
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        AsyncImage(
+            model              = imageModel,
+            contentDescription = "ページ ${pageIndex + 1}",
+            modifier           = Modifier
+                .fillMaxSize()
+                .graphicsLayer(
+                    scaleX       = scale,
+                    scaleY       = scale,
+                    translationX = offset.x,
+                    translationY = offset.y
+                ),
+            contentScale = ContentScale.Fit
+        )
     }
 }

@@ -62,9 +62,25 @@ class AppPrefs(context: Context) {
         DownloadFolderType.DOWNLOADS  -> File(getDownloadsFolder(), "ComicVeil")
     }
 
+    // ─── ダブルタップズーム率 ───────────────────────────────────────────
+
+    enum class DoubleTapZoom(val scale: Float, val label: String) {
+        ZOOM_120(1.2f, "120%"),
+        ZOOM_135(1.35f, "135%"),
+        ZOOM_150(1.5f, "150%")
+    }
+
+    var doubleTapZoom: DoubleTapZoom
+        get() = DoubleTapZoom.valueOf(
+            prefs.getString(KEY_DOUBLE_TAP_ZOOM, DoubleTapZoom.ZOOM_120.name)
+                ?: DoubleTapZoom.ZOOM_120.name
+        )
+        set(value) = prefs.edit().putString(KEY_DOUBLE_TAP_ZOOM, value.name).apply()
+
     companion object {
-        private const val KEY_HOME_FOLDER     = "home_folder_type"
-        private const val KEY_DOWNLOAD_FOLDER = "download_folder_type"
+        private const val KEY_HOME_FOLDER      = "home_folder_type"
+        private const val KEY_DOWNLOAD_FOLDER  = "download_folder_type"
+        private const val KEY_DOUBLE_TAP_ZOOM  = "double_tap_zoom"
 
         /**
          * アプリ専用フォルダ（外部ストレージ）

@@ -130,7 +130,7 @@ class SmbRepository {
     suspend fun fetchPartialBytes(
         server: NasServer,
         nasPath: String,
-        maxBytes: Long = 2 * 1024 * 1024L  // デフォルト 2MB
+        maxBytes: Long = 2 * 1024 * 1024L
     ): ByteArray? = withContext(Dispatchers.IO) {
         val client = SMBClient()
         try {
@@ -152,7 +152,7 @@ class SmbRepository {
                 null
             )
             val baos  = ByteArrayOutputStream()
-            val chunk = ByteArray(64 * 1024) // 64KBずつ読む
+            val chunk = ByteArray(64 * 1024)
             var total = 0L
             smbFile.inputStream.use { input ->
                 while (total < maxBytes) {
@@ -165,6 +165,105 @@ class SmbRepository {
             baos.toByteArray()
         } catch (e: Exception) {
             null
+        } finally {
+            runCatching { client.close() }
+        }
+    }
+
+    /**
+     * ZIPファイルをストリームで読み込み、ページ画像を逐次書き出す（Progressive Loading）
+     * @param pageDir     ページ画像を保存するディレクトリ（00000.jpg, 00001.jpg...）
+     * @param onPageReady ページを書き出すたびに呼ぶコールバック（引数：累計保存ページ数）
+     * @param onComplete  全ページ保存完了時に呼ぶコールバック
+     */
+    suspend fun downloadZipProgressive(
+        server: NasServer,
+        nasPath: String,
+        pageDir: File,
+        onPageReady: suspend (savedCount: Int) -> Unit,
+        onComplete: suspend () -> Unit
+    ) = withContext(Dispatchers.IO) {
+        val client = SMBClient()
+        try {
+            val connection = client.connect(server.host)
+            val auth = AuthenticationContext(
+                server.username,
+                server.password.toCharArray(),
+                null
+            )
+            val session = connection.authenticate(auth)
+            val share   = session.connectShare(server.shareName) as DiskShare
+            val smbPath = nasPath.replace("/", "\\")
+            val smbFile = share.openFile(
+                smbPath,
+                setOf(AccessMask.GENERIC_READ),
+                null,
+                setOf(SMB2ShareAccess.FILE_SHARE_READ),
+                SMB2CreateDisposition.FILE_OPEN,
+                null
+            )
+
+            pageDir.mkdirs()
+            val imageExtensions = setOf("jpg", "jpeg", "png", "webp")
+            val pages = mutableListOf<Pair<String, ByteArray>>()
+
+            // Shift-JIS / UTF-8 両方を試行
+            for (cs in listOf("UTF-8", "Shift_JIS")) {
+                pages.clear()
+                // 再接続が必要なため毎回ファイルを開き直す
+                val smbFile2 = share.openFile(
+                    smbPath,
+                    setOf(AccessMask.GENERIC_READ),
+                    null,
+                    setOf(SMB2ShareAccess.FILE_SHARE_READ),
+                    SMB2CreateDisposition.FILE_OPEN,
+                    null
+                )
+                runCatching {
+                    org.apache.commons.compress.archivers.zip.ZipArchiveInputStream(
+                        smbFile2.inputStream, cs, false, true
+                    ).use { zis ->
+                        var entry = zis.nextZipEntry
+                        while (entry != null && isActive) {
+                            val name = entry.name
+                            val ext  = name.substringAfterLast(".").lowercase()
+                            if (!entry.isDirectory && ext in imageExtensions) {
+                                val bytes = zis.readBytes()
+                                if (bytes.isNotEmpty()) {
+                                    pages.add(name to bytes)
+                                    // 暫定ソートで現在わかっている順に保存
+                                    val sortedSoFar = pages.sortedBy { it.first.lowercase() }
+                                    sortedSoFar.forEachIndexed { index, (_, pageBytes) ->
+                                        val pageFile = File(pageDir, "%05d.jpg".format(index))
+                                        pageFile.writeBytes(pageBytes)
+                                    }
+                                    withContext(Dispatchers.Main) {
+                                        onPageReady(pages.size)
+                                    }
+                                }
+                            }
+                            entry = zis.nextZipEntry
+                        }
+                    }
+                }
+                if (pages.isNotEmpty()) break
+            }
+
+            // 全ページ取得後に最終ソートで確定
+            val sorted = pages.sortedBy { it.first.lowercase() }
+            sorted.forEachIndexed { index, (_, bytes) ->
+                File(pageDir, "%05d.jpg".format(index)).writeBytes(bytes)
+            }
+            // 完了マーカー（ページ数を記録）
+            File(pageDir, "complete").writeText(sorted.size.toString())
+
+            withContext(Dispatchers.Main) {
+                onComplete()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw e
         } finally {
             runCatching { client.close() }
         }

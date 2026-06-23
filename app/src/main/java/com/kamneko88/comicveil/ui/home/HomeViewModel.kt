@@ -579,43 +579,115 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startStrDownload(fileItem: FileItem) {
-        val ext      = fileItem.name.substringAfterLast(".")
-        val destFile = File(
-            File(getApplication<Application>().cacheDir, "nas_cache"),
-            "nas_${fileItem.nasPath.hashCode()}.$ext"
-        )
+        val ext    = fileItem.name.substringAfterLast(".").lowercase()
         val server = fileItem.nasServer ?: return
 
         downloadJob?.cancel()
         downloadJob = viewModelScope.launch {
+            if (ext in setOf("zip", "cbz")) {
+                startStrDownloadZipProgressive(fileItem, server, ext)
+            } else {
+                startStrDownloadFull(fileItem, server, ext)
+            }
+        }
+    }
+
+    /** ZIP: Progressive Loading — 1ページ目が届いた時点でビューワー起動 */
+    private suspend fun startStrDownloadZipProgressive(
+        fileItem: FileItem,
+        server: com.kamneko88.comicveil.data.nas.NasServer,
+        ext: String
+    ) {
+        val pageDir = File(
+            File(getApplication<Application>().cacheDir, "nas_pages"),
+            "nas_${fileItem.nasPath.hashCode()}"
+        )
+        // キャッシュがあればそのままビューワー起動
+        if (File(pageDir, "complete").exists()) {
+            _navigateEvent.tryEmit(pageDir.absolutePath)
+            return
+        }
+        pageDir.deleteRecursively()
+        pageDir.mkdirs()
+
+        var launched = false
+        try {
             _downloadProgress.value = DownloadProgress(
                 fileName   = fileItem.name,
                 downloaded = 0L,
                 total      = -1L
             )
-            try {
-                smbRepository.downloadFile(
-                    server     = server,
-                    nasPath    = fileItem.nasPath,
-                    destFile   = destFile,
-                    onProgress = { downloaded, total ->
-                        _downloadProgress.value = DownloadProgress(
-                            fileName   = fileItem.name,
-                            downloaded = downloaded,
-                            total      = total
-                        )
+            smbRepository.downloadZipProgressive(
+                server      = server,
+                nasPath     = fileItem.nasPath,
+                pageDir     = pageDir,
+                onPageReady = { savedCount ->
+                    _downloadProgress.value = DownloadProgress(
+                        fileName   = fileItem.name,
+                        downloaded = savedCount.toLong(),
+                        total      = -1L
+                    )
+                    // 1ページ目が届いたらビューワーを起動
+                    if (!launched && savedCount >= 1) {
+                        launched = true
+                        _navigateEvent.tryEmit(pageDir.absolutePath)
                     }
-                )
-                _navigateEvent.tryEmit(destFile.absolutePath)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                runCatching { destFile.delete() }
-            } catch (e: Exception) {
-                _nasError.value = "接続に失敗しました\n${e.message}"
-                runCatching { destFile.delete() }
-            } finally {
-                _downloadProgress.value = null
-                downloadJob = null
-            }
+                },
+                onComplete = {
+                    _downloadProgress.value = null
+                    if (!launched) {
+                        launched = true
+                        _navigateEvent.tryEmit(pageDir.absolutePath)
+                    }
+                }
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            _downloadProgress.value = null
+        } catch (e: Exception) {
+            _downloadProgress.value = null
+            _nasError.value = "接続に失敗しました\n${e.message}"
+        } finally {
+            downloadJob = null
+        }
+    }
+
+    /** RARなど: 従来通り全体DL後に起動 */
+    private suspend fun startStrDownloadFull(
+        fileItem: FileItem,
+        server: com.kamneko88.comicveil.data.nas.NasServer,
+        ext: String
+    ) {
+        val destFile = File(
+            File(getApplication<Application>().cacheDir, "nas_cache"),
+            "nas_${fileItem.nasPath.hashCode()}.$ext"
+        )
+        _downloadProgress.value = DownloadProgress(
+            fileName   = fileItem.name,
+            downloaded = 0L,
+            total      = -1L
+        )
+        try {
+            smbRepository.downloadFile(
+                server     = server,
+                nasPath    = fileItem.nasPath,
+                destFile   = destFile,
+                onProgress = { downloaded, total ->
+                    _downloadProgress.value = DownloadProgress(
+                        fileName   = fileItem.name,
+                        downloaded = downloaded,
+                        total      = total
+                    )
+                }
+            )
+            _navigateEvent.tryEmit(destFile.absolutePath)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            runCatching { destFile.delete() }
+        } catch (e: Exception) {
+            _nasError.value = "接続に失敗しました\n${e.message}"
+            runCatching { destFile.delete() }
+        } finally {
+            _downloadProgress.value = null
+            downloadJob = null
         }
     }
 
