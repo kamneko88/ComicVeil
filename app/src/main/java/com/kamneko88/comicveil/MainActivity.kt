@@ -1,10 +1,14 @@
 package com.kamneko88.comicveil
 
+import android.content.Intent
 import android.os.Bundle
+import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -17,6 +21,7 @@ import com.kamneko88.comicveil.ui.theme.ComicVeilTheme
 import com.kamneko88.comicveil.ui.transfer.TransferScreen
 import com.kamneko88.comicveil.ui.transfer.TransferViewModel
 import com.kamneko88.comicveil.ui.viewer.ViewerScreen
+import java.io.File
 import java.net.URLDecoder
 import java.net.URLEncoder
 
@@ -26,21 +31,48 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             ComicVeilTheme {
-                ComicVeilApp()
+                ComicVeilApp(intent = intent)
             }
         }
     }
 }
 
 @Composable
-fun ComicVeilApp() {
+fun ComicVeilApp(intent: Intent? = null) {
     val navController = rememberNavController()
-
-    // TransferViewModel をアプリ全体で1つ共有
     val transferViewModel: TransferViewModel = viewModel()
-
-    // HomeViewModel をアプリ全体で1つ共有（設定画面と共有するため）
     val homeViewModel: com.kamneko88.comicveil.ui.home.HomeViewModel = viewModel()
+
+    // 他アプリからの Intentファイルを受け取って直接ビューワーを起動
+    LaunchedEffect(intent) {
+        if (intent?.action == Intent.ACTION_VIEW) {
+            val uri = intent.data ?: return@LaunchedEffect
+            val filePath: String? = when (uri.scheme) {
+                "file" -> uri.path
+                "content" -> {
+                    // content URI → アプリキャッシュにコピーしてパスを取得
+                    val context = navController.context
+                    val fileName = context.contentResolver.query(
+                        uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst())
+                            cursor.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
+                        else null
+                    } ?: "shared_file"
+                    val destFile = File(context.cacheDir, "shared_$fileName")
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        destFile.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    destFile.absolutePath
+                }
+                else -> null
+            }
+            if (filePath != null) {
+                val encoded = URLEncoder.encode(filePath, "UTF-8")
+                navController.navigate("viewer/$encoded")
+            }
+        }
+    }
 
     NavHost(
         navController  = navController,

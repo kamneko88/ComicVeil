@@ -77,10 +77,22 @@ class AppPrefs(context: Context) {
         )
         set(value) = prefs.edit().putString(KEY_DOUBLE_TAP_ZOOM, value.name).apply()
 
+    // ─── ファイル一覧表示モード ───────────────────────────────────────────
+
+    enum class ListDisplayMode { DETAIL, COMPACT }
+
+    var listDisplayMode: ListDisplayMode
+        get() = ListDisplayMode.valueOf(
+            prefs.getString(KEY_LIST_DISPLAY_MODE, ListDisplayMode.DETAIL.name)
+                ?: ListDisplayMode.DETAIL.name
+        )
+        set(value) = prefs.edit().putString(KEY_LIST_DISPLAY_MODE, value.name).apply()
+
     companion object {
         private const val KEY_HOME_FOLDER      = "home_folder_type"
         private const val KEY_DOWNLOAD_FOLDER  = "download_folder_type"
         private const val KEY_DOUBLE_TAP_ZOOM  = "double_tap_zoom"
+        private const val KEY_LIST_DISPLAY_MODE = "list_display_mode"
 
         /**
          * アプリ専用フォルダ（外部ストレージ）

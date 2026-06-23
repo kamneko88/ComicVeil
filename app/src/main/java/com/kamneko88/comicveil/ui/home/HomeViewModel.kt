@@ -263,8 +263,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     ): List<FileItem> {
         val isNas = _currentLocation.value is ViewLocation.NasFolder
 
-        // ── フィルター（ローカルのみ） ───────────────────────────────────
-        val filtered = if (isNas || (statusFilter.isEmpty() && colorLabelFilter.isEmpty())) {
+        // ── フィルター（ローカル・NAS共通） ───────────────────────────────────
+        val filtered = if (statusFilter.isEmpty() && colorLabelFilter.isEmpty()) {
             raw
         } else {
             raw.filter { item ->

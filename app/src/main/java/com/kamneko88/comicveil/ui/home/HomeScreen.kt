@@ -134,7 +134,10 @@ fun HomeScreen(
 
     viewModel.transferViewModel = transferViewModel
 
-    var isListMode       by remember { mutableStateOf(true) }
+    val appPrefs         = remember { viewModel.appPrefs }
+    var isListMode       by remember {
+        mutableStateOf(appPrefs.listDisplayMode == com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.DETAIL)
+    }
     var hasPermission    by remember { mutableStateOf(false) }
     var showAddNasDialog by remember { mutableStateOf(false) }
     var editingServer    by remember { mutableStateOf<NasServer?>(null) }
@@ -451,7 +454,13 @@ fun HomeScreen(
                                         else MaterialTheme.colorScheme.onSurface
                             )
                         }
-                        IconButton(onClick = { isListMode = !isListMode }) {
+                        IconButton(onClick = {
+                            isListMode = !isListMode
+                            appPrefs.listDisplayMode = if (isListMode)
+                                com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.DETAIL
+                            else
+                                com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.COMPACT
+                        }) {
                             Icon(
                                 if (isListMode) Icons.Default.GridView
                                 else Icons.AutoMirrored.Filled.List,
@@ -639,44 +648,32 @@ fun HomeScreen(
                             // DLモード時はファイルのみ選択状態色を適用
                             val isDlSelected = !isStreamingMode && !fileItem.isFolder &&
                                                fileItem.path in dlSelectedPaths
-                            FileListItem(
-                                fileItem            = fileItem,
-                                thumbnailRepository = thumbnailRepository,
-                                status              = itemStatus,
-                                isEditMode          = isEditMode && !isNas,
-                                isSelected          = isSelected,
-                                isDlSelected        = isDlSelected,
-                                isCached            = isCached,
-                                rating              = meta?.rating ?: 0,
-                                colorLabel          = meta?.colorLabel ?: 0,
-                                onClick = {
-                                    when {
-                                        // 編集モード
-                                        isEditMode && !isNas -> {
-                                            selectedPaths = if (isSelected)
-                                                selectedPaths - fileItem.path
-                                            else
-                                                selectedPaths + fileItem.path
-                                        }
-                                        // DLモード：フォルダは普通に開く、ファイルは選択
-                                        !isStreamingMode && isNas && !fileItem.isFolder -> {
-                                            viewModel.toggleDlSelection(fileItem.path)
-                                        }
-                                        // フォルダ移動
-                                        fileItem.isFolder -> {
-                                            isEditMode    = false
-                                            selectedPaths = emptySet()
-                                            if (fileItem.isNas) viewModel.navigateToNas(
-                                                fileItem.nasServer!!, fileItem.nasPath
-                                            )
-                                            else viewModel.loadFolder(fileItem.file!!)
-                                        }
-                                        // 通常のコミックタップ
-                                        fileItem.isComic -> viewModel.onComicTapped(fileItem)
-                                    }
-                                },
-                                onInfoClick = { if (!isEditMode) viewModel.openFileInfo(fileItem) }
-                            )
+                            if (isListMode) {
+                                FileListItem(
+                                    fileItem            = fileItem,
+                                    thumbnailRepository = thumbnailRepository,
+                                    status              = itemStatus,
+                                    isEditMode          = isEditMode && !isNas,
+                                    isSelected          = isSelected,
+                                    isDlSelected        = isDlSelected,
+                                    isCached            = isCached,
+                                    rating              = meta?.rating ?: 0,
+                                    colorLabel          = meta?.colorLabel ?: 0,
+                                    onClick     = { handleFileClick(fileItem, isEditMode, isNas, isStreamingMode, isSelected, selectedPaths, viewModel, onSelectChange = { selectedPaths = it }) },
+                                    onInfoClick = { if (!isEditMode) viewModel.openFileInfo(fileItem) }
+                                )
+                            } else {
+                                CompactFileListItem(
+                                    fileItem            = fileItem,
+                                    thumbnailRepository = thumbnailRepository,
+                                    status              = itemStatus,
+                                    isEditMode          = isEditMode && !isNas,
+                                    isSelected          = isSelected,
+                                    isDlSelected        = isDlSelected,
+                                    onClick     = { handleFileClick(fileItem, isEditMode, isNas, isStreamingMode, isSelected, selectedPaths, viewModel, onSelectChange = { selectedPaths = it }) },
+                                    onInfoClick = { if (!isEditMode) viewModel.openFileInfo(fileItem) }
+                                )
+                            }
                             HorizontalDivider()
                         }
                     }
@@ -748,7 +745,6 @@ fun HomeScreen(
                 folderOrder      = folderOrder,
                 statusFilter     = statusFilter,
                 colorLabelFilter = colorLabelFilter,
-                isNas            = isNas,
                 onSortKey        = { viewModel.setSortKey(it) },
                 onFolderOrder    = { viewModel.setFolderOrder(it) },
                 onStatusFilter   = { viewModel.toggleStatusFilter(it) },
@@ -1271,6 +1267,141 @@ fun FileListItem(
     }
 }
 
+// ─── ファイルクリック共通ハンドラ ──────────────────────────────────────────────
+
+private fun handleFileClick(
+    fileItem: FileItem,
+    isEditMode: Boolean,
+    isNas: Boolean,
+    isStreamingMode: Boolean,
+    isSelected: Boolean,
+    selectedPaths: Set<String>,
+    viewModel: HomeViewModel,
+    onSelectChange: (Set<String>) -> Unit
+) {
+    when {
+        isEditMode && !isNas -> {
+            onSelectChange(
+                if (isSelected) selectedPaths - fileItem.path
+                else selectedPaths + fileItem.path
+            )
+        }
+        !isStreamingMode && isNas && !fileItem.isFolder -> {
+            viewModel.toggleDlSelection(fileItem.path)
+        }
+        fileItem.isFolder -> {
+            if (fileItem.isNas) viewModel.navigateToNas(fileItem.nasServer!!, fileItem.nasPath)
+            else viewModel.loadFolder(fileItem.file!!)
+        }
+        fileItem.isComic -> viewModel.onComicTapped(fileItem)
+    }
+}
+
+@Composable
+fun CompactFileListItem(
+    fileItem: FileItem,
+    thumbnailRepository: ThumbnailRepository,
+    onClick: () -> Unit,
+    onInfoClick: () -> Unit = {},
+    status: ReadStatus = ReadStatus.UNREAD,
+    isEditMode: Boolean = false,
+    isSelected: Boolean = false,
+    isDlSelected: Boolean = false,
+) {
+    var thumbnailFile by remember(fileItem.path) { mutableStateOf<File?>(null) }
+    LaunchedEffect(fileItem.path) {
+        thumbnailFile = thumbnailRepository.getOrGenerateThumbnail(fileItem)
+    }
+
+    val backgroundColor = when {
+        isSelected   -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+        isDlSelected -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+        else         -> Color.Transparent
+    }
+
+    Row(
+        modifier          = Modifier
+            .fillMaxWidth()
+            .background(backgroundColor)
+            .clickable { onClick() }
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // 編集モード：チェックボックス
+        if (isEditMode) {
+            Icon(
+                imageVector        = if (isSelected) Icons.Default.CheckBox
+                                     else Icons.Default.CheckBoxOutlineBlank,
+                contentDescription = null,
+                modifier           = Modifier.size(20.dp).padding(end = 4.dp),
+                tint               = if (isSelected) MaterialTheme.colorScheme.primary
+                                     else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        // サムネイル（小）
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            if (thumbnailFile != null) {
+                AsyncImage(
+                    model              = thumbnailFile,
+                    contentDescription = null,
+                    modifier           = Modifier.fillMaxSize(),
+                    contentScale       = ContentScale.Crop
+                )
+            } else {
+                Icon(
+                    imageVector        = when (fileItem.type) {
+                        FileItemType.FOLDER -> Icons.Default.Folder
+                        else                -> Icons.Default.InsertDriveFile
+                    },
+                    contentDescription = null,
+                    modifier           = Modifier.size(24.dp),
+                    tint               = when (fileItem.type) {
+                        FileItemType.FOLDER -> MaterialTheme.colorScheme.primary
+                        else -> if (fileItem.isNas) MaterialTheme.colorScheme.tertiary
+                                else MaterialTheme.colorScheme.secondary
+                    }
+                )
+            }
+        }
+
+        Spacer(Modifier.width(10.dp))
+
+        // ファイル名（1行）
+        Text(
+            text     = fileItem.name,
+            style    = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+
+        // 読書状態バッジ（読書中/既読のみ）
+        if (fileItem.isComic && status != ReadStatus.UNREAD) {
+            Spacer(Modifier.width(4.dp))
+            ReadStatusBadge(status = status)
+        }
+
+        // 情報ボタン
+        if (fileItem.isComic) {
+            IconButton(onClick = onInfoClick, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    imageVector        = Icons.Default.Info,
+                    contentDescription = "ファイル情報",
+                    modifier           = Modifier.size(16.dp),
+                    tint               = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
 // ─── ソート・フィルターシート表示トリガー（HomeScreenの内容は上記まで） ──────────────
 // NOTE: showSortSheet が trueのときに ModalBottomSheet を表示する。
 // Scaffold の外（HomeScreen 関数の末尾）に配置済み。
@@ -1284,7 +1415,6 @@ fun SortFilterSheet(
     folderOrder: SortPrefs.FolderOrder,
     statusFilter: Set<String>,
     colorLabelFilter: Set<String>,
-    isNas: Boolean,
     onSortKey: (SortPrefs.SortKey) -> Unit,
     onFolderOrder: (SortPrefs.FolderOrder) -> Unit,
     onStatusFilter: (String) -> Unit,
@@ -1341,8 +1471,8 @@ fun SortFilterSheet(
             }
         }
 
-        // ── フィルター（ローカルのみ） ───────────────────────────
-        if (!isNas) {
+        // ── フィルター（ローカル・NAS共通） ───────────────────────────
+        run {
             Spacer(Modifier.height(16.dp))
             HorizontalDivider()
             Spacer(Modifier.height(12.dp))
