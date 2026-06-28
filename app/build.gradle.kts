@@ -12,8 +12,8 @@ android {
         applicationId = "com.kamneko88.comicveil"
         minSdk = 26
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.16.0"
+        versionCode = 17
+        versionName = "0.17.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -34,7 +34,6 @@ android {
         compose = true
         buildConfig = true
     }
-    // SMBJ の依存関係に含まれる重複ファイルを除外
     packaging {
         resources {
             excludes += setOf(
@@ -77,8 +76,11 @@ dependencies {
     // RAR展開
     implementation("com.github.junrar:junrar:7.5.5")
 
-    // ZIP展開（Shift-JIS対応）
+    // ZIP展開（Shift-JIS対応・7z対応）
     implementation("org.apache.commons:commons-compress:1.26.2")
+
+    // パスワード付きZIP対応
+    implementation("net.lingala.zip4j:zip4j:2.11.5")
 
     // SMB接続（NASアクセス）
     implementation("com.hierynomus:smbj:0.13.0")

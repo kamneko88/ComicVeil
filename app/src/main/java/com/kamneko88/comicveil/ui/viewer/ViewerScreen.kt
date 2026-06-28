@@ -44,6 +44,8 @@ import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
@@ -52,6 +54,8 @@ import androidx.compose.material.icons.filled.Brightness4
 import androidx.compose.material.icons.filled.Brightness7
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -60,6 +64,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Snackbar
@@ -92,6 +97,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -195,6 +203,59 @@ fun ViewerScreen(
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
+        }
+
+        // ── パスワード入力が必要 ────────────────────────────────────────────
+        uiState.needsPassword -> {
+            var password by remember { mutableStateOf("") }
+            var showPassword by remember { mutableStateOf(false) }
+
+            AlertDialog(
+                onDismissRequest = onClose,
+                title = { Text("パスワードを入力") },
+                text  = {
+                    Column {
+                        Text(
+                            text  = "このZIPファイルはパスワードで保護されています。",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value         = password,
+                            onValueChange = { password = it },
+                            label         = { Text("パスワード") },
+                            singleLine    = true,
+                            visualTransformation = if (showPassword)
+                                VisualTransformation.None
+                            else
+                                PasswordVisualTransformation(),
+                            trailingIcon  = {
+                                IconButton(onClick = { showPassword = !showPassword }) {
+                                    Icon(
+                                        imageVector = if (showPassword) Icons.Default.VisibilityOff
+                                                      else Icons.Default.Visibility,
+                                        contentDescription = if (showPassword) "隠す" else "表示"
+                                    )
+                                }
+                            },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(
+                                onDone = { if (password.isNotEmpty()) viewModel.retryWithPassword(password) }
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick  = { if (password.isNotEmpty()) viewModel.retryWithPassword(password) },
+                        enabled  = password.isNotEmpty()
+                    ) { Text("開く") }
+                },
+                dismissButton = {
+                    TextButton(onClick = onClose) { Text("キャンセル") }
+                }
+            )
         }
 
         uiState.error != null -> {
@@ -564,8 +625,6 @@ private fun ZoomablePage(
                     } ?: false
 
                     if (isPinch) {
-                        // ── ピンチズーム ──────────────────────────────────────
-                        // バウンスONのときはオーバーシュートを許可、OFFは範囲内に即クランプ
                         val maxScale = if (zoomBounce) OVERSHOOT_MAX else MAX_SCALE
                         val minScale = if (zoomBounce) OVERSHOOT_MIN else MIN_SCALE
 
@@ -578,21 +637,15 @@ private fun ZoomablePage(
                             ev.changes.forEach { it.consume() }
                         } while (true)
 
-                        // 指を離したあとの処理
                         if (zoomBounce) {
-                            // バウンスON：範囲外ならspringで戻す
                             val target = scaleAnim.value.coerceIn(MIN_SCALE, MAX_SCALE)
                             if (target != scaleAnim.value) {
                                 scope.launch {
-                                    scaleAnim.animateTo(
-                                        target,
-                                        spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMedium)
-                                    )
+                                    scaleAnim.animateTo(target, spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMedium))
                                     if (target == MIN_SCALE) offset = Offset.Zero
                                 }
                             }
                         } else {
-                            // バウンスOFF：MIN未満になっていたら即スナップ
                             if (scaleAnim.value < MIN_SCALE) {
                                 scope.launch {
                                     scaleAnim.snapTo(MIN_SCALE)
@@ -602,7 +655,6 @@ private fun ZoomablePage(
                         }
 
                     } else {
-                        // ── タップ（consume しないのでスワイプはPagerへ） ───────
                         var moved = false
                         while (true) {
                             val ev     = awaitPointerEvent()
