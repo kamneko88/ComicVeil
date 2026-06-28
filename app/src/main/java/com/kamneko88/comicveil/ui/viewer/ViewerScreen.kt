@@ -2,6 +2,7 @@ package com.kamneko88.comicveil.ui.viewer
 
 import android.app.Application
 import android.os.Build
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -19,9 +20,10 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.rememberTransformableState
-import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -72,6 +74,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -84,6 +87,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -93,6 +97,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
+import com.kamneko88.comicveil.MainActivity
+import kotlin.math.abs
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -120,6 +126,14 @@ fun ViewerScreen(
     var brightness           by remember { mutableFloatStateOf(initialBrightness) }
     var showBrightnessSlider by remember { mutableStateOf(false) }
     var showBookmarkList     by remember { mutableStateOf(false) }
+
+    var isAnyPageZoomed by remember { mutableStateOf(false) }
+
+    val appPrefs          = remember { com.kamneko88.comicveil.data.AppPrefs(context) }
+    val isReverseLayout   = appPrefs.pageDirection == com.kamneko88.comicveil.data.AppPrefs.PageDirection.RIGHT_TO_LEFT
+    val pageAnimation     = appPrefs.pageAnimation
+    val volumeKeyPageTurn = appPrefs.volumeKeyPageTurn
+    val zoomBounce        = appPrefs.zoomBounce
 
     LaunchedEffect(Unit) { viewModel.loadBookmarks() }
 
@@ -237,12 +251,44 @@ fun ViewerScreen(
                 }
             }
 
+            DisposableEffect(volumeKeyPageTurn, pagerCount) {
+                val mainActivity = context as? MainActivity
+                if (mainActivity != null && volumeKeyPageTurn) {
+                    mainActivity.volumeKeyListener = { keyCode ->
+                        when (keyCode) {
+                            KeyEvent.KEYCODE_VOLUME_UP -> {
+                                scope.launch {
+                                    val target = (pagerState.currentPage - 1).coerceAtLeast(0)
+                                    pagerState.animateScrollToPage(target)
+                                }
+                                true
+                            }
+                            KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                                scope.launch {
+                                    val target = (pagerState.currentPage + 1).coerceAtMost(pagerCount - 1)
+                                    pagerState.animateScrollToPage(target)
+                                }
+                                true
+                            }
+                            else -> false
+                        }
+                    }
+                }
+                onDispose {
+                    (context as? MainActivity)?.volumeKeyListener = null
+                }
+            }
+
             val springFling = PagerDefaults.flingBehavior(
                 state = pagerState,
-                snapAnimationSpec = spring(
-                    dampingRatio = Spring.DampingRatioHighBouncy,
-                    stiffness    = Spring.StiffnessVeryLow
-                )
+                snapAnimationSpec = if (pageAnimation) {
+                    spring(
+                        dampingRatio = Spring.DampingRatioHighBouncy,
+                        stiffness    = Spring.StiffnessVeryLow
+                    )
+                } else {
+                    tween(durationMillis = 200)
+                }
             )
 
             Scaffold(
@@ -264,43 +310,41 @@ fun ViewerScreen(
                         .padding(innerPadding)
                         .statusBarsPadding()
                 ) {
-                    val resetZoomOnPageChange = true
-                    val appPrefs          = remember { com.kamneko88.comicveil.data.AppPrefs(context) }
-                    val doubleTapZoomScale = appPrefs.doubleTapZoom.scale
-
                     HorizontalPager(
-                        state                  = pagerState,
-                        userScrollEnabled      = true,
-                        modifier               = Modifier.fillMaxSize(),
-                        reverseLayout          = true,
-                        flingBehavior          = springFling,
+                        state                   = pagerState,
+                        userScrollEnabled       = !isAnyPageZoomed,
+                        modifier                = Modifier.fillMaxSize(),
+                        reverseLayout           = isReverseLayout,
+                        flingBehavior           = springFling,
                         beyondViewportPageCount = 2
                     ) { pageIndex ->
                         when {
                             isProgressive && pageIndex < pageFiles.size -> {
                                 ZoomablePage(
-                                    imageModel            = pageFiles[pageIndex],
-                                    pageIndex             = pageIndex,
-                                    currentPage           = pagerState.currentPage,
-                                    resetZoomOnPageChange = resetZoomOnPageChange,
-                                    doubleTapZoomScale    = doubleTapZoomScale,
-                                    onMenuToggle          = { menuVisible = !menuVisible },
-                                    onPageLimit           = { viewModel.onPageLimitReached(it) },
-                                    isFirst               = pageIndex == 0,
-                                    isLast                = pageIndex == pagerCount - 1
+                                    imageModel    = pageFiles[pageIndex],
+                                    pageIndex     = pageIndex,
+                                    currentPage   = pagerState.currentPage,
+                                    isScrolling   = pagerState.isScrollInProgress,
+                                    zoomBounce    = zoomBounce,
+                                    onMenuToggle  = { menuVisible = !menuVisible },
+                                    onPageLimit   = { viewModel.onPageLimitReached(it) },
+                                    isFirst       = pageIndex == 0,
+                                    isLast        = pageIndex == pagerCount - 1,
+                                    onZoomChanged = { isAnyPageZoomed = it }
                                 )
                             }
                             !isProgressive && pageIndex < pages.size -> {
                                 ZoomablePage(
-                                    imageModel            = pages[pageIndex],
-                                    pageIndex             = pageIndex,
-                                    currentPage           = pagerState.currentPage,
-                                    resetZoomOnPageChange = resetZoomOnPageChange,
-                                    doubleTapZoomScale    = doubleTapZoomScale,
-                                    onMenuToggle          = { menuVisible = !menuVisible },
-                                    onPageLimit           = { viewModel.onPageLimitReached(it) },
-                                    isFirst               = pageIndex == 0,
-                                    isLast                = pageIndex == pagerCount - 1
+                                    imageModel    = pages[pageIndex],
+                                    pageIndex     = pageIndex,
+                                    currentPage   = pagerState.currentPage,
+                                    isScrolling   = pagerState.isScrollInProgress,
+                                    zoomBounce    = zoomBounce,
+                                    onMenuToggle  = { menuVisible = !menuVisible },
+                                    onPageLimit   = { viewModel.onPageLimitReached(it) },
+                                    isFirst       = pageIndex == 0,
+                                    isLast        = pageIndex == pagerCount - 1,
+                                    onZoomChanged = { isAnyPageZoomed = it }
                                 )
                             }
                             else -> {
@@ -319,16 +363,8 @@ fun ViewerScreen(
                         }
                     }
 
-                    AnimatedVisibility(
-                        visible = menuVisible,
-                        enter   = fadeIn(tween(200)),
-                        exit    = fadeOut(tween(200))
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.4f))
-                        )
+                    AnimatedVisibility(visible = menuVisible, enter = fadeIn(tween(200)), exit = fadeOut(tween(200))) {
+                        Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)))
                     }
 
                     if (showBookmarkList) {
@@ -361,46 +397,21 @@ fun ViewerScreen(
                                                     .fillMaxWidth()
                                                     .clickable {
                                                         showBookmarkList = false
-                                                        scope.launch {
-                                                            pagerState.animateScrollToPage(bookmark.page)
-                                                        }
+                                                        scope.launch { pagerState.animateScrollToPage(bookmark.page) }
                                                     }
                                                     .padding(vertical = 8.dp)
                                             ) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(48.dp)
-                                                        .clip(RoundedCornerShape(4.dp))
-                                                        .background(Color.DarkGray)
-                                                ) {
+                                                Box(modifier = Modifier.size(48.dp).clip(RoundedCornerShape(4.dp)).background(Color.DarkGray)) {
                                                     if (!isProgressive && bookmark.page in pages.indices) {
-                                                        AsyncImage(
-                                                            model            = pages[bookmark.page],
-                                                            contentDescription = null,
-                                                            contentScale     = ContentScale.Crop,
-                                                            modifier         = Modifier.fillMaxSize()
-                                                        )
+                                                        AsyncImage(model = pages[bookmark.page], contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                                                     } else if (isProgressive && bookmark.page < pageFiles.size) {
-                                                        AsyncImage(
-                                                            model            = pageFiles[bookmark.page],
-                                                            contentDescription = null,
-                                                            contentScale     = ContentScale.Crop,
-                                                            modifier         = Modifier.fillMaxSize()
-                                                        )
+                                                        AsyncImage(model = pageFiles[bookmark.page], contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                                                     }
                                                 }
                                                 Spacer(modifier = Modifier.width(12.dp))
-                                                Text(
-                                                    text     = "${bookmark.page + 1}ページ",
-                                                    style    = MaterialTheme.typography.bodyMedium,
-                                                    modifier = Modifier.weight(1f)
-                                                )
+                                                Text(text = "${bookmark.page + 1}ページ", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                                                 IconButton(onClick = { viewModel.deleteBookmark(bookmark.page) }) {
-                                                    Icon(
-                                                        Icons.Default.Delete,
-                                                        contentDescription = "削除",
-                                                        tint               = MaterialTheme.colorScheme.error
-                                                    )
+                                                    Icon(Icons.Default.Delete, contentDescription = "削除", tint = MaterialTheme.colorScheme.error)
                                                 }
                                             }
                                             HorizontalDivider()
@@ -408,177 +419,62 @@ fun ViewerScreen(
                                     }
                                 }
                             },
-                            confirmButton = {
-                                TextButton(onClick = { showBookmarkList = false }) { Text("閉じる") }
-                            }
+                            confirmButton = { TextButton(onClick = { showBookmarkList = false }) { Text("閉じる") } }
                         )
                     }
 
-                    AnimatedVisibility(
-                        visible  = menuVisible,
-                        enter    = fadeIn(tween(200)),
-                        exit     = fadeOut(tween(200)),
-                        modifier = Modifier.align(Alignment.Center)
-                    ) {
+                    AnimatedVisibility(visible = menuVisible, enter = fadeIn(tween(200)), exit = fadeOut(tween(200)), modifier = Modifier.align(Alignment.Center)) {
                         Button(onClick = onClose, modifier = Modifier.padding(16.dp)) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
                             Text(text = "  本を閉じる", fontSize = 16.sp)
                         }
                     }
 
-                    AnimatedVisibility(
-                        visible  = menuVisible,
-                        enter    = slideInVertically(tween(200)) { it },
-                        exit     = slideOutVertically(tween(200)) { it },
-                        modifier = Modifier.align(Alignment.BottomCenter)
-                    ) {
-                        // pagerCount を使ってスライダー範囲を計算
+                    AnimatedVisibility(visible = menuVisible, enter = slideInVertically(tween(200)) { it }, exit = slideOutVertically(tween(200)) { it }, modifier = Modifier.align(Alignment.BottomCenter)) {
                         val maxSlider = (pagerCount - 1).toFloat().coerceAtLeast(0f)
-                        var sliderValue by remember {
-                            mutableFloatStateOf(
-                                (pagerCount - 1 - pagerState.currentPage).toFloat().coerceIn(0f, maxSlider)
-                            )
-                        }
-                        val sliderTargetPage by remember {
-                            derivedStateOf { (pagerCount - 1 - sliderValue.toInt()).coerceIn(0, pagerCount - 1) }
-                        }
+                        var sliderValue by remember { mutableFloatStateOf((pagerCount - 1 - pagerState.currentPage).toFloat().coerceIn(0f, maxSlider)) }
+                        val sliderTargetPage by remember { derivedStateOf { (pagerCount - 1 - sliderValue.toInt()).coerceIn(0, pagerCount - 1) } }
                         var isSliding by remember { mutableStateOf(false) }
 
                         LaunchedEffect(pagerState.currentPage) {
-                            if (!isSliding) {
-                                sliderValue = (pagerCount - 1 - pagerState.currentPage)
-                                    .toFloat().coerceIn(0f, maxSlider)
-                            }
+                            if (!isSliding) sliderValue = (pagerCount - 1 - pagerState.currentPage).toFloat().coerceIn(0f, maxSlider)
                         }
 
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Color.Black.copy(alpha = 0.7f))
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                        ) {
-                            AnimatedVisibility(
-                                visible = isSliding && !isProgressive,
-                                enter   = fadeIn(tween(150)),
-                                exit    = fadeOut(tween(150))
-                            ) {
-                                PageThumbnailStrip(
-                                    pages        = pages,
-                                    targetPage   = sliderTargetPage,
-                                    visibleCount = 5
-                                )
+                        Column(modifier = Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.7f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            AnimatedVisibility(visible = isSliding && !isProgressive, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
+                                PageThumbnailStrip(pages = pages, targetPage = sliderTargetPage, visibleCount = 5)
                             }
-
                             Spacer(modifier = Modifier.height(4.dp))
-
-                            Row(
-                                verticalAlignment     = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                modifier              = Modifier.fillMaxWidth()
-                            ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                                 IconButton(onClick = { showBookmarkList = true }) {
-                                    Icon(
-                                        Icons.Default.BookmarkBorder,
-                                        contentDescription = "ブックマーク一覧",
-                                        tint = if (uiState.bookmarks.isNotEmpty()) Color(0xFFFFD700) else Color.White
-                                    )
+                                    Icon(Icons.Default.BookmarkBorder, contentDescription = "ブックマーク一覧", tint = if (uiState.bookmarks.isNotEmpty()) Color(0xFFFFD700) else Color.White)
                                 }
                                 IconButton(onClick = { viewModel.toggleBookmark(pagerState.currentPage) }) {
-                                    Icon(
-                                        if (uiState.isCurrentPageBookmarked) Icons.Default.Bookmark
-                                        else Icons.Default.BookmarkBorder,
-                                        contentDescription = "ブックマーク",
-                                        tint = if (uiState.isCurrentPageBookmarked) Color(0xFFFFD700) else Color.White
-                                    )
+                                    Icon(if (uiState.isCurrentPageBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder, contentDescription = "ブックマーク", tint = if (uiState.isCurrentPageBookmarked) Color(0xFFFFD700) else Color.White)
                                 }
                             }
-
-                            val displayPage = if (isSliding) sliderTargetPage + 1
-                                             else pagerState.currentPage + 1
-                            Text(
-                                text       = "$displayPage / $pagerCount",
-                                color      = Color.White,
-                                fontSize   = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier   = Modifier.align(Alignment.CenterHorizontally)
-                            )
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier          = Modifier.fillMaxWidth()
-                            ) {
+                            Text(text = "${if (isSliding) sliderTargetPage + 1 else pagerState.currentPage + 1} / $pagerCount", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.CenterHorizontally))
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                                 if (maxSlider > 0f) {
                                     Slider(
-                                        value    = sliderValue,
-                                        onValueChange = { newValue ->
-                                            sliderValue = newValue
-                                            isSliding   = true
-                                            showBrightnessSlider = false
-                                        },
-                                        onValueChangeFinished = {
-                                            isSliding = false
-                                            scope.launch {
-                                                pagerState.animateScrollToPage(sliderTargetPage)
-                                            }
-                                        },
+                                        value = sliderValue,
+                                        onValueChange = { sliderValue = it; isSliding = true; showBrightnessSlider = false },
+                                        onValueChangeFinished = { isSliding = false; scope.launch { pagerState.animateScrollToPage(sliderTargetPage) } },
                                         valueRange = 0f..maxSlider,
-                                        steps      = if (pagerCount > 2) pagerCount - 2 else 0,
-                                        modifier   = Modifier.weight(1f),
-                                        thumb = {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(28.dp)
-                                                    .background(Color.White, CircleShape)
-                                            )
-                                        }
+                                        steps = if (pagerCount > 2) pagerCount - 2 else 0,
+                                        modifier = Modifier.weight(1f),
+                                        thumb = { Box(modifier = Modifier.size(28.dp).background(Color.White, CircleShape)) }
                                     )
-                                } else {
-                                    Spacer(Modifier.weight(1f))
-                                }
+                                } else { Spacer(Modifier.weight(1f)) }
                                 IconButton(onClick = { showBrightnessSlider = !showBrightnessSlider }) {
-                                    Icon(
-                                        imageVector = when {
-                                            brightness < 0.33f -> Icons.Default.Brightness4
-                                            brightness < 0.66f -> Icons.Default.Brightness7
-                                            else               -> Icons.Default.BrightnessHigh
-                                        },
-                                        contentDescription = "明るさ",
-                                        tint = if (showBrightnessSlider)
-                                            androidx.compose.ui.graphics.Color.Yellow
-                                        else Color.White
-                                    )
+                                    Icon(imageVector = when { brightness < 0.33f -> Icons.Default.Brightness4; brightness < 0.66f -> Icons.Default.Brightness7; else -> Icons.Default.BrightnessHigh }, contentDescription = "明るさ", tint = if (showBrightnessSlider) androidx.compose.ui.graphics.Color.Yellow else Color.White)
                                 }
                             }
-
-                            AnimatedVisibility(
-                                visible = showBrightnessSlider,
-                                enter   = fadeIn(tween(150)),
-                                exit    = fadeOut(tween(150))
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier          = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 8.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Brightness4,
-                                        contentDescription = null,
-                                        tint     = Color.White.copy(alpha = 0.7f),
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Slider(
-                                        value         = brightness,
-                                        onValueChange = { brightness = it },
-                                        valueRange    = 0.01f..1f,
-                                        modifier      = Modifier.weight(1f).padding(horizontal = 8.dp)
-                                    )
-                                    Icon(
-                                        Icons.Default.BrightnessHigh,
-                                        contentDescription = null,
-                                        tint     = Color.White.copy(alpha = 0.7f),
-                                        modifier = Modifier.size(18.dp)
-                                    )
+                            AnimatedVisibility(visible = showBrightnessSlider, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+                                    Icon(Icons.Default.Brightness4, contentDescription = null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                                    Slider(value = brightness, onValueChange = { brightness = it }, valueRange = 0.01f..1f, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
+                                    Icon(Icons.Default.BrightnessHigh, contentDescription = null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
                                 }
                             }
                         }
@@ -592,61 +488,16 @@ fun ViewerScreen(
 // ─── サムネイルストリップ ─────────────────────────────────────────────────────
 
 @Composable
-private fun PageThumbnailStrip(
-    pages: List<ByteArray>,
-    targetPage: Int,
-    visibleCount: Int = 5
-) {
+private fun PageThumbnailStrip(pages: List<ByteArray>, targetPage: Int, visibleCount: Int = 5) {
     val half    = visibleCount / 2
-    val indices = (-half..half).map { offset ->
-        val idx = targetPage + offset
-        if (idx in pages.indices) idx else null
-    }
-
-    Row(
-        modifier              = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment     = Alignment.Bottom
-    ) {
+    val indices = (-half..half).map { offset -> val idx = targetPage + offset; if (idx in pages.indices) idx else null }
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.Bottom) {
         indices.forEachIndexed { i, pageIdx ->
-            val isCenter    = (i == half)
-            val thumbWidth  = if (isCenter) 72.dp else 52.dp
-            val thumbAlpha  = if (isCenter) 1.0f   else 0.55f
-            val borderColor = if (isCenter) Color.White else Color.Transparent
-
-            Box(
-                modifier = Modifier
-                    .width(thumbWidth)
-                    .aspectRatio(0.71f)
-                    .clip(RoundedCornerShape(4.dp))
-                    .border(1.5.dp, borderColor, RoundedCornerShape(4.dp))
-                    .alpha(thumbAlpha)
-                    .background(Color.DarkGray)
-            ) {
-                if (pageIdx != null) {
-                    AsyncImage(
-                        model              = pages[pageIdx],
-                        contentDescription = "ページ ${pageIdx + 1}",
-                        contentScale       = ContentScale.Crop,
-                        modifier           = Modifier.fillMaxSize()
-                    )
-                }
-                if (isCenter && pageIdx != null) {
-                    Text(
-                        text       = "${pageIdx + 1}",
-                        color      = Color.White,
-                        fontSize   = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier   = Modifier
-                            .align(Alignment.BottomCenter)
-                            .background(Color.Black.copy(alpha = 0.55f))
-                            .padding(horizontal = 4.dp, vertical = 1.dp)
-                    )
-                }
+            val isCenter = (i == half)
+            Box(modifier = Modifier.width(if (isCenter) 72.dp else 52.dp).aspectRatio(0.71f).clip(RoundedCornerShape(4.dp)).border(1.5.dp, if (isCenter) Color.White else Color.Transparent, RoundedCornerShape(4.dp)).alpha(if (isCenter) 1.0f else 0.55f).background(Color.DarkGray)) {
+                if (pageIdx != null) AsyncImage(model = pages[pageIdx], contentDescription = "ページ ${pageIdx + 1}", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                if (isCenter && pageIdx != null) Text(text = "${pageIdx + 1}", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.BottomCenter).background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 4.dp, vertical = 1.dp))
             }
-
             if (i < indices.lastIndex) Spacer(modifier = Modifier.width(4.dp))
         }
     }
@@ -654,64 +505,130 @@ private fun PageThumbnailStrip(
 
 // ─── ズーム可能なページコンポーザブル ────────────────────────────────────────
 
-private const val MIN_SCALE     = 1.0f
-private const val MAX_SCALE     = 3.0f
-private const val DBL_TAP_SCALE = 1.2f
+private const val MIN_SCALE      = 1.0f
+private const val MAX_SCALE      = 3.0f
+private const val OVERSHOOT_MAX  = MAX_SCALE * 1.15f
+private const val OVERSHOOT_MIN  = MIN_SCALE * 0.85f
+private const val SWIPE_GUARD_MS = 300L
 
 @Composable
 private fun ZoomablePage(
-    imageModel: Any,  // ByteArray（通常）または String（Progressive・Coilがファイルパスを直接読む）
+    imageModel: Any,
     pageIndex: Int,
     currentPage: Int,
-    resetZoomOnPageChange: Boolean,
-    doubleTapZoomScale: Float,
+    isScrolling: Boolean,
+    zoomBounce: Boolean,
     onMenuToggle: () -> Unit,
     onPageLimit: (PageLimitEvent) -> Unit,
     isFirst: Boolean,
-    isLast: Boolean
+    isLast: Boolean,
+    onZoomChanged: (Boolean) -> Unit
 ) {
-    val scope  = rememberCoroutineScope()
-    var scale  by remember { mutableFloatStateOf(MIN_SCALE) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
+    val scope     = rememberCoroutineScope()
+    val scaleAnim = remember { Animatable(MIN_SCALE) }
+    var offset    by remember { mutableStateOf(Offset.Zero) }
 
     LaunchedEffect(currentPage) {
-        if (resetZoomOnPageChange) {
-            scale  = MIN_SCALE
+        if (pageIndex != currentPage) {
+            scaleAnim.snapTo(MIN_SCALE)
             offset = Offset.Zero
+            onZoomChanged(false)
         }
     }
 
-    val transformableState = rememberTransformableState { zoomChange, panChange, _ ->
-        val newScale = (scale * zoomChange).coerceIn(MIN_SCALE, MAX_SCALE)
-        scale = newScale
-        if (scale > MIN_SCALE) offset = offset + panChange
-        else                   offset = Offset.Zero
+    val isZoomed = scaleAnim.value > MIN_SCALE
+    LaunchedEffect(isZoomed) { onZoomChanged(isZoomed) }
+
+    var lastScrollEndTime by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(isScrolling) {
+        if (!isScrolling) lastScrollEndTime = System.currentTimeMillis()
     }
-    val isZoomed = scale > MIN_SCALE
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .transformable(state = transformableState, enabled = isZoomed)
             .pointerInput(pageIndex) {
-                detectTapGestures(
-                    onDoubleTap = {
-                        scope.launch {
-                            if (scale > MIN_SCALE) { scale = MIN_SCALE; offset = Offset.Zero }
-                            else                     scale = doubleTapZoomScale
+                awaitEachGesture {
+                    val firstDown = awaitFirstDown(requireUnconsumed = false)
+                    val downTime  = System.currentTimeMillis()
+                    val downPos   = firstDown.position
+
+                    val isPinch = withTimeoutOrNull(80L) {
+                        var found = false
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            if (ev.changes.size >= 2) { found = true; break }
+                            if (ev.changes.any { it.positionChanged() && abs(it.position.x - downPos.x) > 8f }) break
                         }
-                    },
-                    onTap = { tapOffset ->
-                        if (isZoomed) { onMenuToggle(); return@detectTapGestures }
-                        val isRightTap = tapOffset.x > size.width * 0.66f
-                        val isLeftTap  = tapOffset.x < size.width * 0.33f
-                        when {
-                            isRightTap && isFirst -> onPageLimit(PageLimitEvent.FIRST)
-                            isLeftTap  && isLast  -> onPageLimit(PageLimitEvent.LAST)
-                            else                  -> onMenuToggle()
+                        found
+                    } ?: false
+
+                    if (isPinch) {
+                        // ── ピンチズーム ──────────────────────────────────────
+                        // バウンスONのときはオーバーシュートを許可、OFFは範囲内に即クランプ
+                        val maxScale = if (zoomBounce) OVERSHOOT_MAX else MAX_SCALE
+                        val minScale = if (zoomBounce) OVERSHOOT_MIN else MIN_SCALE
+
+                        do {
+                            val ev = awaitPointerEvent()
+                            if (ev.changes.size < 2) break
+                            val newScale = (scaleAnim.value * ev.calculateZoom()).coerceIn(minScale, maxScale)
+                            scope.launch { scaleAnim.snapTo(newScale) }
+                            if (scaleAnim.value > MIN_SCALE) offset = offset + ev.calculatePan()
+                            ev.changes.forEach { it.consume() }
+                        } while (true)
+
+                        // 指を離したあとの処理
+                        if (zoomBounce) {
+                            // バウンスON：範囲外ならspringで戻す
+                            val target = scaleAnim.value.coerceIn(MIN_SCALE, MAX_SCALE)
+                            if (target != scaleAnim.value) {
+                                scope.launch {
+                                    scaleAnim.animateTo(
+                                        target,
+                                        spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMedium)
+                                    )
+                                    if (target == MIN_SCALE) offset = Offset.Zero
+                                }
+                            }
+                        } else {
+                            // バウンスOFF：MIN未満になっていたら即スナップ
+                            if (scaleAnim.value < MIN_SCALE) {
+                                scope.launch {
+                                    scaleAnim.snapTo(MIN_SCALE)
+                                    offset = Offset.Zero
+                                }
+                            }
+                        }
+
+                    } else {
+                        // ── タップ（consume しないのでスワイプはPagerへ） ───────
+                        var moved = false
+                        while (true) {
+                            val ev     = awaitPointerEvent()
+                            val change = ev.changes.firstOrNull() ?: break
+                            if (abs(change.position.x - downPos.x) > 10f ||
+                                abs(change.position.y - downPos.y) > 10f) moved = true
+                            if (!change.pressed) break
+                        }
+
+                        if (moved) return@awaitEachGesture
+                        if (System.currentTimeMillis() - downTime > 300L) return@awaitEachGesture
+                        if (System.currentTimeMillis() - lastScrollEndTime < SWIPE_GUARD_MS) return@awaitEachGesture
+
+                        if (isZoomed) {
+                            onMenuToggle()
+                        } else {
+                            val isRightTap = downPos.x > size.width * 0.66f
+                            val isLeftTap  = downPos.x < size.width * 0.33f
+                            when {
+                                isRightTap && isFirst -> onPageLimit(PageLimitEvent.FIRST)
+                                isLeftTap  && isLast  -> onPageLimit(PageLimitEvent.LAST)
+                                else                  -> onMenuToggle()
+                            }
                         }
                     }
-                )
+                }
             },
         contentAlignment = Alignment.Center
     ) {
@@ -721,8 +638,8 @@ private fun ZoomablePage(
             modifier           = Modifier
                 .fillMaxSize()
                 .graphicsLayer(
-                    scaleX       = scale,
-                    scaleY       = scale,
+                    scaleX       = scaleAnim.value,
+                    scaleY       = scaleAnim.value,
                     translationX = offset.x,
                     translationY = offset.y
                 ),

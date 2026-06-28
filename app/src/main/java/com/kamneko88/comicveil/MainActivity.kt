@@ -3,12 +3,12 @@ package com.kamneko88.comicveil
 import android.content.Intent
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -26,6 +26,11 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 
 class MainActivity : ComponentActivity() {
+
+    // 音量キーイベントを ViewerScreen に転送するコールバック
+    // ViewerScreen が DisposableEffect で登録・解除する
+    var volumeKeyListener: ((keyCode: Int) -> Boolean)? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -34,6 +39,15 @@ class MainActivity : ComponentActivity() {
                 ComicVeilApp(intent = intent)
             }
         }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        // 登録済みリスナーが音量キーを消費したら super を呼ばない
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            val consumed = volumeKeyListener?.invoke(keyCode) ?: false
+            if (consumed) return true
+        }
+        return super.onKeyDown(keyCode, event)
     }
 }
 
@@ -50,7 +64,6 @@ fun ComicVeilApp(intent: Intent? = null) {
             val filePath: String? = when (uri.scheme) {
                 "file" -> uri.path
                 "content" -> {
-                    // content URI → アプリキャッシュにコピーしてパスを取得
                     val context = navController.context
                     val fileName = context.contentResolver.query(
                         uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
@@ -75,10 +88,9 @@ fun ComicVeilApp(intent: Intent? = null) {
     }
 
     NavHost(
-        navController  = navController,
+        navController    = navController,
         startDestination = "home"
     ) {
-        // ─── ホーム画面 ──────────────────────────────────────────────────
         composable("home") {
             HomeScreen(
                 navController     = navController,
@@ -87,7 +99,6 @@ fun ComicVeilApp(intent: Intent? = null) {
             )
         }
 
-        // ─── ビューワー画面 ──────────────────────────────────────────────
         composable(
             route     = "viewer/{filePath}",
             arguments = listOf(
@@ -102,7 +113,6 @@ fun ComicVeilApp(intent: Intent? = null) {
             )
         }
 
-        // ─── 設定画面 ───────────────────────────────────────────────────────
         composable("settings") {
             SettingsScreen(
                 viewModel = homeViewModel,
@@ -110,7 +120,6 @@ fun ComicVeilApp(intent: Intent? = null) {
             )
         }
 
-        // ─── 転送状況画面 ────────────────────────────────────────────────
         composable(
             route     = "transfer/{folderName}",
             arguments = listOf(

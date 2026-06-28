@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -51,13 +52,20 @@ fun SettingsScreen(
     val thumbnailCacheDir = remember { File(context.cacheDir, "thumbnails") }
     val appPrefs = remember { viewModel.appPrefs }
 
+    // ── 読む ──────────────────────────────────────────────────────────────
+    var pageDirection     by remember { mutableStateOf(appPrefs.pageDirection) }
+    var pageAnimation     by remember { mutableStateOf(appPrefs.pageAnimation) }
+    var volumeKeyPageTurn by remember { mutableStateOf(appPrefs.volumeKeyPageTurn) }
+    var zoomBounce        by remember { mutableStateOf(appPrefs.zoomBounce) }
+    var doubleTapZoom     by remember { mutableStateOf(appPrefs.doubleTapZoom) }
+
+    // ── ファイル・フォルダ ────────────────────────────────────────────────
     var homeFolderType     by remember { mutableStateOf(appPrefs.homeFolderType) }
     var downloadFolderType by remember { mutableStateOf(appPrefs.downloadFolderType) }
-    var doubleTapZoom      by remember { mutableStateOf(appPrefs.doubleTapZoom) }
 
-    var nasCacheSize       by remember { mutableLongStateOf(calcDirSize(File(context.cacheDir, "nas_cache"))) }
-    var thumbnailCacheSize by remember { mutableLongStateOf(calcDirSize(thumbnailCacheDir)) }
-
+    // ── キャッシュ ────────────────────────────────────────────────────────
+    var nasCacheSize             by remember { mutableLongStateOf(calcDirSize(File(context.cacheDir, "nas_cache"))) }
+    var thumbnailCacheSize       by remember { mutableLongStateOf(calcDirSize(thumbnailCacheDir)) }
     var showClearNasDialog       by remember { mutableStateOf(false) }
     var showClearThumbnailDialog by remember { mutableStateOf(false) }
 
@@ -121,76 +129,150 @@ fun SettingsScreen(
         ) {
             Spacer(Modifier.height(16.dp))
 
-            // ── フォルダ設定 ──────────────────────────────────────────────
-            Text(
-                text  = "フォルダ設定",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary
+            // ════════════════════════════════════════════════════
+            // 📖 読む
+            // ════════════════════════════════════════════════════
+            SettingsSectionHeader("📖  読む")
+
+            // ── ページ送り方向 ─────────────────────────────────
+            SettingsItemHeader(
+                title       = "ページ送り方向",
+                description = "タップ・スワイプでページが進む方向"
             )
-            Spacer(Modifier.height(8.dp))
-            Text(text = "Homeフォルダ", style = MaterialTheme.typography.bodyMedium)
-            Text(
-                text  = "コミックを保存・表示するデフォルトの場所",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            AppPrefs.PageDirection.entries.forEach { dir ->
+                SettingsRadioItem(
+                    label       = dir.label,
+                    description = dir.description,
+                    selected    = pageDirection == dir,
+                    onSelect    = {
+                        pageDirection          = dir
+                        appPrefs.pageDirection = dir
+                    }
+                )
+            }
+
+            SettingsDivider()
+
+            // ── ページ送りアニメーション ───────────────────────
+            SettingsSwitchItem(
+                title       = "ページ送りアニメーション",
+                description = "スワイプ時のバウンスアニメーションの有無",
+                checked     = pageAnimation,
+                onCheckedChange = {
+                    pageAnimation          = it
+                    appPrefs.pageAnimation = it
+                }
             )
-            Spacer(Modifier.height(4.dp))
-            SettingsFolderRadio(
+
+            SettingsDivider()
+
+            // ── 音量ボタンでページ送り ─────────────────────────
+            SettingsSwitchItem(
+                title       = "音量ボタンでページ送り",
+                description = "音量UP＝前のページ、音量DOWN＝次のページ",
+                checked     = volumeKeyPageTurn,
+                onCheckedChange = {
+                    volumeKeyPageTurn          = it
+                    appPrefs.volumeKeyPageTurn = it
+                }
+            )
+
+            SettingsDivider()
+
+            // ── ズームバウンス ─────────────────────────────────
+            SettingsSwitchItem(
+                title       = "ズームバウンス",
+                description = "ピンチズームの最大・最小倍率でバウンスする",
+                checked     = zoomBounce,
+                onCheckedChange = {
+                    zoomBounce          = it
+                    appPrefs.zoomBounce = it
+                }
+            )
+
+            SettingsDivider()
+
+            // ── ダブルタップズーム率 ───────────────────────────
+            SettingsItemHeader(
+                title       = "ダブルタップズーム率",
+                description = "閲覧中のダブルタップで拡大する倍率"
+            )
+            AppPrefs.DoubleTapZoom.entries.forEach { zoom ->
+                SettingsRadioItem(
+                    label       = zoom.label,
+                    description = "",
+                    selected    = doubleTapZoom == zoom,
+                    onSelect    = {
+                        doubleTapZoom          = zoom
+                        appPrefs.doubleTapZoom = zoom
+                    }
+                )
+            }
+
+            Spacer(Modifier.height(24.dp))
+
+            // ════════════════════════════════════════════════════
+            // 🗂️ ファイル・フォルダ
+            // ════════════════════════════════════════════════════
+            SettingsSectionHeader("🗂️  ファイル・フォルダ")
+
+            // ── Homeフォルダ ───────────────────────────────────
+            SettingsItemHeader(
+                title       = "Homeフォルダ",
+                description = "コミックを表示するデフォルトの場所"
+            )
+            SettingsRadioItem(
                 label       = "ComicVeilフォルダ（推奨）",
                 description = "Android/data/以下のアプリ専用領域。他アプリから干渉されません",
                 selected    = homeFolderType == AppPrefs.HomeFolderType.APP_FOLDER,
                 onSelect    = {
-                    homeFolderType = AppPrefs.HomeFolderType.APP_FOLDER
+                    homeFolderType          = AppPrefs.HomeFolderType.APP_FOLDER
                     appPrefs.homeFolderType = AppPrefs.HomeFolderType.APP_FOLDER
                 }
             )
-            SettingsFolderRadio(
+            SettingsRadioItem(
                 label       = "Downloadsフォルダ",
                 description = "他のアプリと共有される領域。干渉の可能性あり",
                 selected    = homeFolderType == AppPrefs.HomeFolderType.DOWNLOADS,
                 onSelect    = {
-                    homeFolderType = AppPrefs.HomeFolderType.DOWNLOADS
+                    homeFolderType          = AppPrefs.HomeFolderType.DOWNLOADS
                     appPrefs.homeFolderType = AppPrefs.HomeFolderType.DOWNLOADS
                 }
             )
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            SettingsDivider()
 
-            Text(text = "DL保存先", style = MaterialTheme.typography.bodyMedium)
-            Text(
-                text  = "DLモードでダウンロードしたファイルの保存先",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            // ── DL保存先 ───────────────────────────────────────
+            SettingsItemHeader(
+                title       = "DL保存先",
+                description = "DLモードでダウンロードしたファイルの保存先"
             )
-            Spacer(Modifier.height(4.dp))
-            SettingsFolderRadio(
+            SettingsRadioItem(
                 label       = "ComicVeilフォルダ（推奨）",
                 description = "Homeフォルダと同じ場所に保存",
                 selected    = downloadFolderType == AppPrefs.DownloadFolderType.APP_FOLDER,
                 onSelect    = {
-                    downloadFolderType = AppPrefs.DownloadFolderType.APP_FOLDER
+                    downloadFolderType          = AppPrefs.DownloadFolderType.APP_FOLDER
                     appPrefs.downloadFolderType = AppPrefs.DownloadFolderType.APP_FOLDER
                 }
             )
-            SettingsFolderRadio(
+            SettingsRadioItem(
                 label       = "Downloads/ComicVeilフォルダ",
                 description = "Downloadsフォルダ内のComicVeilサブフォルダに保存",
                 selected    = downloadFolderType == AppPrefs.DownloadFolderType.DOWNLOADS,
                 onSelect    = {
-                    downloadFolderType = AppPrefs.DownloadFolderType.DOWNLOADS
+                    downloadFolderType          = AppPrefs.DownloadFolderType.DOWNLOADS
                     appPrefs.downloadFolderType = AppPrefs.DownloadFolderType.DOWNLOADS
                 }
             )
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            Spacer(Modifier.height(24.dp))
 
-            // ── キャッシュ管理 ────────────────────────────────────────────
-            Text(
-                text  = "キャッシュ管理",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Spacer(Modifier.height(8.dp))
+            // ════════════════════════════════════════════════════
+            // 🗄️ キャッシュ管理
+            // ════════════════════════════════════════════════════
+            SettingsSectionHeader("🗄️  キャッシュ管理")
+
             SettingsCacheItem(
                 title    = "STRキャッシュ",
                 subtitle = "ストリーミング再生でダウンロードした一時ファイル",
@@ -204,37 +286,10 @@ fun SettingsScreen(
                 size     = thumbnailCacheSize,
                 onClear  = { showClearThumbnailDialog = true }
             )
-            HorizontalDivider()
 
-            // ── 表示・操作 ────────────────────────────────────────────────
-            Spacer(Modifier.height(24.dp))
-            Text(
-                text  = "表示・操作",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Spacer(Modifier.height(8.dp))
-
-            Text(text = "ダブルタップズーム率", style = MaterialTheme.typography.bodyMedium)
-            Text(
-                text  = "閲覧中のダブルタップで拡大する倍率",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(4.dp))
-            AppPrefs.DoubleTapZoom.entries.forEach { zoom ->
-                SettingsFolderRadio(
-                    label       = zoom.label,
-                    description = "",
-                    selected    = doubleTapZoom == zoom,
-                    onSelect    = {
-                        doubleTapZoom          = zoom
-                        appPrefs.doubleTapZoom = zoom
-                    }
-                )
-            }
-
-            // ── バージョン情報 ────────────────────────────────────────────
+            // ════════════════════════════════════════════════════
+            // ℹ️ バージョン情報
+            // ════════════════════════════════════════════════════
             Spacer(Modifier.height(32.dp))
             HorizontalDivider()
             Spacer(Modifier.height(16.dp))
@@ -250,8 +305,40 @@ fun SettingsScreen(
     }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// 共通コンポーザブル
+// ════════════════════════════════════════════════════════════════════════════
+
 @Composable
-private fun SettingsFolderRadio(
+private fun SettingsSectionHeader(title: String) {
+    Text(
+        text     = title,
+        style    = MaterialTheme.typography.titleSmall,
+        color    = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(bottom = 8.dp)
+    )
+}
+
+@Composable
+private fun SettingsItemHeader(title: String, description: String) {
+    Text(text = title, style = MaterialTheme.typography.bodyMedium)
+    if (description.isNotEmpty()) {
+        Text(
+            text  = description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+    Spacer(Modifier.height(4.dp))
+}
+
+@Composable
+private fun SettingsDivider() {
+    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+}
+
+@Composable
+private fun SettingsRadioItem(
     label: String,
     description: String,
     selected: Boolean,
@@ -278,6 +365,34 @@ private fun SettingsFolderRadio(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun SettingsSwitchItem(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier              = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment     = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+            Text(text = title, style = MaterialTheme.typography.bodyMedium)
+            if (description.isNotEmpty()) {
+                Text(
+                    text  = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 

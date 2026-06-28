@@ -14,7 +14,6 @@ class AppPrefs(context: Context) {
 
     // ─── Homeフォルダの場所 ───────────────────────────────────────────────
 
-    /** Homeフォルダの種類 */
     enum class HomeFolderType {
         APP_FOLDER,   // アプリ専用フォルダ（デフォルト）
         DOWNLOADS     // Downloadsフォルダ
@@ -29,7 +28,6 @@ class AppPrefs(context: Context) {
 
     // ─── DL保存先 ─────────────────────────────────────────────────────────
 
-    /** DL保存先の種類 */
     enum class DownloadFolderType {
         APP_FOLDER,   // アプリ専用フォルダ（デフォルト）
         DOWNLOADS     // Downloadsフォルダ
@@ -44,25 +42,52 @@ class AppPrefs(context: Context) {
 
     // ─── フォルダパス解決 ─────────────────────────────────────────────────
 
-    /**
-     * 現在の設定に基づいてHomeフォルダを返す
-     * @param context アプリのContext
-     */
     fun resolveHomeFolder(context: Context): File = when (homeFolderType) {
         HomeFolderType.APP_FOLDER -> getAppFolder(context)
         HomeFolderType.DOWNLOADS  -> getDownloadsFolder()
     }
 
-    /**
-     * 現在の設定に基づいてDL保存先フォルダを返す
-     * @param context アプリのContext
-     */
     fun resolveDownloadFolder(context: Context): File = when (downloadFolderType) {
         DownloadFolderType.APP_FOLDER -> getAppFolder(context)
         DownloadFolderType.DOWNLOADS  -> File(getDownloadsFolder(), "ComicVeil")
     }
 
-    // ─── ダブルタップズーム率 ───────────────────────────────────────────
+    // ─── ページ送り方向 ───────────────────────────────────────────────────
+
+    enum class PageDirection(val label: String, val description: String) {
+        RIGHT_TO_LEFT("右綴じ（マンガ）", "右→左にページが進む。日本のマンガに最適"),
+        LEFT_TO_RIGHT("左綴じ（洋書・縦読み）", "左→右にページが進む。洋書・ウェブトゥーンに最適")
+    }
+
+    var pageDirection: PageDirection
+        get() = PageDirection.valueOf(
+            prefs.getString(KEY_PAGE_DIRECTION, PageDirection.RIGHT_TO_LEFT.name)
+                ?: PageDirection.RIGHT_TO_LEFT.name
+        )
+        set(value) = prefs.edit().putString(KEY_PAGE_DIRECTION, value.name).apply()
+
+    // ─── ページ送りアニメーション ─────────────────────────────────────────
+
+    /** true = バウンスアニメーションあり（デフォルト）、false = アニメーションなし */
+    var pageAnimation: Boolean
+        get() = prefs.getBoolean(KEY_PAGE_ANIMATION, true)
+        set(value) = prefs.edit().putBoolean(KEY_PAGE_ANIMATION, value).apply()
+
+    // ─── 音量ボタンでページ送り ───────────────────────────────────────────
+
+    /** true = 音量ボタンでページ送り、false = 通常の音量操作（デフォルト） */
+    var volumeKeyPageTurn: Boolean
+        get() = prefs.getBoolean(KEY_VOLUME_KEY_PAGE_TURN, false)
+        set(value) = prefs.edit().putBoolean(KEY_VOLUME_KEY_PAGE_TURN, value).apply()
+
+    // ─── ズームバウンス ───────────────────────────────────────────────────
+
+    /** true = ピンチ操作の限界でバウンスあり（デフォルト）、false = バウンスなし */
+    var zoomBounce: Boolean
+        get() = prefs.getBoolean(KEY_ZOOM_BOUNCE, true)
+        set(value) = prefs.edit().putBoolean(KEY_ZOOM_BOUNCE, value).apply()
+
+    // ─── ダブルタップズーム率 ─────────────────────────────────────────────
 
     enum class DoubleTapZoom(val scale: Float, val label: String) {
         ZOOM_120(1.2f, "120%"),
@@ -89,29 +114,21 @@ class AppPrefs(context: Context) {
         set(value) = prefs.edit().putString(KEY_LIST_DISPLAY_MODE, value.name).apply()
 
     companion object {
-        private const val KEY_HOME_FOLDER      = "home_folder_type"
-        private const val KEY_DOWNLOAD_FOLDER  = "download_folder_type"
-        private const val KEY_DOUBLE_TAP_ZOOM  = "double_tap_zoom"
-        private const val KEY_LIST_DISPLAY_MODE = "list_display_mode"
+        private const val KEY_HOME_FOLDER          = "home_folder_type"
+        private const val KEY_DOWNLOAD_FOLDER      = "download_folder_type"
+        private const val KEY_PAGE_DIRECTION       = "page_direction"
+        private const val KEY_PAGE_ANIMATION       = "page_animation"
+        private const val KEY_VOLUME_KEY_PAGE_TURN = "volume_key_page_turn"
+        private const val KEY_ZOOM_BOUNCE          = "zoom_bounce"
+        private const val KEY_DOUBLE_TAP_ZOOM      = "double_tap_zoom"
+        private const val KEY_LIST_DISPLAY_MODE    = "list_display_mode"
 
-        /**
-         * アプリ専用フォルダ（外部ストレージ）
-         * - PC/ファイルマネージャーからアクセス可能
-         * - 他アプリからの干渉なし
-         * - アンインストール時に自動削除
-         * パス例：/storage/emulated/0/Android/data/com.kamneko88.comicveil/files/Comics
-         */
         fun getAppFolder(context: Context): File {
             val dir = File(context.getExternalFilesDir(null), "Comics")
             if (!dir.exists()) dir.mkdirs()
             return dir
         }
 
-        /**
-         * Downloadsフォルダ
-         * - 他のアプリとの共有領域
-         * - ユーザーが明示的に選択した場合のみ使用
-         */
         fun getDownloadsFolder(): File =
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
     }
