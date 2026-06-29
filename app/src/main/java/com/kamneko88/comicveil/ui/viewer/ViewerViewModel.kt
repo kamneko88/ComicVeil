@@ -28,7 +28,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.lingala.zip4j.ZipFile as Zip4jFile
-import net.lingala.zip4j.exception.ZipException as Zip4jException
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
@@ -107,34 +106,48 @@ class ViewerViewModel(
                     val file = File(filePath)
                     if (file.isDirectory) {
                         loadFromPageDirectory(file)
-                    } else {
-                        Log.d("ComicVeil", "展開開始: ${file.name} (${file.length()} bytes)")
-                        val pages = when (file.extension.lowercase()) {
-                            "zip", "cbz" -> extractZip(file, password)
-                            "rar", "cbr" -> extractRar(file)
-                            "7z"         -> extract7z(file)
-                            "pdf"        -> extractPdf(file)
-                            else         -> emptyList()
+                        return@withContext
+                    }
+
+                    val ext = file.extension.lowercase()
+
+                    // ZIPの場合：展開前にzip4jでパスワード付きか確認する
+                    if (ext in setOf("zip", "cbz") && password == null) {
+                        val encrypted = try {
+                            Zip4jFile(file).isEncrypted
+                        } catch (e: Exception) {
+                            Log.d("ComicVeil", "zip4j暗号化チェック失敗: ${e.message}")
+                            false
                         }
-                        Log.d("ComicVeil", "展開完了: ${pages.size} ページ")
-                        _uiState.update {
-                            it.copy(
-                                pages              = pages,
-                                availablePageCount = pages.size,
-                                totalPageCount     = pages.size,
-                                isComplete         = true,
-                                isLoading          = false,
-                                needsPassword      = false
-                            )
+                        if (encrypted) {
+                            Log.d("ComicVeil", "パスワード付きZIPを検出: ${file.name}")
+                            _uiState.update { it.copy(isLoading = false, needsPassword = true) }
+                            return@withContext
                         }
+                    }
+
+                    Log.d("ComicVeil", "展開開始: ${file.name} (${file.length()} bytes)")
+                    val pages = when (ext) {
+                        "zip", "cbz" -> extractZip(file, password)
+                        "rar", "cbr" -> extractRar(file)
+                        "7z"         -> extract7z(file)
+                        "pdf"        -> extractPdf(file)
+                        else         -> emptyList()
+                    }
+                    Log.d("ComicVeil", "展開完了: ${pages.size} ページ")
+                    _uiState.update {
+                        it.copy(
+                            pages              = pages,
+                            availablePageCount = pages.size,
+                            totalPageCount     = pages.size,
+                            isComplete         = true,
+                            isLoading          = false,
+                            needsPassword      = false
+                        )
                     }
                 } catch (e: Exception) {
                     Log.e("ComicVeil", "展開エラー: ${e::class.simpleName}: ${e.message}", e)
-                    if (isPasswordError(e)) {
-                        _uiState.update { it.copy(isLoading = false, needsPassword = true) }
-                    } else {
-                        _uiState.update { it.copy(error = e.message, isLoading = false) }
-                    }
+                    _uiState.update { it.copy(error = e.message, isLoading = false) }
                 }
             }
         }
@@ -143,15 +156,6 @@ class ViewerViewModel(
     fun retryWithPassword(password: String) {
         _uiState.update { it.copy(isLoading = true, needsPassword = false) }
         loadFile(password)
-    }
-
-    private fun isPasswordError(e: Exception): Boolean {
-        val msg = e.message?.lowercase() ?: ""
-        return e is Zip4jException && (
-            msg.contains("password") ||
-            msg.contains("wrong password") ||
-            msg.contains("encrypt")
-        ) || msg.contains("encrypted")
     }
 
     private suspend fun loadFromPageDirectory(pageDir: File) {
@@ -252,7 +256,6 @@ private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
 // ─── ZIP（通常） ──────────────────────────────────────────────────────────────
 
 private fun extractZip(file: File, password: String? = null): List<ByteArray> {
-    // パスワード付きは zip4j で処理
     if (password != null) return extractZipWithPassword(file, password)
 
     val pages = mutableListOf<Pair<String, ByteArray>>()
@@ -338,13 +341,33 @@ private fun extract7z(file: File): List<ByteArray> {
         .get().use { sevenZFile ->
             var entry = sevenZFile.nextEntry
             while (entry != null) {
-                val name = entry.name
+                val name = entry.name ?: ""
                 if (!entry.isDirectory &&
                     !name.substringAfterLast("/").startsWith(".") &&
                     !name.startsWith("__") &&
                     name.substringAfterLast(".").lowercase() in IMAGE_EXTENSIONS
                 ) {
-                    pages.add(Pair(name, sevenZFile.getInputStream(entry).readBytes()))
+                    val size = entry.size
+                    if (size > 0) {
+                        val buf = ByteArray(size.toInt())
+                        var offset = 0
+                        while (offset < buf.size) {
+                            val read = sevenZFile.read(buf, offset, buf.size - offset)
+                            if (read < 0) break
+                            offset += read
+                        }
+                        if (offset > 0) pages.add(Pair(name, buf.copyOf(offset)))
+                    } else {
+                        val out = ByteArrayOutputStream()
+                        val buf = ByteArray(8192)
+                        var read = sevenZFile.read(buf)
+                        while (read >= 0) {
+                            out.write(buf, 0, read)
+                            read = sevenZFile.read(buf)
+                        }
+                        val bytes = out.toByteArray()
+                        if (bytes.isNotEmpty()) pages.add(Pair(name, bytes))
+                    }
                 }
                 entry = sevenZFile.nextEntry
             }

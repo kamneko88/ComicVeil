@@ -12,8 +12,8 @@ android {
         applicationId = "com.kamneko88.comicveil"
         minSdk = 26
         targetSdk = 36
-        versionCode = 17
-        versionName = "0.17.0"
+        versionCode = 18
+        versionName = "0.18.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -76,8 +76,10 @@ dependencies {
     // RAR展開
     implementation("com.github.junrar:junrar:7.5.5")
 
-    // ZIP展開（Shift-JIS対応・7z対応）
+    // ZIP・7z展開（Shift-JIS対応・7z対応）
     implementation("org.apache.commons:commons-compress:1.26.2")
+    // 7z の LZMA/XZ 圧縮形式に必要（commons-compress が内部で使用）
+    implementation("org.tukaani:xz:1.9")
 
     // パスワード付きZIP対応
     implementation("net.lingala.zip4j:zip4j:2.11.5")

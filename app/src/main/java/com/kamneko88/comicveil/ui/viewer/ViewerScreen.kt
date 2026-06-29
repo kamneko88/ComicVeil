@@ -200,8 +200,27 @@ fun ViewerScreen(
 
     when {
         uiState.isLoading || !uiState.isSavedPageLoaded -> {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+            val fileName = java.io.File(filePath).name
+            Box(
+                Modifier.fillMaxSize().background(Color.Black),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Color.White)
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text  = fileName,
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(horizontal = 32.dp)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text  = "読み込み中...",
+                        color = Color.White.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
         }
 

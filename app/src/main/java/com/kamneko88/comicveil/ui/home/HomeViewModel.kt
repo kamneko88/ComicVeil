@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import net.lingala.zip4j.ZipFile as Zip4jFile
 import java.io.File
 
 sealed class ViewLocation {
@@ -43,7 +44,6 @@ data class ResumeDialogState(
     val totalPages: Int
 )
 
-/** STRモードのダウンロード進捗 */
 data class DownloadProgress(
     val fileName: String,
     val downloaded: Long,
@@ -64,7 +64,6 @@ data class DownloadProgress(
     }
 }
 
-/** ファイル情報ポップアップの状態 */
 data class FileInfoState(
     val fileItem: FileItem,
     val title: String,
@@ -84,25 +83,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     val appPrefs                    = AppPrefs(application)
     val sortPrefs                   = SortPrefs(application)
 
-    /** 現在のHomeフォルダ（設定に応じて動的に解決）*/
     private val homeFolder: File
         get() = appPrefs.resolveHomeFolder(getApplication())
 
-    /** DL保存先フォルダ（設定に応じて動的に解決）*/
     private val downloadFolder: File
         get() = appPrefs.resolveDownloadFolder(getApplication())
 
     private val _currentLocation = MutableStateFlow<ViewLocation>(ViewLocation.Home)
     val currentLocation: StateFlow<ViewLocation> = _currentLocation.asStateFlow()
 
-    /** 生のファイルリスト（NASから取得・ローカル読み込みそのまま） */
     private val _files = MutableStateFlow<List<FileItem>>(emptyList())
 
-    /** ソート・フィルター適用済みの表示用リスト */
     private val _displayFiles = MutableStateFlow<List<FileItem>>(emptyList())
     val files: StateFlow<List<FileItem>> = _displayFiles.asStateFlow()
 
-    // ── ソート・フィルター StateFlow ──────────────────────────────────────
     private val _sortKey     = MutableStateFlow(sortPrefs.sortKey)
     val sortKey: StateFlow<SortPrefs.SortKey> = _sortKey.asStateFlow()
 
@@ -127,55 +121,38 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    /** STRモードのダウンロード進捗（null = 非表示）*/
     private val _downloadProgress = MutableStateFlow<DownloadProgress?>(null)
     val downloadProgress: StateFlow<DownloadProgress?> = _downloadProgress.asStateFlow()
 
     private val _nasError = MutableStateFlow<String?>(null)
     val nasError: StateFlow<String?> = _nasError.asStateFlow()
 
-    /** 再開ダイアログの状態（null = 非表示）*/
     private val _dialogState = MutableStateFlow<ResumeDialogState?>(null)
     val dialogState: StateFlow<ResumeDialogState?> = _dialogState.asStateFlow()
 
-    /** ファイル情報ポップアップの状態（null = 非表示）*/
     private val _fileInfoState = MutableStateFlow<FileInfoState?>(null)
     val fileInfoState: StateFlow<FileInfoState?> = _fileInfoState.asStateFlow()
 
-    /**
-     * ファイルパス→ReadStatus のマップ（StateFlow）
-     * Ⓘポップアップで変更した際にリストへ即時反映するために使用
-     */
     private val _fileStatuses = MutableStateFlow<Map<String, ReadStatus>>(emptyMap())
     val fileStatuses: StateFlow<Map<String, ReadStatus>> = _fileStatuses.asStateFlow()
 
-    /** ファイルパス→ComicFileのマップ（レーティング・カラーラベルをリストに即時反映） */
     private val _fileMetaMap = MutableStateFlow<Map<String, com.kamneko88.comicveil.data.db.ComicFile>>(emptyMap())
     val fileMetaMap: StateFlow<Map<String, com.kamneko88.comicveil.data.db.ComicFile>> = _fileMetaMap.asStateFlow()
 
     private val _navigateEvent = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
     val navigateEvent: SharedFlow<String> = _navigateEvent.asSharedFlow()
 
-    /** TransferScreen への遷移イベント */
     private val _navigateToTransfer = MutableSharedFlow<String?>(replay = 0, extraBufferCapacity = 1)
     val navigateToTransfer: SharedFlow<String?> = _navigateToTransfer.asSharedFlow()
 
-    /**
-     * DL/STRモード
-     * true  = STR（ストリーミング）：アプリキャッシュに一時保存・デフォルト
-     * false = DL（ダウンロード）  ：Downloads/ComicVeil/ に永続保存
-     */
     private val _isStreamingMode = MutableStateFlow(true)
     val isStreamingMode: StateFlow<Boolean> = _isStreamingMode.asStateFlow()
 
-    /** DLモード時の選択中ファイルパス */
     private val _dlSelectedPaths = MutableStateFlow<Set<String>>(emptySet())
     val dlSelectedPaths: StateFlow<Set<String>> = _dlSelectedPaths.asStateFlow()
 
-    /** STRモードの実行中ダウンロードJob */
     private var downloadJob: Job? = null
 
-    /** TransferViewModel への参照（DLモード時に委譲）*/
     var transferViewModel: TransferViewModel? = null
 
     init {
@@ -184,7 +161,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         comicFileRepository = ComicFileRepository(db.comicFileDao())
         refreshNasServers()
 
-        // ソート・フィルターの変化を監視して displayFiles を再計算
         viewModelScope.launch {
             kotlinx.coroutines.flow.combine(
                 _files, _sortKey, _ascending, _folderOrder,
@@ -210,13 +186,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSortKey(key: SortPrefs.SortKey) {
         if (_sortKey.value == key) {
-            // 同じキーをタップ → 昇降順を反転
             _ascending.value = !_ascending.value
             sortPrefs.ascending = _ascending.value
         } else {
             _sortKey.value = key
             sortPrefs.sortKey = key
-            // キーが変わったら昇順リセット
             _ascending.value = true
             sortPrefs.ascending = true
         }
@@ -247,10 +221,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         sortPrefs.clearFilters()
     }
 
-    /**
-     * ソート・フィルターを適用して表示用リストを返す
-     * NASフォルダ時はフィルターをスキップ（DBメタデータがない場合もあるため）
-     */
     private fun applySort(
         raw: List<FileItem>,
         key: SortPrefs.SortKey,
@@ -261,14 +231,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         statuses: Map<String, com.kamneko88.comicveil.data.db.ReadStatus>,
         metas: Map<String, com.kamneko88.comicveil.data.db.ComicFile>
     ): List<FileItem> {
-        val isNas = _currentLocation.value is ViewLocation.NasFolder
-
-        // ── フィルター（ローカル・NAS共通） ───────────────────────────────────
         val filtered = if (statusFilter.isEmpty() && colorLabelFilter.isEmpty()) {
             raw
         } else {
             raw.filter { item ->
-                if (!item.isComic) return@filter true  // フォルダは常に表示
+                if (!item.isComic) return@filter true
                 val statusOk = statusFilter.isEmpty() ||
                     statuses[item.path]?.name in statusFilter
                 val colorOk  = colorLabelFilter.isEmpty() ||
@@ -277,7 +244,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // ── ソート ────────────────────────────────────────────────────────
         val comparator: Comparator<FileItem> = when (key) {
             SortPrefs.SortKey.NAME   -> compareBy { it.name.lowercase() }
             SortPrefs.SortKey.DATE   -> compareBy { it.lastModified }
@@ -286,14 +252,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val sorted = if (ascending) filtered.sortedWith(comparator)
                      else           filtered.sortedWith(comparator).reversed()
 
-        // ── フォルダ/ファイル優先 ─────────────────────────────────────────
         return when (folderOrder) {
-            SortPrefs.FolderOrder.FOLDER_FIRST -> sorted.sortedWith(
-                compareByDescending { it.isFolder }
-            )
-            SortPrefs.FolderOrder.FILE_FIRST   -> sorted.sortedWith(
-                compareBy { it.isFolder }
-            )
+            SortPrefs.FolderOrder.FOLDER_FIRST -> sorted.sortedWith(compareByDescending { it.isFolder })
+            SortPrefs.FolderOrder.FILE_FIRST   -> sorted.sortedWith(compareBy { it.isFolder })
             SortPrefs.FolderOrder.MIXED        -> sorted
         }
     }
@@ -302,7 +263,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleMode() {
         _isStreamingMode.value = !_isStreamingMode.value
-        // DLモードを抜けたときに選択をリセット
         _dlSelectedPaths.value = emptySet()
     }
 
@@ -316,7 +276,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _dlSelectedPaths.value = emptySet()
     }
 
-    /** 選択中ファイルをダウンロードして選択をクリア */
     fun downloadSelected() {
         val selectedFiles = _files.value.filter { it.path in _dlSelectedPaths.value }
         selectedFiles.forEach { fileItem ->
@@ -365,14 +324,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         loadFileStatuses(_files.value)
     }
 
-    /** Homeフォルダルートに戻る */
     fun navigateToRoot() {
         _currentLocation.value = ViewLocation.Home
         _files.value = fileRepository.getFiles(homeFolder)
         loadFileStatuses(_files.value)
     }
 
-    /** Home画面に戻る（NASサーバー一覧も表示） */
     fun navigateToHome() {
         _currentLocation.value = ViewLocation.Home
         _files.value = fileRepository.getFiles(homeFolder)
@@ -429,10 +386,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── ファイル状態の一括読み込み ─────────────────────────────────────
 
-    /**
-     * ファイルリストの読書状態をDBから一括取得して _fileStatuses に反映する
-     * フォルダ移動・画面復帰時に呼ぶ
-     */
     fun loadFileStatuses(fileList: List<FileItem> = _files.value) {
         viewModelScope.launch(Dispatchers.IO) {
             val comics = fileList.filter { it.isComic }
@@ -444,7 +397,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 単一ファイルの状態を _fileStatuses に即時反映する */
     private fun updateFileStatusInMap(filePath: String, status: ReadStatus) {
         _fileStatuses.value = _fileStatuses.value.toMutableMap().also {
             it[filePath] = status
@@ -478,7 +430,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── ファイル情報ポップアップ ─────────────────────────────────────────
 
-    /** Ⓘボタンタップ：ファイル情報ポップアップを開く */
     fun openFileInfo(fileItem: FileItem) {
         viewModelScope.launch {
             val (title, author) = fileRepository.parseFileName(fileItem.name)
@@ -497,7 +448,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** ファイル情報ポップアップで読書状態を変更 */
     fun updateFileStatus(fileItem: FileItem, status: ReadStatus) {
         viewModelScope.launch {
             comicFileRepository.updateStatus(fileItem.path, status)
@@ -511,7 +461,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** ファイル情報ポップアップでレーティングを変更 */
     fun updateRating(fileItem: FileItem, rating: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             comicFileRepository.updateRating(fileItem.path, rating)
@@ -523,7 +472,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** ファイル情報ポップアップでカラーラベルを変更 */
     fun updateColorLabel(fileItem: FileItem, colorLabel: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             comicFileRepository.updateColorLabel(fileItem.path, colorLabel)
@@ -535,7 +483,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** ファイル情報ポップアップを閉じる */
     fun dismissFileInfo() {
         _fileInfoState.value = null
     }
@@ -550,7 +497,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         if (destFile.exists() && destFile.length() > 0) {
-            // キャッシュ済み：読書位置を確認してダイアログ表示
             val progress = withContext(Dispatchers.IO) {
                 progressRepository.getProgress(destFile.absolutePath)
             }
@@ -563,7 +509,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 totalPages = totalPages
             )
         } else {
-            // 未キャッシュ：「最初から読む」のみ表示
             _dialogState.value = ResumeDialogState(
                 fileItem   = fileItem,
                 savedPage  = 0,
@@ -592,17 +537,42 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** ZIP: Progressive Loading — 1ページ目が届いた時点でビューワー起動 */
+    /**
+     * ZIP: Progressive Loading
+     * パスワード付きZIPの場合は全体DLに切り替える
+     */
     private suspend fun startStrDownloadZipProgressive(
         fileItem: FileItem,
-        server: com.kamneko88.comicveil.data.nas.NasServer,
+        server: NasServer,
         ext: String
     ) {
+        // NASから先頭4KBだけ取得してパスワード付きか確認する
+        var isEncrypted = false
+        try {
+            val bytes = smbRepository.fetchPartialBytes(server, fileItem.nasPath, 4096L)
+            if (bytes != null && bytes.isNotEmpty()) {
+                val tmpFile = File(
+                    getApplication<Application>().cacheDir,
+                    "nas_enc_check_${fileItem.nasPath.hashCode()}.$ext"
+                )
+                tmpFile.writeBytes(bytes)
+                isEncrypted = Zip4jFile(tmpFile).isEncrypted
+                tmpFile.delete()
+            }
+        } catch (e: Exception) {
+            // チェック失敗は無視して通常Progressive Loadingに進む
+        }
+
+        if (isEncrypted) {
+            // パスワード付きZIP → 全体DLしてビューワーに渡す（パスワード入力はビューワー側）
+            startStrDownloadFull(fileItem, server, ext)
+            return
+        }
+
         val pageDir = File(
             File(getApplication<Application>().cacheDir, "nas_pages"),
             "nas_${fileItem.nasPath.hashCode()}"
         )
-        // キャッシュがあればそのままビューワー起動
         if (File(pageDir, "complete").exists()) {
             _navigateEvent.tryEmit(pageDir.absolutePath)
             return
@@ -627,7 +597,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         downloaded = savedCount.toLong(),
                         total      = -1L
                     )
-                    // 1ページ目が届いたらビューワーを起動
                     if (!launched && savedCount >= 1) {
                         launched = true
                         _navigateEvent.tryEmit(pageDir.absolutePath)
@@ -651,10 +620,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** RARなど: 従来通り全体DL後に起動 */
+    /** RARなど: 全体DL後に起動 */
     private suspend fun startStrDownloadFull(
         fileItem: FileItem,
-        server: com.kamneko88.comicveil.data.nas.NasServer,
+        server: NasServer,
         ext: String
     ) {
         val destFile = File(
@@ -735,9 +704,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── ローカルファイル削除 ──────────────────────────────────────────────
 
-    /** ローカルファイルを削除し、DBの読書状態・読書位置も消去する
-     * @return 削除成功になったファイル数
-     */
     fun deleteLocalFiles(fileItems: List<FileItem>): Int {
         var count = 0
         viewModelScope.launch(Dispatchers.IO) {
@@ -750,7 +716,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     count++
                 }
             }
-            // 削除後にファイルリストを更新
             val loc = _currentLocation.value
             val folder = when (loc) {
                 is ViewLocation.Home        -> homeFolder
@@ -767,12 +732,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── キャッシュ管理 ─────────────────────────────────────────────────
 
-    /** NAS STRキャッシュフォルダを参照 */
     private fun nasCacheDir(): File =
         File(getApplication<Application>().cacheDir, "nas_cache")
 
-    /** 指定ファイルのSTRキャッシュが有効な状態で存在するか確認。
-     * 100KB未満のファイルは不完全なダウンロードとみなして非表示 */
     fun isNasCached(fileItem: FileItem): Boolean {
         if (!fileItem.isNas) return false
         val ext  = fileItem.name.substringAfterLast(".")
@@ -780,7 +742,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return file.exists() && file.length() >= 100 * 1024
     }
 
-    /** STRキャッシュを全削除してサイズ（bytes）を返す */
     fun clearNasCache(): Long {
         val dir = nasCacheDir()
         var totalBytes = 0L
@@ -791,7 +752,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return totalBytes
     }
 
-    /** サムネイルキャッシュを全削除してサイズ（bytes）を返す */
     fun clearThumbnailCache(thumbnailCacheDir: File): Long {
         var totalBytes = 0L
         thumbnailCacheDir.listFiles()?.forEach {
