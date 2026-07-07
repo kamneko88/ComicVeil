@@ -89,6 +89,8 @@ app/src/main/java/com/kamneko88/comicveil/
 git clone https://github.com/kamneko88/ComicVeil.git
 ```
 
+開発時のコミット規約・バージョニングルールは [`CONTRIBUTING.md`](./CONTRIBUTING.md) を参照してください。
+
 ---
 
 ## 開発状況
@@ -112,7 +114,7 @@ git clone https://github.com/kamneko88/ComicVeil.git
 ## 謝辞
 
 本アプリはiOS用ビューワーアプリ **Comic Glass** のUI/UXから大きな影響を受けています。
-素晴らしい操作体験を作り上げた開発者に敬意を表します。
+素晴らしい操作体験を提供してくださった開発者様に敬意を表します。
 
 以下のOSSライブラリを使用させていただいています：
 [Coil](https://github.com/coil-kt/coil) ·
