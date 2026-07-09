@@ -11,6 +11,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.github.junrar.Archive
+import com.kamneko88.comicveil.data.ArchiveScanner
 import com.kamneko88.comicveil.data.db.Bookmark
 import com.kamneko88.comicveil.data.db.BookmarkRepository
 import com.kamneko88.comicveil.data.db.ComicFileRepository
@@ -30,9 +31,13 @@ import kotlinx.coroutines.withContext
 import net.lingala.zip4j.ZipFile as Zip4jFile
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
-import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
+import org.apache.commons.compress.archivers.zip.ZipFile as CommonsZipFile
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
+
+/** filePath内でアーカイブパスと巻フォルダ名を区切るマーカー（実際のパスに出現しない文字列） */
+private const val VOLUME_MARKER = "##vol##"
 
 data class ViewerUiState(
     val pages: List<ByteArray> = emptyList(),
@@ -71,12 +76,12 @@ class ViewerViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        val totalPages = _uiState.value.pages.size
-        if (totalPages == 0) return
+        val total = maxOf(_uiState.value.pages.size, _uiState.value.totalPageCount)
+        if (total == 0) return
         val status = when {
-            lastSavedPage >= totalPages - 1 -> ReadStatus.READ
-            lastSavedPage == 0             -> ReadStatus.UNREAD
-            else                           -> ReadStatus.READING
+            lastSavedPage >= total - 1 -> ReadStatus.READ
+            lastSavedPage == 0        -> ReadStatus.UNREAD
+            else                      -> ReadStatus.READING
         }
         kotlinx.coroutines.runBlocking(Dispatchers.IO) {
             comicFileRepository.updateStatus(filePath, status)
@@ -103,7 +108,12 @@ class ViewerViewModel(
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
-                    val file = File(filePath)
+                    // filePathは "実ファイルパス" または "実ファイルパス##vol##巻フォルダ名" の形式
+                    val markerIndex  = filePath.indexOf(VOLUME_MARKER)
+                    val archivePath  = if (markerIndex >= 0) filePath.substring(0, markerIndex) else filePath
+                    val requestedVolume = if (markerIndex >= 0) filePath.substring(markerIndex + VOLUME_MARKER.length) else null
+
+                    val file = File(archivePath)
                     if (file.isDirectory) {
                         loadFromPageDirectory(file)
                         return@withContext
@@ -126,24 +136,24 @@ class ViewerViewModel(
                         }
                     }
 
-                    Log.d("ComicVeil", "展開開始: ${file.name} (${file.length()} bytes)")
-                    val pages = when (ext) {
-                        "zip", "cbz" -> extractZip(file, password)
-                        "rar", "cbr" -> extractRar(file)
-                        "7z"         -> extract7z(file)
-                        "pdf"        -> extractPdf(file)
-                        else         -> emptyList()
-                    }
-                    Log.d("ComicVeil", "展開完了: ${pages.size} ページ")
-                    _uiState.update {
-                        it.copy(
-                            pages              = pages,
-                            availablePageCount = pages.size,
-                            totalPageCount     = pages.size,
-                            isComplete         = true,
-                            isLoading          = false,
-                            needsPassword      = false
-                        )
+                    when (ext) {
+                        "zip", "cbz", "rar", "cbr", "7z" ->
+                            loadArchiveProgressive(file, ext, requestedVolume, password)
+                        "pdf" -> {
+                            Log.d("ComicVeil", "展開開始: ${file.name} (${file.length()} bytes)")
+                            val pages = extractPdf(file)
+                            _uiState.update {
+                                it.copy(
+                                    pages              = pages,
+                                    availablePageCount = pages.size,
+                                    totalPageCount     = pages.size,
+                                    isComplete         = true,
+                                    isLoading          = false,
+                                    needsPassword      = false
+                                )
+                            }
+                        }
+                        else -> _uiState.update { it.copy(isLoading = false) }
                     }
                 } catch (e: Exception) {
                     Log.e("ComicVeil", "展開エラー: ${e::class.simpleName}: ${e.message}", e)
@@ -153,14 +163,70 @@ class ViewerViewModel(
         }
     }
 
+    /**
+     * アーカイブ（ZIP/RAR/7z）を「先に中身を一覧→ページを1枚ずつ展開してすぐ表示」する方式で読み込む。
+     */
+    private suspend fun loadArchiveProgressive(
+        file: File,
+        ext: String,
+        requestedVolume: String?,
+        password: String?
+    ) {
+        val scan = ArchiveScanner.scan(file)
+        val targetEntries = if (requestedVolume != null) {
+            scan.entries.filter { it.volumeName == requestedVolume }
+        } else {
+            scan.entries
+        }
+
+        if (targetEntries.isEmpty()) {
+            _uiState.update { it.copy(pages = emptyList(), isComplete = true, isLoading = false) }
+            return
+        }
+
+        val pageDir = pageDirFor(file, requestedVolume)
+
+        if (File(pageDir, "complete").exists()) {
+            loadFromPageDirectory(pageDir, knownTotal = targetEntries.size)
+            return
+        }
+        pageDir.deleteRecursively()
+        pageDir.mkdirs()
+
+        // バックグラウンドで1ページずつ展開（メモリに全ページを溜め込まない）
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                when (ext) {
+                    "zip", "cbz" -> extractZipProgressive(file, targetEntries, pageDir, password)
+                    "rar", "cbr" -> extractRarProgressive(file, targetEntries, pageDir)
+                    "7z"         -> extract7zProgressive(file, targetEntries, pageDir)
+                }
+            } catch (e: Exception) {
+                Log.e("ComicVeil", "段階展開エラー: ${e.message}", e)
+                // 失敗時も complete マーカーを置き、無限ローディングにしない
+                runCatching { File(pageDir, "complete").writeText("0") }
+            }
+        }
+
+        loadFromPageDirectory(pageDir, knownTotal = targetEntries.size)
+    }
+
+    private fun pageDirFor(file: File, volume: String?): File {
+        val key = "${file.absolutePath}::${volume ?: ""}".hashCode()
+        return File(File(getApplication<Application>().cacheDir, "archive_pages"), "arc_$key")
+    }
+
     fun retryWithPassword(password: String) {
         _uiState.update { it.copy(isLoading = true, needsPassword = false) }
         loadFile(password)
     }
 
-    private suspend fun loadFromPageDirectory(pageDir: File) {
+    private suspend fun loadFromPageDirectory(pageDir: File, knownTotal: Int? = null) {
+        if (knownTotal != null) {
+            _uiState.update { it.copy(totalPageCount = knownTotal) }
+        }
         while (true) {
-            val files = pageDir.listFiles { f -> f.name.endsWith(".jpg") }
+            val files = pageDir.listFiles { f -> f.name.endsWith(".jpg") && !f.name.startsWith("incoming_") }
                 ?.sortedBy { it.name } ?: emptyList()
             val isComplete = File(pageDir, "complete").exists()
             val filePaths = files.map { it.absolutePath }
@@ -170,21 +236,23 @@ class ViewerViewModel(
                     isProgressiveMode  = true,
                     availablePageCount = filePaths.size,
                     isLoading          = filePaths.isEmpty(),
-                    isComplete         = isComplete
+                    isComplete         = isComplete,
+                    totalPageCount     = knownTotal ?: it.totalPageCount
                 )
             }
             if (isComplete) {
-                val total = runCatching { File(pageDir, "complete").readText().toInt() }
-                    .getOrDefault(filePaths.size)
+                val total = knownTotal ?: runCatching {
+                    File(pageDir, "complete").readText().toInt()
+                }.getOrDefault(filePaths.size)
                 _uiState.update { it.copy(totalPageCount = total) }
                 break
             }
-            kotlinx.coroutines.delay(500)
+            kotlinx.coroutines.delay(300)
         }
     }
 
     fun savePage(currentPage: Int) {
-        val totalPages = _uiState.value.pages.size
+        val totalPages = maxOf(_uiState.value.pages.size, _uiState.value.totalPageCount)
         if (totalPages == 0) return
         lastSavedPage = currentPage
         val newStatus = when {
@@ -238,6 +306,8 @@ class ViewerViewModel(
     }
 
     companion object {
+        const val VOLUME_MARKER_PUBLIC = VOLUME_MARKER
+
         fun Factory(application: Application, filePath: String): ViewModelProvider.Factory {
             return object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
@@ -249,130 +319,245 @@ class ViewerViewModel(
     }
 }
 
-// ─── ページ展開関数 ───────────────────────────────────────────────────────────
+// ─── ページ展開関数（段階展開・メモリに溜め込まない） ────────────────────────
 
-private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
+/**
+ * 1ページあたりの上限サイズ。通常のマンガ1ページはこれよりはるかに小さいはず。
+ * これを超える場合はアーカイブの構造読み取りに問題がある可能性が高いため、
+ * OOMクラッシュを防ぐためにここで安全に中断する。
+ */
+private const val MAX_PAGE_BYTES = 80L * 1024 * 1024 // 80MB
 
-// ─── ZIP（通常） ──────────────────────────────────────────────────────────────
-
-private fun extractZip(file: File, password: String? = null): List<ByteArray> {
-    if (password != null) return extractZipWithPassword(file, password)
-
-    val pages = mutableListOf<Pair<String, ByteArray>>()
-    val encoding = detectZipEncoding(file)
-    ZipArchiveInputStream(file.inputStream().buffered(), encoding, true, true).use { zis ->
-        var entry = zis.nextEntry
-        while (entry != null) {
-            val name = entry.name
-            if (!entry.isDirectory &&
-                !name.substringAfterLast("/").startsWith(".") &&
-                !name.startsWith("__") &&
-                !name.contains("..") &&
-                name.substringAfterLast(".").lowercase() in IMAGE_EXTENSIONS
-            ) {
-                pages.add(Pair(name, zis.readBytes()))
-            }
-            entry = zis.nextEntry
+/**
+ * サイズ上限付きでInputStreamから読み込む。
+ * 上限を超えた場合はnullを返す（異常なエントリとみなして中断する）。
+ */
+private fun readBoundedBytes(input: InputStream, knownSize: Long): ByteArray? {
+    if (knownSize in 1..MAX_PAGE_BYTES) {
+        val buf = ByteArray(knownSize.toInt())
+        var offset = 0
+        while (offset < buf.size) {
+            val read = input.read(buf, offset, buf.size - offset)
+            if (read < 0) break
+            offset += read
         }
+        return buf.copyOf(offset)
     }
-    return pages.sortedBy { it.first.lowercase() }.map { it.second }
+    // サイズ不明（または異常に大きい）場合は上限付きで読む
+    val out = ByteArrayOutputStream()
+    val chunk = ByteArray(64 * 1024)
+    var total = 0L
+    while (total < MAX_PAGE_BYTES) {
+        val read = input.read(chunk)
+        if (read < 0) break
+        out.write(chunk, 0, read)
+        total += read
+    }
+    if (total >= MAX_PAGE_BYTES) {
+        Log.e("ComicVeil", "1ページのサイズが上限(${MAX_PAGE_BYTES}bytes)を超えたため中断しました。アーカイブの構造が非標準な可能性があります")
+        return null
+    }
+    return out.toByteArray()
 }
 
-// ─── ZIP（パスワード付き・zip4j使用） ────────────────────────────────────────
+private fun writePage(pageDir: File, index: Int, bytes: ByteArray) {
+    File(pageDir, "%05d.jpg".format(index)).writeBytes(bytes)
+}
 
-private fun extractZipWithPassword(file: File, password: String): List<ByteArray> {
-    val pages = mutableListOf<Pair<String, ByteArray>>()
-    val zipFile = Zip4jFile(file, password.toCharArray())
-    zipFile.fileHeaders
-        .filter { header ->
-            !header.isDirectory &&
-            !header.fileName.substringAfterLast("/").startsWith(".") &&
-            !header.fileName.startsWith("__") &&
-            header.fileName.substringAfterLast(".").lowercase() in IMAGE_EXTENSIONS
-        }
-        .sortedBy { it.fileName.lowercase() }
-        .forEach { header ->
-            zipFile.getInputStream(header).use { stream ->
-                pages.add(Pair(header.fileName, stream.readBytes()))
+/**
+ * ZIP：まず高速なランダムアクセス方式で自然順に直接書き込む。
+ * 一部の非標準なZIPでランダムアクセスが失敗する場合は、逐次読み込み方式にフォールバックする。
+ */
+private fun extractZipProgressive(
+    file: File,
+    targetEntries: List<com.kamneko88.comicveil.data.ArchiveEntryInfo>,
+    pageDir: File,
+    password: String?
+) {
+    if (password != null) {
+        val zipFile = Zip4jFile(file, password.toCharArray())
+        val headerMap = zipFile.fileHeaders.associateBy { it.fileName }
+        targetEntries.forEachIndexed { index, info ->
+            val header = headerMap[info.name] ?: return@forEachIndexed
+            zipFile.getInputStream(header).use { input ->
+                val bytes = readBoundedBytes(input, header.uncompressedSize)
+                    ?: return@forEachIndexed
+                writePage(pageDir, index, bytes)
             }
         }
-    return pages.map { it.second }
-}
+        File(pageDir, "complete").writeText(targetEntries.size.toString())
+        return
+    }
 
-private fun detectZipEncoding(file: File): String {
-    return try {
-        ZipArchiveInputStream(file.inputStream().buffered(), "UTF-8", true, true).use { zis ->
-            val first = zis.nextEntry
-            val isUtf8 = (first as? ZipArchiveEntry)?.generalPurposeBit?.usesUTF8ForNames() == true
-            if (isUtf8) "UTF-8" else "Shift_JIS"
+    val success = try {
+        CommonsZipFile.builder().setFile(file).get().use { zip ->
+            targetEntries.forEachIndexed { index, info ->
+                val entry = zip.getEntry(info.name) ?: return@forEachIndexed
+                zip.getInputStream(entry).use { input ->
+                    val bytes = readBoundedBytes(input, entry.size)
+                        ?: throw IllegalStateException("ページサイズが異常です: ${info.name}")
+                    writePage(pageDir, index, bytes)
+                }
+            }
         }
+        true
     } catch (e: Exception) {
-        Log.d("ComicVeil", "UTF-8判定失敗、Shift_JISで開く: ${e.message}")
-        "Shift_JIS"
+        Log.d("ComicVeil", "ZIPランダムアクセス展開失敗、逐次方式にフォールバック: ${e.message}")
+        false
     }
+
+    if (!success) {
+        val ok = extractZipSequentialFallback(file, targetEntries, pageDir)
+        if (!ok) {
+            File(pageDir, "complete").writeText("0")
+            return
+        }
+    }
+
+    File(pageDir, "complete").writeText(targetEntries.size.toString())
 }
 
-// ─── RAR ─────────────────────────────────────────────────────────────────────
+/**
+ * ZIPの緊急フォールバック：到着順に一時名で書き出し、完了後に自然順の最終位置へリネームする。
+ * 1ページでも上限サイズを超えた場合は、このアーカイブは読み込み不可と判断してfalseを返す。
+ */
+private fun extractZipSequentialFallback(
+    file: File,
+    targetEntries: List<com.kamneko88.comicveil.data.ArchiveEntryInfo>,
+    pageDir: File
+): Boolean {
+    val targetNames = targetEntries.map { it.name }.toSet()
+    val arrivalNameOrder = mutableListOf<String>()
+    var aborted = false
 
-private fun extractRar(file: File): List<ByteArray> {
-    val pages = mutableListOf<Pair<String, ByteArray>>()
+    for (cs in listOf("UTF-8", "Shift_JIS")) {
+        arrivalNameOrder.clear()
+        aborted = false
+        pageDir.listFiles { f -> f.name.startsWith("incoming_") }?.forEach { it.delete() }
+        try {
+            ZipArchiveInputStream(file.inputStream().buffered(), cs, false, true).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    val name = entry.name
+                    if (!entry.isDirectory && name in targetNames) {
+                        val bytes = readBoundedBytes(zis, entry.size)
+                        if (bytes == null) {
+                            aborted = true
+                            return@use
+                        }
+                        if (bytes.isNotEmpty()) {
+                            File(pageDir, "incoming_%05d.jpg".format(arrivalNameOrder.size)).writeBytes(bytes)
+                            arrivalNameOrder.add(name)
+                        }
+                    }
+                    entry = zis.nextEntry
+                }
+            }
+        } catch (e: Exception) {
+            Log.d("ComicVeil", "ZIP逐次フォールバック失敗（$cs）: ${e.message}")
+        }
+        if (aborted) break
+        if (arrivalNameOrder.isNotEmpty()) break
+    }
+
+    if (aborted) {
+        pageDir.listFiles { f -> f.name.startsWith("incoming_") }?.forEach { it.delete() }
+        return false
+    }
+
+    val finalIndexByName = targetEntries.withIndex().associate { (i, info) -> info.name to i }
+    arrivalNameOrder.forEachIndexed { arrivalIdx, name ->
+        val finalIdx = finalIndexByName[name] ?: return@forEachIndexed
+        File(pageDir, "incoming_%05d.jpg".format(arrivalIdx))
+            .renameTo(File(pageDir, "%05d.jpg".format(finalIdx)))
+    }
+    return arrivalNameOrder.isNotEmpty()
+}
+
+/** RAR：自然順ソート済みの順に、1ページずつ最終位置へ直接書き込む */
+private fun extractRarProgressive(
+    file: File,
+    targetEntries: List<com.kamneko88.comicveil.data.ArchiveEntryInfo>,
+    pageDir: File
+) {
     Archive(file).use { archive ->
-        archive.fileHeaders
-            .filter { header ->
-                !header.isDirectory &&
-                header.fileName.substringAfterLast(".").lowercase() in IMAGE_EXTENSIONS
-            }
-            .sortedBy { it.fileName.lowercase() }
-            .forEach { header ->
-                val outputStream = ByteArrayOutputStream()
-                archive.extractFile(header, outputStream)
-                pages.add(Pair(header.fileName, outputStream.toByteArray()))
-            }
+        val headerMap = archive.fileHeaders.associateBy { it.fileName }
+        targetEntries.forEachIndexed { index, info ->
+            val header = headerMap[info.name] ?: return@forEachIndexed
+            val out = ByteArrayOutputStream()
+            archive.extractFile(header, out)
+            writePage(pageDir, index, out.toByteArray())
+        }
     }
-    return pages.map { it.second }
+    File(pageDir, "complete").writeText(targetEntries.size.toString())
 }
 
-// ─── 7z ──────────────────────────────────────────────────────────────────────
+/**
+ * 7z：SevenZFileは前から順にしか読めない制約があるため、
+ * アーカイブに現れる順（到着順）で一時ファイルに書き出し、
+ * 完了後に自然順の最終位置へ一括リネームする（バイトの再書き込みはしない：高速）
+ */
+private fun extract7zProgressive(
+    file: File,
+    targetEntries: List<com.kamneko88.comicveil.data.ArchiveEntryInfo>,
+    pageDir: File
+) {
+    val targetNames = targetEntries.map { it.name }.toSet()
+    var arrivalIndex = 0
+    val arrivalNameOrder = mutableListOf<String>()
 
-private fun extract7z(file: File): List<ByteArray> {
-    val pages = mutableListOf<Pair<String, ByteArray>>()
-    SevenZFile.builder()
-        .setFile(file)
-        .get().use { sevenZFile ->
-            var entry = sevenZFile.nextEntry
-            while (entry != null) {
-                val name = entry.name ?: ""
-                if (!entry.isDirectory &&
-                    !name.substringAfterLast("/").startsWith(".") &&
-                    !name.startsWith("__") &&
-                    name.substringAfterLast(".").lowercase() in IMAGE_EXTENSIONS
-                ) {
-                    val size = entry.size
-                    if (size > 0) {
-                        val buf = ByteArray(size.toInt())
-                        var offset = 0
-                        while (offset < buf.size) {
-                            val read = sevenZFile.read(buf, offset, buf.size - offset)
-                            if (read < 0) break
-                            offset += read
-                        }
-                        if (offset > 0) pages.add(Pair(name, buf.copyOf(offset)))
+    SevenZFile.builder().setFile(file).get().use { sevenZFile ->
+        var entry = sevenZFile.nextEntry
+        while (entry != null) {
+            val name = entry.name ?: ""
+            if (!entry.isDirectory && name in targetNames) {
+                val size = entry.size
+                val bytes = if (size in 1..MAX_PAGE_BYTES) {
+                    val buf = ByteArray(size.toInt())
+                    var offset = 0
+                    while (offset < buf.size) {
+                        val read = sevenZFile.read(buf, offset, buf.size - offset)
+                        if (read < 0) break
+                        offset += read
+                    }
+                    buf.copyOf(offset)
+                } else {
+                    // サイズ不明（または異常に大きい）場合は上限付きで読む
+                    val out = ByteArrayOutputStream()
+                    val buf = ByteArray(64 * 1024)
+                    var total = 0L
+                    while (total < MAX_PAGE_BYTES) {
+                        val read = sevenZFile.read(buf)
+                        if (read < 0) break
+                        out.write(buf, 0, read)
+                        total += read
+                    }
+                    if (total >= MAX_PAGE_BYTES) {
+                        Log.e("ComicVeil", "7zページサイズが上限を超えたためスキップ: $name")
+                        ByteArray(0)
                     } else {
-                        val out = ByteArrayOutputStream()
-                        val buf = ByteArray(8192)
-                        var read = sevenZFile.read(buf)
-                        while (read >= 0) {
-                            out.write(buf, 0, read)
-                            read = sevenZFile.read(buf)
-                        }
-                        val bytes = out.toByteArray()
-                        if (bytes.isNotEmpty()) pages.add(Pair(name, bytes))
+                        out.toByteArray()
                     }
                 }
-                entry = sevenZFile.nextEntry
+                if (bytes.isNotEmpty()) {
+                    File(pageDir, "incoming_%05d.jpg".format(arrivalIndex)).writeBytes(bytes)
+                    arrivalNameOrder.add(name)
+                    arrivalIndex++
+                }
             }
+            entry = sevenZFile.nextEntry
         }
-    return pages.sortedBy { it.first.lowercase() }.map { it.second }
+    }
+
+    // 到着順ファイル名 → 自然順での最終インデックスへリネーム（バイトコピーなし・高速）
+    val finalIndexByName = targetEntries.withIndex().associate { (i, info) -> info.name to i }
+    arrivalNameOrder.forEachIndexed { arrivalIdx, name ->
+        val finalIdx = finalIndexByName[name] ?: return@forEachIndexed
+        val src = File(pageDir, "incoming_%05d.jpg".format(arrivalIdx))
+        val dst = File(pageDir, "%05d.jpg".format(finalIdx))
+        src.renameTo(dst)
+    }
+    File(pageDir, "complete").writeText(targetEntries.size.toString())
 }
 
 // ─── PDF ─────────────────────────────────────────────────────────────────────

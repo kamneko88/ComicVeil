@@ -23,7 +23,8 @@ enum class TransferStatus {
  * @param fileName    ファイル名（表示用）
  * @param nasPath     NAS上のパス
  * @param server      接続先NASサーバー
- * @param destPath    保存先のローカルパス
+ * @param destPath    保存先のローカルパス（アプリキャッシュ内の作業用パス）
+ * @param safTargetUri DL保存先がSAFフォルダの場合、コピー先のツリーURI（不要ならnull）
  * @param totalBytes  ファイルサイズ（不明時は -1）
  * @param downloadedBytes ダウンロード済みバイト数
  * @param status      転送ステータス
@@ -37,6 +38,7 @@ data class TransferItem(
     val nasPath: String,
     val server: NasServer,
     val destPath: String,
+    val safTargetUri: String? = null,
     val totalBytes: Long = -1L,
     val downloadedBytes: Long = 0L,
     val status: TransferStatus = TransferStatus.WAITING,

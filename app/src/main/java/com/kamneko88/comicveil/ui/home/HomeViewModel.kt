@@ -1,10 +1,14 @@
 package com.kamneko88.comicveil.ui.home
 
 import android.app.Application
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kamneko88.comicveil.data.AppPrefs
+import com.kamneko88.comicveil.data.ArchiveScanner
 import com.kamneko88.comicveil.data.FileItem
+import com.kamneko88.comicveil.data.SafFileRepository
 import com.kamneko88.comicveil.data.SortPrefs
 import com.kamneko88.comicveil.data.LocalFileRepository
 import com.kamneko88.comicveil.data.db.ColorLabel
@@ -32,6 +36,7 @@ import java.io.File
 sealed class ViewLocation {
     object Home : ViewLocation()
     data class LocalFolder(val folder: File) : ViewLocation()
+    data class SafFolder(val uri: Uri, val displayName: String) : ViewLocation()
     data class NasFolder(val server: NasServer, val path: String) : ViewLocation() {
         val displayTitle: String get() =
             if (path.isEmpty()) server.displayName else path.substringAfterLast("/")
@@ -76,6 +81,7 @@ data class FileInfoState(
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val fileRepository      = LocalFileRepository()
+    private val safFileRepository   = SafFileRepository()
     private val progressRepository  : ReadingProgressRepository
     private val comicFileRepository : ComicFileRepository
     private val smbRepository       = SmbRepository()
@@ -85,9 +91,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val homeFolder: File
         get() = appPrefs.resolveHomeFolder(getApplication())
-
-    private val downloadFolder: File
-        get() = appPrefs.resolveDownloadFolder(getApplication())
 
     private val _currentLocation = MutableStateFlow<ViewLocation>(ViewLocation.Home)
     val currentLocation: StateFlow<ViewLocation> = _currentLocation.asStateFlow()
@@ -144,6 +147,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _navigateToTransfer = MutableSharedFlow<String?>(replay = 0, extraBufferCapacity = 1)
     val navigateToTransfer: SharedFlow<String?> = _navigateToTransfer.asSharedFlow()
+
+    private val _navigateToVolumes = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
+    val navigateToVolumes: SharedFlow<String> = _navigateToVolumes.asSharedFlow()
 
     private val _isStreamingMode = MutableStateFlow(true)
     val isStreamingMode: StateFlow<Boolean> = _isStreamingMode.asStateFlow()
@@ -306,11 +312,30 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _nasError.value = null
     }
 
-    // ─── ローカルナビゲーション ───────────────────────────────────────────
+    // ─── ローカル/SAF ホームの読み込み共通処理 ───────────────────────────
+
+    /** appPrefsのhomeFolderTypeに応じて、Homeの中身を読み込む */
+    private fun loadHomeContents() {
+        _currentLocation.value = ViewLocation.Home
+        when (appPrefs.homeFolderType) {
+            AppPrefs.HomeFolderType.APP_FOLDER -> {
+                _files.value = fileRepository.getFiles(homeFolder)
+            }
+            AppPrefs.HomeFolderType.SAF_FOLDER -> {
+                val uriString = appPrefs.homeFolderSafUri
+                _files.value = if (uriString != null) {
+                    safFileRepository.getFiles(getApplication(), Uri.parse(uriString))
+                } else {
+                    emptyList()
+                }
+            }
+        }
+        loadFileStatuses(_files.value)
+    }
 
     fun loadInitialFolder() {
         if (_currentLocation.value !is ViewLocation.Home) return
-        _files.value = fileRepository.getFiles(homeFolder)
+        loadHomeContents()
     }
 
     fun loadFolder(folder: File) {
@@ -324,16 +349,56 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         loadFileStatuses(_files.value)
     }
 
-    fun navigateToRoot() {
-        _currentLocation.value = ViewLocation.Home
-        _files.value = fileRepository.getFiles(homeFolder)
+    /** SAFフォルダ内のサブフォルダに入る */
+    fun loadSafFolder(uri: Uri, displayName: String) {
+        _currentLocation.value = ViewLocation.SafFolder(uri, displayName)
+        _files.value = safFileRepository.getFiles(getApplication(), uri)
         loadFileStatuses(_files.value)
     }
 
+    fun navigateToRoot() {
+        loadHomeContents()
+    }
+
     fun navigateToHome() {
-        _currentLocation.value = ViewLocation.Home
-        _files.value = fileRepository.getFiles(homeFolder)
-        loadFileStatuses(_files.value)
+        loadHomeContents()
+    }
+
+    /**
+     * SAFの「フォルダ選択」ピッカーで選ばれたフォルダをホームフォルダとして保存する。
+     * 永続的なアクセス権限を取得してからAppPrefsに保存し、Homeとして読み込む。
+     */
+    fun pickedSafHomeFolder(uri: Uri) {
+        val context = getApplication<Application>()
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (e: Exception) {
+            _nasError.value = "フォルダへのアクセス許可の取得に失敗しました"
+            return
+        }
+        appPrefs.homeFolderType    = AppPrefs.HomeFolderType.SAF_FOLDER
+        appPrefs.homeFolderSafUri  = uri.toString()
+        loadHomeContents()
+    }
+
+    /** SAFの「フォルダ選択」ピッカーで選ばれたフォルダをDL保存先として保存する */
+    fun pickedSafDownloadFolder(uri: Uri) {
+        val context = getApplication<Application>()
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        } catch (e: Exception) {
+            _nasError.value = "フォルダへのアクセス許可の取得に失敗しました"
+            return
+        }
+        appPrefs.downloadFolderType   = AppPrefs.DownloadFolderType.SAF_FOLDER
+        appPrefs.downloadFolderSafUri = uri.toString()
     }
 
     // ─── NASナビゲーション ────────────────────────────────────────────────
@@ -362,19 +427,23 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
             is ViewLocation.LocalFolder -> {
                 val parent = loc.folder.parentFile
-                if (parent != null) loadFolder(parent) else {
-                    _currentLocation.value = ViewLocation.Home
-                    _files.value = fileRepository.getFiles(homeFolder)
-                    loadFileStatuses(_files.value)
+                if (parent != null) loadFolder(parent) else loadHomeContents()
+                true
+            }
+
+            is ViewLocation.SafFolder -> {
+                val parentDoc = safFileRepository.getParent(getApplication(), loc.uri)
+                if (parentDoc != null) {
+                    loadSafFolder(parentDoc.uri, parentDoc.name ?: "フォルダ")
+                } else {
+                    loadHomeContents()
                 }
                 true
             }
 
             is ViewLocation.NasFolder -> {
                 if (loc.path.isEmpty()) {
-                    _currentLocation.value = ViewLocation.Home
-                    _files.value = fileRepository.getFiles(homeFolder)
-                    loadFileStatuses(_files.value)
+                    loadHomeContents()
                 } else {
                     val parentPath = loc.path.substringBeforeLast("/", "")
                     navigateToNas(loc.server, parentPath)
@@ -407,24 +476,77 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onComicTapped(fileItem: FileItem) {
         viewModelScope.launch {
-            if (fileItem.isNas) {
-                if (_isStreamingMode.value) {
-                    openNasComicStr(fileItem)
-                } else {
-                    openNasComicDl(fileItem)
+            when {
+                fileItem.isNas -> {
+                    if (_isStreamingMode.value) openNasComicStr(fileItem) else openNasComicDl(fileItem)
                 }
-            } else {
-                val progress = withContext(Dispatchers.IO) {
-                    progressRepository.getProgress(fileItem.path)
+                fileItem.isSaf -> {
+                    val cacheFile = withContext(Dispatchers.IO) { ensureSafCached(fileItem) }
+                    if (cacheFile == null) {
+                        _nasError.value = "ファイルの読み込みに失敗しました"
+                        return@launch
+                    }
+                    openLocalOrVolumeComic(fileItem.copy(file = cacheFile))
                 }
-                if (progress != null && progress.currentPage > 0) {
-                    _dialogState.value = ResumeDialogState(
-                        fileItem, progress.currentPage, progress.totalPages
-                    )
-                } else {
-                    _navigateEvent.tryEmit(fileItem.path)
+                else -> {
+                    openLocalOrVolumeComic(fileItem)
                 }
             }
+        }
+    }
+
+    /**
+     * ローカル（またはSAFキャッシュ済み）のコミックを開く。
+     * 先にアーカイブの中身をスキャンし、複数の巻フォルダが見つかった場合は巻一覧画面へ、
+     * そうでなければ今まで通りの再開ダイアログ・Viewer遷移を行う。
+     */
+    private suspend fun openLocalOrVolumeComic(item: FileItem) {
+        val file = item.file
+        val effectivePath = file?.absolutePath ?: item.path
+
+        if (file != null) {
+            val ext = file.extension.lowercase()
+            if (ext in setOf("zip", "cbz", "rar", "cbr", "7z")) {
+                val scan = withContext(Dispatchers.IO) { ArchiveScanner.scan(file) }
+                if (scan.volumes != null) {
+                    _navigateToVolumes.tryEmit(file.absolutePath)
+                    return
+                }
+            }
+        }
+
+        val progress = withContext(Dispatchers.IO) {
+            progressRepository.getProgress(effectivePath)
+        }
+        if (progress != null && progress.currentPage > 0) {
+            _dialogState.value = ResumeDialogState(
+                item, progress.currentPage, progress.totalPages
+            )
+        } else {
+            _navigateEvent.tryEmit(effectivePath)
+        }
+    }
+
+    /**
+     * SAFで選んだコミックファイルを、URIハッシュ値による決定的なパスでアプリキャッシュへコピーする。
+     * すでにコピー済みならそのまま返す（NASのSTRキャッシュと同じ考え方）。
+     */
+    private fun ensureSafCached(fileItem: FileItem): File? {
+        val uri = fileItem.uri ?: return null
+        val ext = fileItem.name.substringAfterLast(".")
+        val cacheDir = File(getApplication<Application>().cacheDir, "saf_cache")
+        cacheDir.mkdirs()
+        val cacheFile = File(cacheDir, "saf_${uri.toString().hashCode()}.$ext")
+        if (cacheFile.exists() && cacheFile.length() > 0) return cacheFile
+
+        return try {
+            getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
+                cacheFile.outputStream().use { output -> input.copyTo(output) }
+            }
+            if (cacheFile.exists() && cacheFile.length() > 0) cacheFile else null
+        } catch (e: Exception) {
+            runCatching { cacheFile.delete() }
+            null
         }
     }
 
@@ -620,7 +742,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** RARなど: 全体DL後に起動 */
+    /**
+     * RARなど: 全体DL後に起動。
+     * DL保存先がSAFフォルダの場合、アプリキャッシュへDL後にSAF側へコピーする。
+     */
     private suspend fun startStrDownloadFull(
         fileItem: FileItem,
         server: NasServer,
@@ -678,7 +803,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         if (state.fileItem.isNas && _isStreamingMode.value) {
             startStrDownload(state.fileItem)
         } else {
-            _navigateEvent.tryEmit(state.fileItem.path)
+            _navigateEvent.tryEmit(state.fileItem.file?.absolutePath ?: state.fileItem.path)
         }
     }
 
@@ -689,11 +814,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         if (state.fileItem.isNas && _isStreamingMode.value) {
             startStrDownload(state.fileItem)
         } else {
+            val effectivePath = state.fileItem.file?.absolutePath ?: state.fileItem.path
             viewModelScope.launch {
                 withContext(Dispatchers.IO) {
-                    progressRepository.saveProgress(state.fileItem.path, 0, state.totalPages)
+                    progressRepository.saveProgress(effectivePath, 0, state.totalPages)
                 }
-                _navigateEvent.tryEmit(state.fileItem.path)
+                _navigateEvent.tryEmit(effectivePath)
             }
         }
     }
@@ -707,24 +833,37 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteLocalFiles(fileItems: List<FileItem>): Int {
         var count = 0
         viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
             fileItems.forEach { item ->
-                val file = item.file ?: return@forEach
-                val deleted = if (file.isDirectory) file.deleteRecursively() else file.delete()
+                val deleted = when {
+                    item.isSaf -> {
+                        val doc = DocumentFile.fromSingleUri(context, item.uri!!)
+                        doc?.delete() ?: false
+                    }
+                    item.file != null -> {
+                        if (item.file.isDirectory) item.file.deleteRecursively() else item.file.delete()
+                    }
+                    else -> false
+                }
                 if (deleted) {
                     comicFileRepository.delete(item.path)
                     progressRepository.deleteProgress(item.path)
                     count++
                 }
             }
-            val loc = _currentLocation.value
-            val folder = when (loc) {
-                is ViewLocation.Home        -> homeFolder
-                is ViewLocation.LocalFolder -> loc.folder
-                else                        -> return@launch
-            }
             withContext(Dispatchers.Main) {
-                _files.value = fileRepository.getFiles(folder)
-                loadFileStatuses(_files.value)
+                when (val loc = _currentLocation.value) {
+                    is ViewLocation.Home        -> loadHomeContents()
+                    is ViewLocation.LocalFolder -> {
+                        _files.value = fileRepository.getFiles(loc.folder)
+                        loadFileStatuses(_files.value)
+                    }
+                    is ViewLocation.SafFolder   -> {
+                        _files.value = safFileRepository.getFiles(context, loc.uri)
+                        loadFileStatuses(_files.value)
+                    }
+                    else -> {}
+                }
             }
         }
         return count

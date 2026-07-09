@@ -1,6 +1,8 @@
 package com.kamneko88.comicveil.ui.transfer
 
 import android.app.Application
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kamneko88.comicveil.data.AppPrefs
@@ -41,25 +43,41 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
      * ファイルをダウンロードキューに追加する
      *
      * @param fileItem  NASのファイルアイテム
-     * @param isStreaming true=STRモード（cacheDir）/ false=DLモード（Downloads/ComicVeil）
+     * @param isStreaming true=STRモード（cacheDir）/ false=DLモード（DL保存先設定に従う）
      */
     fun enqueue(fileItem: FileItem, isStreaming: Boolean = false): TransferItem {
         val server = fileItem.nasServer ?: error("NASサーバー情報がありません")
         val ext    = fileItem.name.substringAfterLast(".")
 
-        val destFile = if (isStreaming) {
+        // 実際のダウンロード先は常にアプリキャッシュ内の作業用パス
+        // （DL保存先がSAFフォルダの場合、ダウンロード完了後にSAF側へコピーする）
+        val destFile: File
+        var safTargetUri: String? = null
+
+        if (isStreaming) {
             val dir = File(getApplication<Application>().cacheDir, "nas_cache")
-            File(dir, "nas_${fileItem.nasPath.hashCode()}.$ext")
+            destFile = File(dir, "nas_${fileItem.nasPath.hashCode()}.$ext")
         } else {
-            appPrefs.resolveDownloadFolder(getApplication()).also { it.mkdirs() }
-                .let { File(it, fileItem.name) }
+            when (appPrefs.downloadFolderType) {
+                AppPrefs.DownloadFolderType.APP_FOLDER -> {
+                    destFile = appPrefs.resolveDownloadFolder(getApplication()).also { it.mkdirs() }
+                        .let { File(it, fileItem.name) }
+                }
+                AppPrefs.DownloadFolderType.SAF_FOLDER -> {
+                    val dir = File(getApplication<Application>().cacheDir, "dl_work")
+                    dir.mkdirs()
+                    destFile = File(dir, "${fileItem.nasPath.hashCode()}_${fileItem.name}")
+                    safTargetUri = appPrefs.downloadFolderSafUri
+                }
+            }
         }
 
         val item = TransferItem(
-            fileName = fileItem.name,
-            nasPath  = fileItem.nasPath,
-            server   = server,
-            destPath = destFile.absolutePath
+            fileName     = fileItem.name,
+            nasPath      = fileItem.nasPath,
+            server       = server,
+            destPath     = destFile.absolutePath,
+            safTargetUri = safTargetUri
         )
 
         _items.value = _items.value + item
@@ -73,10 +91,11 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
      */
     fun retry(item: TransferItem) {
         val newItem = TransferItem(
-            fileName = item.fileName,
-            nasPath  = item.nasPath,
-            server   = item.server,
-            destPath = item.destPath
+            fileName     = item.fileName,
+            nasPath      = item.nasPath,
+            server       = item.server,
+            destPath     = item.destPath,
+            safTargetUri = item.safTargetUri
         )
         _items.value = _items.value + newItem
         processQueue()
@@ -146,7 +165,7 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                 val destFile = File(next.destPath)
 
                 // すでにファイルが存在する場合はスキップ（キャッシュ済み）
-                if (destFile.exists() && destFile.length() > 0) {
+                if (destFile.exists() && destFile.length() > 0 && next.safTargetUri == null) {
                     updateItem(next.id) {
                         it.copy(
                             status        = TransferStatus.COMPLETED,
@@ -157,19 +176,27 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                     return@launch
                 }
 
-                smbRepository.downloadFile(
-                    server   = next.server,
-                    nasPath  = next.nasPath,
-                    destFile = destFile,
-                    onProgress = { downloaded, total ->
-                        updateItem(next.id) {
-                            it.copy(
-                                downloadedBytes = downloaded,
-                                totalBytes      = total
-                            )
+                if (!(destFile.exists() && destFile.length() > 0)) {
+                    smbRepository.downloadFile(
+                        server   = next.server,
+                        nasPath  = next.nasPath,
+                        destFile = destFile,
+                        onProgress = { downloaded, total ->
+                            updateItem(next.id) {
+                                it.copy(
+                                    downloadedBytes = downloaded,
+                                    totalBytes      = total
+                                )
+                            }
                         }
-                    }
-                )
+                    )
+                }
+
+                // DL保存先がSAFフォルダの場合、ダウンロード済みファイルをSAF側へコピーする
+                if (next.safTargetUri != null) {
+                    copyToSafFolder(destFile, next.safTargetUri, next.fileName)
+                    runCatching { destFile.delete() }
+                }
 
                 // 完了
                 updateItem(next.id) {
@@ -204,6 +231,24 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                 processQueue()
             }
         }
+    }
+
+    /** ダウンロード済みファイルを、SAFで許可されたフォルダへコピーする */
+    private fun copyToSafFolder(sourceFile: File, targetUriString: String, fileName: String) {
+        val context = getApplication<Application>()
+        val treeDoc = DocumentFile.fromTreeUri(context, Uri.parse(targetUriString))
+            ?: error("保存先フォルダにアクセスできません")
+
+        // 同名ファイルがあれば削除してから作成（上書き）
+        treeDoc.findFile(fileName)?.delete()
+
+        val mimeType = "application/octet-stream"
+        val newDoc = treeDoc.createFile(mimeType, fileName)
+            ?: error("保存先にファイルを作成できません")
+
+        context.contentResolver.openOutputStream(newDoc.uri)?.use { output ->
+            sourceFile.inputStream().use { input -> input.copyTo(output) }
+        } ?: error("保存先への書き込みに失敗しました")
     }
 
     /** 指定IDのアイテムを更新するヘルパー */

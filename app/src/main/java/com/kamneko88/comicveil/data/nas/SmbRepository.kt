@@ -172,6 +172,10 @@ class SmbRepository {
 
     /**
      * ZIPファイルをストリームで読み込み、ページ画像を逐次書き出す（Progressive Loading）
+     * メモリには1ページ分のバイト列しか保持せず、書き出したら即座に破棄する。
+     * 最終的な自然順の並びは、全ページ到着後にファイル名のリネームだけで確定する
+     * （バイトの再書き込みは行わないため高速）。
+     *
      * @param pageDir     ページ画像を保存するディレクトリ（00000.jpg, 00001.jpg...）
      * @param onPageReady ページを書き出すたびに呼ぶコールバック（引数：累計保存ページ数）
      * @param onComplete  全ページ保存完了時に呼ぶコールバック
@@ -194,24 +198,18 @@ class SmbRepository {
             val session = connection.authenticate(auth)
             val share   = session.connectShare(server.shareName) as DiskShare
             val smbPath = nasPath.replace("/", "\\")
-            val smbFile = share.openFile(
-                smbPath,
-                setOf(AccessMask.GENERIC_READ),
-                null,
-                setOf(SMB2ShareAccess.FILE_SHARE_READ),
-                SMB2CreateDisposition.FILE_OPEN,
-                null
-            )
 
             pageDir.mkdirs()
             val imageExtensions = setOf("jpg", "jpeg", "png", "webp")
-            val pages = mutableListOf<Pair<String, ByteArray>>()
+            val arrivalNames = mutableListOf<String>()
 
             // Shift-JIS / UTF-8 両方を試行
             for (cs in listOf("UTF-8", "Shift_JIS")) {
-                pages.clear()
+                arrivalNames.clear()
+                pageDir.listFiles { f -> f.name.startsWith("incoming_") }?.forEach { it.delete() }
+
                 // 再接続が必要なため毎回ファイルを開き直す
-                val smbFile2 = share.openFile(
+                val smbFile = share.openFile(
                     smbPath,
                     setOf(AccessMask.GENERIC_READ),
                     null,
@@ -221,7 +219,7 @@ class SmbRepository {
                 )
                 runCatching {
                     org.apache.commons.compress.archivers.zip.ZipArchiveInputStream(
-                        smbFile2.inputStream, cs, false, true
+                        smbFile.inputStream, cs, false, true
                     ).use { zis ->
                         var entry = zis.nextZipEntry
                         while (entry != null && isActive) {
@@ -230,15 +228,11 @@ class SmbRepository {
                             if (!entry.isDirectory && ext in imageExtensions) {
                                 val bytes = zis.readBytes()
                                 if (bytes.isNotEmpty()) {
-                                    pages.add(name to bytes)
-                                    // 暫定ソートで現在わかっている順に保存
-                                    val sortedSoFar = pages.sortedBy { it.first.lowercase() }
-                                    sortedSoFar.forEachIndexed { index, (_, pageBytes) ->
-                                        val pageFile = File(pageDir, "%05d.jpg".format(index))
-                                        pageFile.writeBytes(pageBytes)
-                                    }
+                                    // 到着順の一時名で即座に書き出し、バイト列はこの場で破棄（メモリに溜め込まない）
+                                    File(pageDir, "incoming_%05d.jpg".format(arrivalNames.size)).writeBytes(bytes)
+                                    arrivalNames.add(name)
                                     withContext(Dispatchers.Main) {
-                                        onPageReady(pages.size)
+                                        onPageReady(arrivalNames.size)
                                     }
                                 }
                             }
@@ -246,16 +240,23 @@ class SmbRepository {
                         }
                     }
                 }
-                if (pages.isNotEmpty()) break
+                if (arrivalNames.isNotEmpty()) break
             }
 
-            // 全ページ取得後に最終ソートで確定
-            val sorted = pages.sortedBy { it.first.lowercase() }
-            sorted.forEachIndexed { index, (_, bytes) ->
-                File(pageDir, "%05d.jpg".format(index)).writeBytes(bytes)
+            // 到着順ファイルを、自然順の最終位置へリネーム（バイトコピーなし・高速）
+            val order = arrivalNames.withIndex()
+                .sortedWith(compareBy(com.kamneko88.comicveil.data.NaturalOrder.COMPARATOR) { it.value })
+            order.forEachIndexed { finalIdx, (arrivalIdx, _) ->
+                val src = File(pageDir, "incoming_%05d.jpg".format(arrivalIdx))
+                val dst = File(pageDir, "%05d_tmp.jpg".format(finalIdx))
+                src.renameTo(dst)
             }
+            (arrivalNames.indices).forEach { idx ->
+                File(pageDir, "%05d_tmp.jpg".format(idx)).renameTo(File(pageDir, "%05d.jpg".format(idx)))
+            }
+
             // 完了マーカー（ページ数を記録）
-            File(pageDir, "complete").writeText(sorted.size.toString())
+            File(pageDir, "complete").writeText(arrivalNames.size.toString())
 
             withContext(Dispatchers.Main) {
                 onComplete()

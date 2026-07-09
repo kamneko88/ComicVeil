@@ -1,7 +1,6 @@
 package com.kamneko88.comicveil.data
 
 import android.content.Context
-import android.os.Environment
 import java.io.File
 
 /**
@@ -15,42 +14,50 @@ class AppPrefs(context: Context) {
     // ─── Homeフォルダの場所 ───────────────────────────────────────────────
 
     enum class HomeFolderType {
-        APP_FOLDER,   // アプリ専用フォルダ（デフォルト）
-        DOWNLOADS     // Downloadsフォルダ
+        APP_FOLDER,  // アプリ専用フォルダ（デフォルト・権限不要）
+        SAF_FOLDER   // ユーザーがSAFで選んだ任意のフォルダ
     }
 
     var homeFolderType: HomeFolderType
-        get() = HomeFolderType.valueOf(
-            prefs.getString(KEY_HOME_FOLDER, HomeFolderType.APP_FOLDER.name)
-                ?: HomeFolderType.APP_FOLDER.name
-        )
+        get() = runCatching {
+            HomeFolderType.valueOf(
+                prefs.getString(KEY_HOME_FOLDER, HomeFolderType.APP_FOLDER.name)
+                    ?: HomeFolderType.APP_FOLDER.name
+            )
+        }.getOrDefault(HomeFolderType.APP_FOLDER) // 旧バージョンのDOWNLOADS等、未知の値が保存されていた場合の保険
         set(value) = prefs.edit().putString(KEY_HOME_FOLDER, value.name).apply()
+
+    /** SAFで選択したホームフォルダのツリーURI（未選択ならnull） */
+    var homeFolderSafUri: String?
+        get() = prefs.getString(KEY_HOME_FOLDER_SAF_URI, null)
+        set(value) = prefs.edit().putString(KEY_HOME_FOLDER_SAF_URI, value).apply()
 
     // ─── DL保存先 ─────────────────────────────────────────────────────────
 
     enum class DownloadFolderType {
-        APP_FOLDER,   // アプリ専用フォルダ（デフォルト）
-        DOWNLOADS     // Downloadsフォルダ
+        APP_FOLDER,  // アプリ専用フォルダ（デフォルト・権限不要）
+        SAF_FOLDER   // ユーザーがSAFで選んだ任意のフォルダ
     }
 
     var downloadFolderType: DownloadFolderType
-        get() = DownloadFolderType.valueOf(
-            prefs.getString(KEY_DOWNLOAD_FOLDER, DownloadFolderType.APP_FOLDER.name)
-                ?: DownloadFolderType.APP_FOLDER.name
-        )
+        get() = runCatching {
+            DownloadFolderType.valueOf(
+                prefs.getString(KEY_DOWNLOAD_FOLDER, DownloadFolderType.APP_FOLDER.name)
+                    ?: DownloadFolderType.APP_FOLDER.name
+            )
+        }.getOrDefault(DownloadFolderType.APP_FOLDER) // 旧バージョンのDOWNLOADS等、未知の値が保存されていた場合の保険
         set(value) = prefs.edit().putString(KEY_DOWNLOAD_FOLDER, value.name).apply()
 
-    // ─── フォルダパス解決 ─────────────────────────────────────────────────
+    /** SAFで選択したDL保存先のツリーURI（未選択ならnull） */
+    var downloadFolderSafUri: String?
+        get() = prefs.getString(KEY_DOWNLOAD_FOLDER_SAF_URI, null)
+        set(value) = prefs.edit().putString(KEY_DOWNLOAD_FOLDER_SAF_URI, value).apply()
 
-    fun resolveHomeFolder(context: Context): File = when (homeFolderType) {
-        HomeFolderType.APP_FOLDER -> getAppFolder(context)
-        HomeFolderType.DOWNLOADS  -> getDownloadsFolder()
-    }
+    // ─── フォルダパス解決（アプリ専用フォルダのみ。SAF側は呼び出し元で分岐） ──────
 
-    fun resolveDownloadFolder(context: Context): File = when (downloadFolderType) {
-        DownloadFolderType.APP_FOLDER -> getAppFolder(context)
-        DownloadFolderType.DOWNLOADS  -> File(getDownloadsFolder(), "ComicVeil")
-    }
+    fun resolveHomeFolder(context: Context): File = getAppFolder(context)
+
+    fun resolveDownloadFolder(context: Context): File = getAppFolder(context)
 
     // ─── ページ送り方向 ───────────────────────────────────────────────────
 
@@ -68,21 +75,18 @@ class AppPrefs(context: Context) {
 
     // ─── ページ送りアニメーション ─────────────────────────────────────────
 
-    /** true = バウンスアニメーションあり（デフォルト）、false = アニメーションなし */
     var pageAnimation: Boolean
         get() = prefs.getBoolean(KEY_PAGE_ANIMATION, true)
         set(value) = prefs.edit().putBoolean(KEY_PAGE_ANIMATION, value).apply()
 
     // ─── 音量ボタンでページ送り ───────────────────────────────────────────
 
-    /** true = 音量ボタンでページ送り、false = 通常の音量操作（デフォルト） */
     var volumeKeyPageTurn: Boolean
         get() = prefs.getBoolean(KEY_VOLUME_KEY_PAGE_TURN, false)
         set(value) = prefs.edit().putBoolean(KEY_VOLUME_KEY_PAGE_TURN, value).apply()
 
     // ─── ズームバウンス ───────────────────────────────────────────────────
 
-    /** true = ピンチ操作の限界でバウンスあり（デフォルト）、false = バウンスなし */
     var zoomBounce: Boolean
         get() = prefs.getBoolean(KEY_ZOOM_BOUNCE, true)
         set(value) = prefs.edit().putBoolean(KEY_ZOOM_BOUNCE, value).apply()
@@ -114,22 +118,21 @@ class AppPrefs(context: Context) {
         set(value) = prefs.edit().putString(KEY_LIST_DISPLAY_MODE, value.name).apply()
 
     companion object {
-        private const val KEY_HOME_FOLDER          = "home_folder_type"
-        private const val KEY_DOWNLOAD_FOLDER      = "download_folder_type"
-        private const val KEY_PAGE_DIRECTION       = "page_direction"
-        private const val KEY_PAGE_ANIMATION       = "page_animation"
-        private const val KEY_VOLUME_KEY_PAGE_TURN = "volume_key_page_turn"
-        private const val KEY_ZOOM_BOUNCE          = "zoom_bounce"
-        private const val KEY_DOUBLE_TAP_ZOOM      = "double_tap_zoom"
-        private const val KEY_LIST_DISPLAY_MODE    = "list_display_mode"
+        private const val KEY_HOME_FOLDER            = "home_folder_type"
+        private const val KEY_HOME_FOLDER_SAF_URI    = "home_folder_saf_uri"
+        private const val KEY_DOWNLOAD_FOLDER        = "download_folder_type"
+        private const val KEY_DOWNLOAD_FOLDER_SAF_URI = "download_folder_saf_uri"
+        private const val KEY_PAGE_DIRECTION         = "page_direction"
+        private const val KEY_PAGE_ANIMATION         = "page_animation"
+        private const val KEY_VOLUME_KEY_PAGE_TURN   = "volume_key_page_turn"
+        private const val KEY_ZOOM_BOUNCE            = "zoom_bounce"
+        private const val KEY_DOUBLE_TAP_ZOOM        = "double_tap_zoom"
+        private const val KEY_LIST_DISPLAY_MODE      = "list_display_mode"
 
         fun getAppFolder(context: Context): File {
             val dir = File(context.getExternalFilesDir(null), "Comics")
             if (!dir.exists()) dir.mkdirs()
             return dir
         }
-
-        fun getDownloadsFolder(): File =
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
     }
 }

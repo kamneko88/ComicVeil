@@ -1,5 +1,7 @@
 package com.kamneko88.comicveil.ui.settings
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -37,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.documentfile.provider.DocumentFile
 import com.kamneko88.comicveil.BuildConfig
 import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.ui.home.HomeViewModel
@@ -61,7 +64,39 @@ fun SettingsScreen(
 
     // ── ファイル・フォルダ ────────────────────────────────────────────────
     var homeFolderType     by remember { mutableStateOf(appPrefs.homeFolderType) }
-    var downloadFolderType by remember { mutableStateOf(appPrefs.downloadFolderType) }
+    var homeFolderSafName  by remember {
+        mutableStateOf(
+            appPrefs.homeFolderSafUri?.let { getSafFolderDisplayName(context, it) }
+        )
+    }
+    var downloadFolderType     by remember { mutableStateOf(appPrefs.downloadFolderType) }
+    var downloadFolderSafName  by remember {
+        mutableStateOf(
+            appPrefs.downloadFolderSafUri?.let { getSafFolderDisplayName(context, it) }
+        )
+    }
+
+    // SAFフォルダ選択ピッカー（ホームフォルダ用）
+    val homeSafPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.pickedSafHomeFolder(uri)
+            homeFolderType    = AppPrefs.HomeFolderType.SAF_FOLDER
+            homeFolderSafName = getSafFolderDisplayName(context, uri.toString())
+        }
+    }
+
+    // SAFフォルダ選択ピッカー（DL保存先用）
+    val downloadSafPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.pickedSafDownloadFolder(uri)
+            downloadFolderType    = AppPrefs.DownloadFolderType.SAF_FOLDER
+            downloadFolderSafName = getSafFolderDisplayName(context, uri.toString())
+        }
+    }
 
     // ── キャッシュ ────────────────────────────────────────────────────────
     var nasCacheSize             by remember { mutableLongStateOf(calcDirSize(File(context.cacheDir, "nas_cache"))) }
@@ -223,7 +258,7 @@ fun SettingsScreen(
             )
             SettingsRadioItem(
                 label       = "ComicVeilフォルダ（推奨）",
-                description = "Android/data/以下のアプリ専用領域。他アプリから干渉されません",
+                description = "アプリ専用領域。権限不要で常にアクセス可能",
                 selected    = homeFolderType == AppPrefs.HomeFolderType.APP_FOLDER,
                 onSelect    = {
                     homeFolderType          = AppPrefs.HomeFolderType.APP_FOLDER
@@ -231,13 +266,13 @@ fun SettingsScreen(
                 }
             )
             SettingsRadioItem(
-                label       = "Downloadsフォルダ",
-                description = "他のアプリと共有される領域。干渉の可能性あり",
-                selected    = homeFolderType == AppPrefs.HomeFolderType.DOWNLOADS,
-                onSelect    = {
-                    homeFolderType          = AppPrefs.HomeFolderType.DOWNLOADS
-                    appPrefs.homeFolderType = AppPrefs.HomeFolderType.DOWNLOADS
-                }
+                label       = "フォルダを選択",
+                description = if (homeFolderType == AppPrefs.HomeFolderType.SAF_FOLDER && homeFolderSafName != null)
+                    "選択中：$homeFolderSafName（タップで変更）"
+                else
+                    "端末内の好きなフォルダを選んで使用します",
+                selected    = homeFolderType == AppPrefs.HomeFolderType.SAF_FOLDER,
+                onSelect    = { homeSafPickerLauncher.launch(null) }
             )
 
             SettingsDivider()
@@ -249,7 +284,7 @@ fun SettingsScreen(
             )
             SettingsRadioItem(
                 label       = "ComicVeilフォルダ（推奨）",
-                description = "Homeフォルダと同じ場所に保存",
+                description = "アプリ専用領域。権限不要で常にアクセス可能",
                 selected    = downloadFolderType == AppPrefs.DownloadFolderType.APP_FOLDER,
                 onSelect    = {
                     downloadFolderType          = AppPrefs.DownloadFolderType.APP_FOLDER
@@ -257,13 +292,13 @@ fun SettingsScreen(
                 }
             )
             SettingsRadioItem(
-                label       = "Downloads/ComicVeilフォルダ",
-                description = "Downloadsフォルダ内のComicVeilサブフォルダに保存",
-                selected    = downloadFolderType == AppPrefs.DownloadFolderType.DOWNLOADS,
-                onSelect    = {
-                    downloadFolderType          = AppPrefs.DownloadFolderType.DOWNLOADS
-                    appPrefs.downloadFolderType = AppPrefs.DownloadFolderType.DOWNLOADS
-                }
+                label       = "フォルダを選択",
+                description = if (downloadFolderType == AppPrefs.DownloadFolderType.SAF_FOLDER && downloadFolderSafName != null)
+                    "選択中：$downloadFolderSafName（タップで変更）"
+                else
+                    "端末内の好きなフォルダを選んで保存します",
+                selected    = downloadFolderType == AppPrefs.DownloadFolderType.SAF_FOLDER,
+                onSelect    = { downloadSafPickerLauncher.launch(null) }
             )
 
             Spacer(Modifier.height(24.dp))
@@ -302,6 +337,14 @@ fun SettingsScreen(
             )
             Spacer(Modifier.height(32.dp))
         }
+    }
+}
+
+private fun getSafFolderDisplayName(context: android.content.Context, uriString: String): String? {
+    return try {
+        DocumentFile.fromTreeUri(context, android.net.Uri.parse(uriString))?.name
+    } catch (e: Exception) {
+        null
     }
 }
 

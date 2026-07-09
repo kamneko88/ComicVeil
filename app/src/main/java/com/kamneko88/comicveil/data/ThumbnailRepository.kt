@@ -1,5 +1,6 @@
 package com.kamneko88.comicveil.data
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import com.github.junrar.Archive
@@ -14,7 +15,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 
-class ThumbnailRepository(private val cacheDir: File) {
+class ThumbnailRepository(private val cacheDir: File, private val context: Context? = null) {
 
     private val smbRepository = SmbRepository()
 
@@ -25,6 +26,7 @@ class ThumbnailRepository(private val cacheDir: File) {
     /**
      * サムネイルを取得する。キャッシュがあれば即返し、なければ生成してから返す。
      * NASファイルは STRキャッシュ → 部分取得 の順で生成する
+     * SAFファイルは 先頭部分取得（ZIPのみ）で生成する
      */
     suspend fun getOrGenerateThumbnail(fileItem: FileItem): File? =
         withContext(Dispatchers.IO) {
@@ -32,6 +34,10 @@ class ThumbnailRepository(private val cacheDir: File) {
 
             if (fileItem.isNas) {
                 return@withContext getOrGenerateNasThumbnail(fileItem)
+            }
+
+            if (fileItem.isSaf) {
+                return@withContext getOrGenerateSafThumbnail(fileItem)
             }
 
             val file = fileItem.file ?: return@withContext null
@@ -85,9 +91,48 @@ class ThumbnailRepository(private val cacheDir: File) {
         return generateCacheFromBytes(imageBytes, cacheFile)
     }
 
+    /**
+     * SAFファイルのサムネイル生成
+     * 1. すでに閲覧済み（app_cacheにコピー済み）ならそこから生成
+     * 2. 未コピーならSAF経由で先頭2MBだけ読み取って生成（ZIPのみ対応）
+     */
+    private fun getOrGenerateSafThumbnail(fileItem: FileItem): File? {
+        val uri = fileItem.uri ?: return null
+        val ctx = context ?: return null
+        val ext = fileItem.name.substringAfterLast(".").lowercase()
+
+        val cacheFile = File(cacheDir, "saf_${uri.toString().hashCode()}.jpg")
+        if (cacheFile.exists()) return cacheFile
+
+        // 1. すでに閲覧用にキャッシュ済みならそこから生成（他形式も含めて対応可能）
+        val readCacheFile = File(
+            File(cacheDir.parentFile, "saf_cache"),
+            "saf_${uri.toString().hashCode()}.$ext"
+        )
+        if (readCacheFile.exists() && readCacheFile.length() > 0) {
+            return generateAndCache(readCacheFile, 0L, cacheFile, File(cacheDir, "saf_${uri.toString().hashCode()}.meta"))
+        }
+
+        // 2. 未キャッシュならSAF経由で先頭2MBだけ読み取る（ZIPのみ対応）
+        if (ext !in setOf("zip", "cbz")) return null
+
+        return try {
+            val bytes = ctx.contentResolver.openInputStream(uri)?.use { input ->
+                input.readNBytes(2 * 1024 * 1024)
+            } ?: return null
+            val imageBytes = extractFirstImageFromZipBytes(bytes) ?: return null
+            generateCacheFromBytes(imageBytes, cacheFile)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun deleteThumbnail(filePath: String) {
-        getCacheFile(filePath).delete()
-        getMetaFile(filePath).delete()
+        cacheDir.listFiles()?.forEach { file ->
+            if (file.nameWithoutExtension.contains(filePath.hashCode().toString())) {
+                file.delete()
+            }
+        }
     }
 
     fun deleteAllThumbnails() {
@@ -188,7 +233,6 @@ private fun extractFirstImageFromZip(file: File): ByteArray? {
     // Shift-JISエントリ名に対応するため Apache Commons Compress を使用
     val candidates = mutableListOf<Pair<String, ByteArray>>()
     try {
-        val charset = kotlin.text.Charsets.UTF_8
         fun openStream(cs: java.nio.charset.Charset) =
             ZipArchiveInputStream(FileInputStream(file), cs.name(), false, true)
 

@@ -21,6 +21,7 @@ import com.kamneko88.comicveil.ui.theme.ComicVeilTheme
 import com.kamneko88.comicveil.ui.transfer.TransferScreen
 import com.kamneko88.comicveil.ui.transfer.TransferViewModel
 import com.kamneko88.comicveil.ui.viewer.ViewerScreen
+import com.kamneko88.comicveil.ui.volumes.ArchiveVolumeScreen
 import java.io.File
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -110,6 +111,21 @@ fun ComicVeilApp(intent: Intent? = null) {
             ViewerScreen(
                 filePath = filePath,
                 onClose  = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route     = "volumes/{archivePath}",
+            arguments = listOf(
+                navArgument("archivePath") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val encodedPath = backStackEntry.arguments?.getString("archivePath") ?: ""
+            val archivePath = URLDecoder.decode(encodedPath, "UTF-8")
+            ArchiveVolumeScreen(
+                archivePath   = archivePath,
+                navController = navController,
+                onClose       = { navController.popBackStack() }
             )
         }
 

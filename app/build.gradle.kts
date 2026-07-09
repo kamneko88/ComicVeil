@@ -12,8 +12,8 @@ android {
         applicationId = "com.kamneko88.comicveil"
         minSdk = 26
         targetSdk = 36
-        versionCode = 18
-        versionName = "0.18.0"
+        versionCode = 20
+        versionName = "0.19.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -86,6 +86,9 @@ dependencies {
 
     // SMB接続（NASアクセス）
     implementation("com.hierynomus:smbj:0.13.0")
+
+    // SAF（Storage Access Framework）でのフォルダ操作用
+    implementation("androidx.documentfile:documentfile:1.0.1")
 
     // テスト
     testImplementation(libs.junit)

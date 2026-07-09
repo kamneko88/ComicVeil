@@ -1,15 +1,6 @@
 package com.kamneko88.comicveil.ui.home
 
-import android.Manifest
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.Settings
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -85,7 +76,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import coil3.compose.AsyncImage
@@ -138,7 +128,6 @@ fun HomeScreen(
     var isListMode       by remember {
         mutableStateOf(appPrefs.listDisplayMode == com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.DETAIL)
     }
-    var hasPermission    by remember { mutableStateOf(false) }
     var showAddNasDialog by remember { mutableStateOf(false) }
     var editingServer    by remember { mutableStateOf<NasServer?>(null) }
 
@@ -149,7 +138,7 @@ fun HomeScreen(
     var showSortSheet      by remember { mutableStateOf(false) }
 
     val thumbnailRepository = remember {
-        ThumbnailRepository(File(context.cacheDir, "thumbnails"))
+        ThumbnailRepository(File(context.cacheDir, "thumbnails"), context)
     }
 
     val isRoot = currentLocation is ViewLocation.Home
@@ -158,6 +147,7 @@ fun HomeScreen(
     val screenTitle = when (val loc = currentLocation) {
         is ViewLocation.Home        -> "HOME"
         is ViewLocation.LocalFolder -> loc.folder.name
+        is ViewLocation.SafFolder   -> loc.displayName
         is ViewLocation.NasFolder   -> loc.displayTitle
     }
 
@@ -176,49 +166,21 @@ fun HomeScreen(
         }
     }
 
+    LaunchedEffect(Unit) {
+        viewModel.navigateToVolumes.collect { archivePath ->
+            val encoded = URLEncoder.encode(archivePath, "UTF-8")
+            navController.navigate("volumes/$encoded")
+        }
+    }
+
     // ファイルリストが変わったら状態を一括読み込み
     LaunchedEffect(files) {
         viewModel.loadFileStatuses(files)
     }
 
-    val manageStorageLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-            Environment.isExternalStorageManager()) {
-            hasPermission = true
-            viewModel.loadInitialFolder()
-        }
-    }
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) { hasPermission = true; viewModel.loadInitialFolder() }
-    }
+    // 権限は一切不要（アプリ専用フォルダ or SAFで選択したフォルダのみを扱うため）
     LaunchedEffect(Unit) {
-        when {
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {
-                if (Environment.isExternalStorageManager()) {
-                    hasPermission = true; viewModel.loadInitialFolder()
-                } else {
-                    manageStorageLauncher.launch(
-                        Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                            data = Uri.parse("package:${context.packageName}")
-                        }
-                    )
-                }
-            }
-            else -> {
-                if (ContextCompat.checkSelfPermission(
-                        context, Manifest.permission.READ_EXTERNAL_STORAGE
-                    ) == PackageManager.PERMISSION_GRANTED
-                ) {
-                    hasPermission = true; viewModel.loadInitialFolder()
-                } else {
-                    permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
-                }
-            }
-        }
+        viewModel.loadInitialFolder()
     }
 
     BackHandler(enabled = !isRoot || isEditMode) {
@@ -339,7 +301,7 @@ fun HomeScreen(
     nasError?.let { errorMsg ->
         AlertDialog(
             onDismissRequest = { viewModel.clearNasError() },
-            title = { Text("NAS接続エラー") },
+            title = { Text("エラー") },
             text  = { Text(errorMsg) },
             confirmButton = {
                 TextButton(onClick = { viewModel.clearNasError() }) { Text("閉じる") }
@@ -383,12 +345,9 @@ fun HomeScreen(
                                 expanded         = showNavMenu,
                                 onDismissRequest = { showNavMenu = false }
                             ) {
-                                // 上に表示：共有フォルダルート or Downloads
-                                val rootLabel = when (val loc = currentLocation) {
-                                    is ViewLocation.NasFolder   -> loc.server.displayName
-                                    is ViewLocation.LocalFolder -> "Downloads"
-                                    else                        -> null
-                                }
+                                // NASの場合のみ「サーバールートへ」のショートカットを表示
+                                // （ローカル/SAFのルートはHOMEと同一なので不要）
+                                val rootLabel = (currentLocation as? ViewLocation.NasFolder)?.server?.displayName
                                 if (rootLabel != null) {
                                     DropdownMenuItem(
                                         text    = { Text(rootLabel) },
@@ -396,12 +355,8 @@ fun HomeScreen(
                                             showNavMenu   = false
                                             isEditMode    = false
                                             selectedPaths = emptySet()
-                                            when (val loc = currentLocation) {
-                                                is ViewLocation.NasFolder   ->
-                                                    viewModel.navigateToNas(loc.server, "")
-                                                is ViewLocation.LocalFolder ->
-                                                    viewModel.navigateToRoot()
-                                                else -> {}
+                                            (currentLocation as? ViewLocation.NasFolder)?.let {
+                                                viewModel.navigateToNas(it.server, "")
                                             }
                                         }
                                     )
@@ -424,7 +379,7 @@ fun HomeScreen(
                 actions = {
                     if (isEditMode) {
                         // 編集モード中：全選択ボタン
-                        // ファイル・フォルダ（ローカルのみ）とリモートサーバーを対象に含める
+                        // ファイル・フォルダ（ローカル/SAFのみ）とリモートサーバーを対象に含める
                         val selectableLocal   = files.filter { !it.isNas }
                         val selectableServers = if (isRoot) nasServers.map { it.id } else emptyList()
                         val allSelectablePaths = selectableLocal.map { it.path } + selectableServers
@@ -633,8 +588,7 @@ fun HomeScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text  = if (hasPermission) "ファイルが見つかりません"
-                                    else "権限を確認中…",
+                                    text  = "ファイルが見つかりません",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -1290,8 +1244,11 @@ private fun handleFileClick(
             viewModel.toggleDlSelection(fileItem.path)
         }
         fileItem.isFolder -> {
-            if (fileItem.isNas) viewModel.navigateToNas(fileItem.nasServer!!, fileItem.nasPath)
-            else viewModel.loadFolder(fileItem.file!!)
+            when {
+                fileItem.isNas -> viewModel.navigateToNas(fileItem.nasServer!!, fileItem.nasPath)
+                fileItem.isSaf -> viewModel.loadSafFolder(fileItem.uri!!, fileItem.name)
+                else           -> viewModel.loadFolder(fileItem.file!!)
+            }
         }
         fileItem.isComic -> viewModel.onComicTapped(fileItem)
     }
@@ -1401,10 +1358,6 @@ fun CompactFileListItem(
         }
     }
 }
-
-// ─── ソート・フィルターシート表示トリガー（HomeScreenの内容は上記まで） ──────────────
-// NOTE: showSortSheet が trueのときに ModalBottomSheet を表示する。
-// Scaffold の外（HomeScreen 関数の末尾）に配置済み。
 
 // ─── ソート・フィルターシート ────────────────────────────────────────────────
 
