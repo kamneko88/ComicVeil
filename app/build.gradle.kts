@@ -84,6 +84,9 @@ dependencies {
     // パスワード付きZIP対応
     implementation("net.lingala.zip4j:zip4j:2.11.5")
 
+    // libarchive（PoC検証用：RAR5対応調査）
+    implementation("me.zhanghai.android.libarchive:library:1.1.6")
+
     // SMB接続（NASアクセス）
     implementation("com.hierynomus:smbj:0.13.0")
 

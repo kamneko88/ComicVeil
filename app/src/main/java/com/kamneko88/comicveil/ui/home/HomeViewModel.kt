@@ -30,7 +30,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import net.lingala.zip4j.ZipFile as Zip4jFile
 import java.io.File
 
 sealed class ViewLocation {
@@ -611,7 +610,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── STR/DLモード内部処理 ────────────────────────────────────────────
 
-    private suspend fun openNasComicStr(fileItem: FileItem) {
+    /**
+     * NASコミックをストリーミング（STR）モードで開く。
+     * キャッシュ済み・未ダウンロード問わず、ローカルファイルと同じ感覚でタップ直後に開く
+     * （未ダウンロードの場合も確認ダイアログは挟まず、そのままダウンロードを開始する）。
+     */
+    private fun openNasComicStr(fileItem: FileItem) {
         val ext      = fileItem.name.substringAfterLast(".")
         val destFile = File(
             File(getApplication<Application>().cacheDir, "nas_cache"),
@@ -619,23 +623,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         if (destFile.exists() && destFile.length() > 0) {
-            val progress = withContext(Dispatchers.IO) {
-                progressRepository.getProgress(destFile.absolutePath)
-            }
-            val savedPage = if (progress != null && progress.currentPage > 0)
-                progress.currentPage else 0
-            val totalPages = progress?.totalPages ?: 0
-            _dialogState.value = ResumeDialogState(
-                fileItem   = fileItem.copy(file = destFile),
-                savedPage  = savedPage,
-                totalPages = totalPages
-            )
+            viewModelScope.launch { openLocalOrVolumeComic(fileItem.copy(file = destFile)) }
         } else {
-            _dialogState.value = ResumeDialogState(
-                fileItem   = fileItem,
-                savedPage  = 0,
-                totalPages = 0
-            )
+            downloadThenOpenNasComic(fileItem)
         }
     }
 
@@ -645,143 +635,55 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _navigateToTransfer.tryEmit(folderName)
     }
 
-    fun startStrDownload(fileItem: FileItem) {
-        val ext    = fileItem.name.substringAfterLast(".").lowercase()
-        val server = fileItem.nasServer ?: return
+    /**
+     * NASファイルをキャッシュへダウンロードしてから、ローカルと同じ判定フロー
+     * （巻検出・再開ダイアログ）に合流する。ZIP/RAR/7z問わずこの一本に統一。
+     * ダウンロード完了後にArchiveScannerで巻検出するため、フォーマットを問わず
+     * 巻選択画面が正しく機能する。
+     */
+    private fun downloadThenOpenNasComic(fileItem: FileItem) {
+        val ext      = fileItem.name.substringAfterLast(".")
+        val destFile = File(
+            File(getApplication<Application>().cacheDir, "nas_cache"),
+            "nas_${fileItem.nasPath.hashCode()}.$ext"
+        )
+        val server = fileItem.nasServer ?: run {
+            _nasError.value = "NASサーバー情報がありません"
+            return
+        }
 
         downloadJob?.cancel()
         downloadJob = viewModelScope.launch {
-            if (ext in setOf("zip", "cbz")) {
-                startStrDownloadZipProgressive(fileItem, server, ext)
-            } else {
-                startStrDownloadFull(fileItem, server, ext)
-            }
-        }
-    }
-
-    /**
-     * ZIP: Progressive Loading
-     * パスワード付きZIPの場合は全体DLに切り替える
-     */
-    private suspend fun startStrDownloadZipProgressive(
-        fileItem: FileItem,
-        server: NasServer,
-        ext: String
-    ) {
-        // NASから先頭4KBだけ取得してパスワード付きか確認する
-        var isEncrypted = false
-        try {
-            val bytes = smbRepository.fetchPartialBytes(server, fileItem.nasPath, 4096L)
-            if (bytes != null && bytes.isNotEmpty()) {
-                val tmpFile = File(
-                    getApplication<Application>().cacheDir,
-                    "nas_enc_check_${fileItem.nasPath.hashCode()}.$ext"
-                )
-                tmpFile.writeBytes(bytes)
-                isEncrypted = Zip4jFile(tmpFile).isEncrypted
-                tmpFile.delete()
-            }
-        } catch (e: Exception) {
-            // チェック失敗は無視して通常Progressive Loadingに進む
-        }
-
-        if (isEncrypted) {
-            // パスワード付きZIP → 全体DLしてビューワーに渡す（パスワード入力はビューワー側）
-            startStrDownloadFull(fileItem, server, ext)
-            return
-        }
-
-        val pageDir = File(
-            File(getApplication<Application>().cacheDir, "nas_pages"),
-            "nas_${fileItem.nasPath.hashCode()}"
-        )
-        if (File(pageDir, "complete").exists()) {
-            _navigateEvent.tryEmit(pageDir.absolutePath)
-            return
-        }
-        pageDir.deleteRecursively()
-        pageDir.mkdirs()
-
-        var launched = false
-        try {
             _downloadProgress.value = DownloadProgress(
                 fileName   = fileItem.name,
                 downloaded = 0L,
                 total      = -1L
             )
-            smbRepository.downloadZipProgressive(
-                server      = server,
-                nasPath     = fileItem.nasPath,
-                pageDir     = pageDir,
-                onPageReady = { savedCount ->
-                    _downloadProgress.value = DownloadProgress(
-                        fileName   = fileItem.name,
-                        downloaded = savedCount.toLong(),
-                        total      = -1L
-                    )
-                    if (!launched && savedCount >= 1) {
-                        launched = true
-                        _navigateEvent.tryEmit(pageDir.absolutePath)
+            try {
+                smbRepository.downloadFile(
+                    server     = server,
+                    nasPath    = fileItem.nasPath,
+                    destFile   = destFile,
+                    onProgress = { downloaded, total ->
+                        _downloadProgress.value = DownloadProgress(
+                            fileName   = fileItem.name,
+                            downloaded = downloaded,
+                            total      = total
+                        )
                     }
-                },
-                onComplete = {
-                    _downloadProgress.value = null
-                    if (!launched) {
-                        launched = true
-                        _navigateEvent.tryEmit(pageDir.absolutePath)
-                    }
-                }
-            )
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            _downloadProgress.value = null
-        } catch (e: Exception) {
-            _downloadProgress.value = null
-            _nasError.value = "接続に失敗しました\n${e.message}"
-        } finally {
-            downloadJob = null
-        }
-    }
-
-    /**
-     * RARなど: 全体DL後に起動。
-     * DL保存先がSAFフォルダの場合、アプリキャッシュへDL後にSAF側へコピーする。
-     */
-    private suspend fun startStrDownloadFull(
-        fileItem: FileItem,
-        server: NasServer,
-        ext: String
-    ) {
-        val destFile = File(
-            File(getApplication<Application>().cacheDir, "nas_cache"),
-            "nas_${fileItem.nasPath.hashCode()}.$ext"
-        )
-        _downloadProgress.value = DownloadProgress(
-            fileName   = fileItem.name,
-            downloaded = 0L,
-            total      = -1L
-        )
-        try {
-            smbRepository.downloadFile(
-                server     = server,
-                nasPath    = fileItem.nasPath,
-                destFile   = destFile,
-                onProgress = { downloaded, total ->
-                    _downloadProgress.value = DownloadProgress(
-                        fileName   = fileItem.name,
-                        downloaded = downloaded,
-                        total      = total
-                    )
-                }
-            )
-            _navigateEvent.tryEmit(destFile.absolutePath)
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            runCatching { destFile.delete() }
-        } catch (e: Exception) {
-            _nasError.value = "接続に失敗しました\n${e.message}"
-            runCatching { destFile.delete() }
-        } finally {
-            _downloadProgress.value = null
-            downloadJob = null
+                )
+                _downloadProgress.value = null
+                openLocalOrVolumeComic(fileItem.copy(file = destFile))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                _downloadProgress.value = null
+                runCatching { destFile.delete() }
+            } catch (e: Exception) {
+                _downloadProgress.value = null
+                _nasError.value = "接続に失敗しました\n${e.message}"
+                runCatching { destFile.delete() }
+            } finally {
+                downloadJob = null
+            }
         }
     }
 
@@ -799,28 +701,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun resumeReading() {
         val state = _dialogState.value ?: return
         _dialogState.value = null
-
-        if (state.fileItem.isNas && _isStreamingMode.value) {
-            startStrDownload(state.fileItem)
-        } else {
-            _navigateEvent.tryEmit(state.fileItem.file?.absolutePath ?: state.fileItem.path)
-        }
+        _navigateEvent.tryEmit(state.fileItem.file?.absolutePath ?: state.fileItem.path)
     }
 
     fun readFromBeginning() {
         val state = _dialogState.value ?: return
         _dialogState.value = null
-
-        if (state.fileItem.isNas && _isStreamingMode.value) {
-            startStrDownload(state.fileItem)
-        } else {
-            val effectivePath = state.fileItem.file?.absolutePath ?: state.fileItem.path
-            viewModelScope.launch {
-                withContext(Dispatchers.IO) {
-                    progressRepository.saveProgress(effectivePath, 0, state.totalPages)
-                }
-                _navigateEvent.tryEmit(effectivePath)
+        val effectivePath = state.fileItem.file?.absolutePath ?: state.fileItem.path
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                progressRepository.saveProgress(effectivePath, 0, state.totalPages)
             }
+            _navigateEvent.tryEmit(effectivePath)
         }
     }
 

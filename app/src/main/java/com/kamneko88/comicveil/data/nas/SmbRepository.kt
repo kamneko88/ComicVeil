@@ -112,7 +112,11 @@ class SmbRepository {
                         if (read == -1) break
                         output.write(buffer, 0, read)
                         downloaded += read
-                        onProgress?.invoke(downloaded, totalSize)
+                        // バックグラウンドスレッドからの連続更新だとCompose側の再合成が取りこぼされることがあるため、
+                        // 明示的にMainディスパッチャで呼ぶ
+                        withContext(Dispatchers.Main.immediate) {
+                            onProgress?.invoke(downloaded, totalSize)
+                        }
                     }
                 }
             }
@@ -170,103 +174,7 @@ class SmbRepository {
         }
     }
 
-    /**
-     * ZIPファイルをストリームで読み込み、ページ画像を逐次書き出す（Progressive Loading）
-     * メモリには1ページ分のバイト列しか保持せず、書き出したら即座に破棄する。
-     * 最終的な自然順の並びは、全ページ到着後にファイル名のリネームだけで確定する
-     * （バイトの再書き込みは行わないため高速）。
-     *
-     * @param pageDir     ページ画像を保存するディレクトリ（00000.jpg, 00001.jpg...）
-     * @param onPageReady ページを書き出すたびに呼ぶコールバック（引数：累計保存ページ数）
-     * @param onComplete  全ページ保存完了時に呼ぶコールバック
-     */
-    suspend fun downloadZipProgressive(
-        server: NasServer,
-        nasPath: String,
-        pageDir: File,
-        onPageReady: suspend (savedCount: Int) -> Unit,
-        onComplete: suspend () -> Unit
-    ) = withContext(Dispatchers.IO) {
-        val client = SMBClient()
-        try {
-            val connection = client.connect(server.host)
-            val auth = AuthenticationContext(
-                server.username,
-                server.password.toCharArray(),
-                null
-            )
-            val session = connection.authenticate(auth)
-            val share   = session.connectShare(server.shareName) as DiskShare
-            val smbPath = nasPath.replace("/", "\\")
-
-            pageDir.mkdirs()
-            val imageExtensions = setOf("jpg", "jpeg", "png", "webp")
-            val arrivalNames = mutableListOf<String>()
-
-            // Shift-JIS / UTF-8 両方を試行
-            for (cs in listOf("UTF-8", "Shift_JIS")) {
-                arrivalNames.clear()
-                pageDir.listFiles { f -> f.name.startsWith("incoming_") }?.forEach { it.delete() }
-
-                // 再接続が必要なため毎回ファイルを開き直す
-                val smbFile = share.openFile(
-                    smbPath,
-                    setOf(AccessMask.GENERIC_READ),
-                    null,
-                    setOf(SMB2ShareAccess.FILE_SHARE_READ),
-                    SMB2CreateDisposition.FILE_OPEN,
-                    null
-                )
-                runCatching {
-                    org.apache.commons.compress.archivers.zip.ZipArchiveInputStream(
-                        smbFile.inputStream, cs, false, true
-                    ).use { zis ->
-                        var entry = zis.nextZipEntry
-                        while (entry != null && isActive) {
-                            val name = entry.name
-                            val ext  = name.substringAfterLast(".").lowercase()
-                            if (!entry.isDirectory && ext in imageExtensions) {
-                                val bytes = zis.readBytes()
-                                if (bytes.isNotEmpty()) {
-                                    // 到着順の一時名で即座に書き出し、バイト列はこの場で破棄（メモリに溜め込まない）
-                                    File(pageDir, "incoming_%05d.jpg".format(arrivalNames.size)).writeBytes(bytes)
-                                    arrivalNames.add(name)
-                                    withContext(Dispatchers.Main) {
-                                        onPageReady(arrivalNames.size)
-                                    }
-                                }
-                            }
-                            entry = zis.nextZipEntry
-                        }
-                    }
-                }
-                if (arrivalNames.isNotEmpty()) break
-            }
-
-            // 到着順ファイルを、自然順の最終位置へリネーム（バイトコピーなし・高速）
-            val order = arrivalNames.withIndex()
-                .sortedWith(compareBy(com.kamneko88.comicveil.data.NaturalOrder.COMPARATOR) { it.value })
-            order.forEachIndexed { finalIdx, (arrivalIdx, _) ->
-                val src = File(pageDir, "incoming_%05d.jpg".format(arrivalIdx))
-                val dst = File(pageDir, "%05d_tmp.jpg".format(finalIdx))
-                src.renameTo(dst)
-            }
-            (arrivalNames.indices).forEach { idx ->
-                File(pageDir, "%05d_tmp.jpg".format(idx)).renameTo(File(pageDir, "%05d.jpg".format(idx)))
-            }
-
-            // 完了マーカー（ページ数を記録）
-            File(pageDir, "complete").writeText(arrivalNames.size.toString())
-
-            withContext(Dispatchers.Main) {
-                onComplete()
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            throw e
-        } finally {
-            runCatching { client.close() }
-        }
-    }
+    // ※ downloadZipProgressive（NAS上でZIPを逐次ストリーミング展開する旧ロジック）は削除済み。
+    // NASコミックは全体ダウンロード後にArchiveScannerで巻検出する方式に統一したため、
+    // downloadFile()だけで十分となった（HomeViewModel.downloadThenOpenNasComic参照）。
 }

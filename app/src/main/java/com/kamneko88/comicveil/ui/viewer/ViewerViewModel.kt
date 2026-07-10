@@ -10,7 +10,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.github.junrar.Archive
 import com.kamneko88.comicveil.data.ArchiveScanner
 import com.kamneko88.comicveil.data.db.Bookmark
 import com.kamneko88.comicveil.data.db.BookmarkRepository
@@ -28,6 +27,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import me.zhanghai.android.libarchive.Archive
+import me.zhanghai.android.libarchive.ArchiveEntry
+import me.zhanghai.android.libarchive.ArchiveException
 import net.lingala.zip4j.ZipFile as Zip4jFile
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
@@ -367,6 +369,7 @@ private fun writePage(pageDir: File, index: Int, bytes: ByteArray) {
 /**
  * ZIP：まず高速なランダムアクセス方式で自然順に直接書き込む。
  * 一部の非標準なZIPでランダムアクセスが失敗する場合は、逐次読み込み方式にフォールバックする。
+ * （libarchiveではAndroid上で日本語パス名のUTF-8取得が安定しなかったため、ZIPはCommons Compressに戻している）
  */
 private fun extractZipProgressive(
     file: File,
@@ -474,28 +477,105 @@ private fun extractZipSequentialFallback(
     return arrivalNameOrder.isNotEmpty()
 }
 
-/** RAR：自然順ソート済みの順に、1ページずつ最終位置へ直接書き込む */
+/**
+ * libarchiveで逐次読み込みし、目的のページだけ最終位置へ直接書き込む。RAR（RAR5含む）専用。
+ */
+private fun extractWithLibarchive(
+    file: File,
+    targetEntries: List<com.kamneko88.comicveil.data.ArchiveEntryInfo>,
+    pageDir: File,
+    formatLabel: String,
+    configureFormat: (archive: Long) -> Unit
+) {
+    val finalIndexByName = targetEntries.withIndex().associate { (i, info) -> info.name to i }
+    var archive = 0L
+    try {
+        archive = Archive.readNew()
+        configureFormat(archive)
+        Archive.readOpenFileName(archive, file.absolutePath.toByteArray(Charsets.UTF_8), 10240L)
+
+        while (true) {
+            val entry = ArchiveEntry.new1()
+            var isEof = false
+            var isFatal = false
+            try {
+                val ret = Archive.readNextHeader2(archive, entry)
+                if (ret.toInt() == Archive.ERRNO_EOF) isEof = true
+            } catch (e: ArchiveException) {
+                when {
+                    e.code == Archive.ERRNO_WARN -> {
+                        Log.w("ComicVeil", "${formatLabel}展開警告: ${e.message}")
+                    }
+                    e.message?.contains("eof", ignoreCase = true) == true -> {
+                        isEof = true
+                    }
+                    else -> {
+                        Log.e("ComicVeil", "${formatLabel}展開中断(code=${e.code}): ${e.message}")
+                        isFatal = true
+                    }
+                }
+            }
+            if (isEof || isFatal) {
+                ArchiveEntry.free(entry)
+                break
+            }
+
+            val name     = ArchiveEntry.pathnameUtf8(entry)
+            val finalIdx = name?.let { finalIndexByName[it] }
+
+            if (finalIdx != null) {
+                val sizeKnown = ArchiveEntry.sizeIsSet(entry)
+                val size      = if (sizeKnown) ArchiveEntry.size(entry) else -1L
+                if (sizeKnown && size > MAX_PAGE_BYTES) {
+                    Log.e("ComicVeil", "${formatLabel}ページサイズが上限(${MAX_PAGE_BYTES}bytes)を超えたためスキップ: $name ($size bytes)")
+                } else {
+                    val outFile = File(pageDir, "%05d.jpg".format(finalIdx))
+                    var outPfd: ParcelFileDescriptor? = null
+                    try {
+                        outPfd = ParcelFileDescriptor.open(
+                            outFile,
+                            ParcelFileDescriptor.MODE_CREATE or
+                                ParcelFileDescriptor.MODE_TRUNCATE or
+                                ParcelFileDescriptor.MODE_READ_WRITE
+                        )
+                        Archive.readDataIntoFd(archive, outPfd.fd)
+                    } catch (e: Exception) {
+                        Log.e("ComicVeil", "${formatLabel}ページ展開失敗（libarchive）: $name", e)
+                        runCatching { outFile.delete() }
+                    } finally {
+                        runCatching { outPfd?.close() }
+                    }
+                }
+            }
+
+            ArchiveEntry.free(entry)
+        }
+    } finally {
+        if (archive != 0L) {
+            runCatching { Archive.readClose(archive) }
+            runCatching { Archive.readFree(archive) }
+        }
+    }
+    File(pageDir, "complete").writeText(targetEntries.size.toString())
+}
+
+/** RAR：libarchiveで逐次読み込み（RAR5対応） */
 private fun extractRarProgressive(
     file: File,
     targetEntries: List<com.kamneko88.comicveil.data.ArchiveEntryInfo>,
     pageDir: File
 ) {
-    Archive(file).use { archive ->
-        val headerMap = archive.fileHeaders.associateBy { it.fileName }
-        targetEntries.forEachIndexed { index, info ->
-            val header = headerMap[info.name] ?: return@forEachIndexed
-            val out = ByteArrayOutputStream()
-            archive.extractFile(header, out)
-            writePage(pageDir, index, out.toByteArray())
-        }
+    extractWithLibarchive(file, targetEntries, pageDir, "RAR") { archive ->
+        Archive.readSupportFormatRar(archive)
+        Archive.readSupportFormatRar5(archive)
     }
-    File(pageDir, "complete").writeText(targetEntries.size.toString())
 }
 
 /**
  * 7z：SevenZFileは前から順にしか読めない制約があるため、
  * アーカイブに現れる順（到着順）で一時ファイルに書き出し、
  * 完了後に自然順の最終位置へ一括リネームする（バイトの再書き込みはしない：高速）
+ * （libarchiveではAndroid上で日本語パス名のUTF-8取得が安定しなかったため、7zはCommons Compressに戻している）
  */
 private fun extract7zProgressive(
     file: File,
@@ -522,7 +602,6 @@ private fun extract7zProgressive(
                     }
                     buf.copyOf(offset)
                 } else {
-                    // サイズ不明（または異常に大きい）場合は上限付きで読む
                     val out = ByteArrayOutputStream()
                     val buf = ByteArray(64 * 1024)
                     var total = 0L
@@ -549,7 +628,6 @@ private fun extract7zProgressive(
         }
     }
 
-    // 到着順ファイル名 → 自然順での最終インデックスへリネーム（バイトコピーなし・高速）
     val finalIndexByName = targetEntries.withIndex().associate { (i, info) -> info.name to i }
     arrivalNameOrder.forEachIndexed { arrivalIdx, name ->
         val finalIdx = finalIndexByName[name] ?: return@forEachIndexed

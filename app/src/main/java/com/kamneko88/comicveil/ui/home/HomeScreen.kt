@@ -675,7 +675,7 @@ fun HomeScreen(
                         )
                         TextButton(onClick = { viewModel.cancelStrDownload() }) {
                             Text(
-                                text  = "転送を中止する",
+                                text  = "読み込みを中止する",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }

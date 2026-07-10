@@ -1,7 +1,9 @@
 package com.kamneko88.comicveil.data
 
 import android.util.Log
-import com.github.junrar.Archive
+import me.zhanghai.android.libarchive.Archive
+import me.zhanghai.android.libarchive.ArchiveEntry
+import me.zhanghai.android.libarchive.ArchiveException
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import org.apache.commons.compress.archivers.zip.ZipFile
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
@@ -50,24 +52,35 @@ object ArchiveScanner {
 
     /**
      * ZIPスキャン。
-     * まず高速なランダムアクセス方式（ZipFile）を試し、
-     * 一部の非標準なZIPで失敗する場合は、より緩い逐次読み込み方式にフォールバックする。
+     * まず高速なランダムアクセス方式（ZipFile）をUTF-8とShift-JISの両方で試し、文字化けしていない方を採用する。
+     * どちらも失敗する場合は、より緩い逐次読み込み方式にフォールバックする。
+     * （libarchiveではAndroid上で日本語パス名のUTF-8取得が安定しなかったため、ZIPはCommons Compressに戻している）
      */
     private fun scanZip(file: File): List<String> {
-        return try {
-            val names = mutableListOf<String>()
-            ZipFile.builder().setFile(file).get().use { zip ->
-                zip.entries.iterator().forEach { entry ->
-                    if (!entry.isDirectory && isImage(entry.name)) names.add(entry.name)
+        for (csName in listOf("UTF-8", "Shift_JIS")) {
+            try {
+                val names = mutableListOf<String>()
+                ZipFile.builder().setFile(file).setCharset(charset(csName)).get().use { zip ->
+                    zip.entries.iterator().forEach { entry ->
+                        if (!entry.isDirectory && isImage(entry.name)) names.add(entry.name)
+                    }
                 }
+                if (names.isNotEmpty() && !looksGarbled(names)) return names
+                if (names.isNotEmpty() && csName == "Shift_JIS") {
+                    // 最後の候補。これ以上試す手段がないのでこのまま採用する
+                    return names
+                }
+            } catch (e: Exception) {
+                Log.d("ComicVeil", "ZipFileランダムアクセス失敗（$csName）: ${e.message}")
             }
-            if (names.isEmpty()) throw IllegalStateException("エントリが0件")
-            names
-        } catch (e: Exception) {
-            Log.d("ComicVeil", "ZipFileランダムアクセス失敗、逐次読み込みにフォールバック: ${e.message}")
-            scanZipSequential(file)
         }
+        Log.d("ComicVeil", "ZipFileランダムアクセス失敗、逐次読み込みにフォールバック")
+        return scanZipSequential(file)
     }
+
+    /** デコード結果が文字化けしていそうか判定する（置換文字や？が目立つ場合） */
+    private fun looksGarbled(names: List<String>): Boolean =
+        names.any { it.contains('\uFFFD') || it.count { c -> c == '?' } >= 2 }
 
     /**
      * ZIPの緩い逐次スキャン（末尾の管理情報が壊れている/非標準なZIPでも読める）。
@@ -111,16 +124,15 @@ object ArchiveScanner {
         }
     }
 
+    /** RAR：libarchiveで逐次読み込みして画像エントリ名を収集する（RAR5対応） */
     private fun scanRar(file: File): List<String> {
-        val names = mutableListOf<String>()
-        Archive(file).use { archive ->
-            archive.fileHeaders.forEach { header ->
-                if (!header.isDirectory && isImage(header.fileName)) names.add(header.fileName)
-            }
+        return scanWithLibarchive(file) { archive ->
+            Archive.readSupportFormatRar(archive)
+            Archive.readSupportFormatRar5(archive)
         }
-        return names
     }
 
+    /** 7z：Commons Compressで逐次読み込みして画像エントリ名を収集する */
     private fun scan7z(file: File): List<String> {
         val names = mutableListOf<String>()
         SevenZFile.builder().setFile(file).get().use { sevenZFile ->
@@ -134,6 +146,64 @@ object ArchiveScanner {
         return names
     }
 
+    /** libarchiveで逐次読み込みして画像エントリ名を収集する共通処理（ZIP・RAR・7z共用） */
+    private fun scanWithLibarchive(file: File, configureFormat: (archive: Long) -> Unit): List<String> {
+        val names = mutableListOf<String>()
+        var archive = 0L
+        try {
+            archive = Archive.readNew()
+            configureFormat(archive)
+            Archive.readOpenFileName(archive, file.absolutePath.toByteArray(Charsets.UTF_8), 10240L)
+
+            var index = 0
+            while (true) {
+                val entry = ArchiveEntry.new1()
+                var isEof = false
+                var isFatal = false
+                try {
+                    val ret = Archive.readNextHeader2(archive, entry)
+                    if (ret.toInt() == Archive.ERRNO_EOF) isEof = true
+                } catch (e: ArchiveException) {
+                    when {
+                        e.code == Archive.ERRNO_WARN -> {
+                            // パス名のロケール変換警告など。pathnameUtf8は引き続き取得できるため処理を続行する
+                            Log.w("ComicVeil", "scan警告(index=$index): ${e.message}")
+                        }
+                        e.message?.contains("eof", ignoreCase = true) == true -> {
+                            // 本来EOFで終了すべきところを例外経由で通知してくるケース（並の終了として扱う）
+                            isEof = true
+                        }
+                        else -> {
+                            Log.e("ComicVeil", "スキャン中断(index=$index, code=${e.code}): ${e.message}")
+                            isFatal = true
+                        }
+                    }
+                }
+                if (isEof || isFatal) {
+                    ArchiveEntry.free(entry)
+                    break
+                }
+                val name  = ArchiveEntry.pathnameUtf8(entry) ?: ""
+                val isDir = ArchiveEntry.filetype(entry) == ArchiveEntry.AE_IFDIR
+                Log.d("ComicVeil", "scan[$index] $name dir=$isDir")
+                if (!isDir && isImage(name)) names.add(name)
+                // 次のreadNextHeader2呼び出し時に未消費データは自動でスキップされるため、
+                // 明示的なreadDataSkipは不要（ディレクトリエントリで呼ぶとZIP/7zで不安定化する事例があったため削除）
+                ArchiveEntry.free(entry)
+                index++
+            }
+        } catch (e: Exception) {
+            Log.e("ComicVeil", "scanWithLibarchive失敗: ${e::class.simpleName}: ${e.message}", e)
+        } finally {
+            if (archive != 0L) {
+                runCatching { Archive.readClose(archive) }
+                runCatching { Archive.readFree(archive) }
+            }
+        }
+        Log.d("ComicVeil", "scanWithLibarchive完了: 画像${names.size}件検出")
+        return names
+    }
+
     private fun isImage(name: String): Boolean {
         val fileName = name.substringAfterLast("/")
         if (fileName.startsWith(".") || name.startsWith("__") || name.contains("..")) return false
@@ -142,10 +212,24 @@ object ArchiveScanner {
 
     private fun buildResult(rawNames: List<String>): ArchiveScanResult {
         val sortedNames = rawNames.sortedWith(compareBy(NaturalOrder.COMPARATOR) { it })
-        val entries = sortedNames.map { name ->
-            val hasFolder = name.contains("/")
-            val volume = if (hasFolder) name.substringBefore("/") else null
-            ArchiveEntryInfo(name, volume)
+
+        // 全エントリで共通する先頭フォルダ（単なる外側のラッパーフォルダ）を必要なだけ剥がしてから巻名を判定する。
+        // 例：「作品名.zip/作品名フォルダ/第01巻/001.jpg」のように、
+        // 全ページ共通のラッパーフォルダがあると、それ自体が先頭フォルダとして検出されて
+        // 「巻が1つしかない」と誤判定されるのを防ぐ。
+        var effectiveNames = sortedNames
+        while (effectiveNames.isNotEmpty()) {
+            val firstSegments = effectiveNames.map { it.substringBefore("/", "") }
+            if (firstSegments.any { it.isEmpty() }) break        // ルート直下に画像がある：これ以上剥がせない
+            if (firstSegments.distinct().size != 1) break         // 先頭フォルダが割れている：ここが巻フォルダの階層
+            effectiveNames = effectiveNames.map { it.substringAfter("/") }
+        }
+
+        val entries = sortedNames.indices.map { i ->
+            val effective = effectiveNames[i]
+            val hasFolder = effective.contains("/")
+            val volume = if (hasFolder) effective.substringBefore("/") else null
+            ArchiveEntryInfo(sortedNames[i], volume)
         }
 
         // 複数の異なる巻フォルダが存在し、かつルート直下に画像が無い場合のみ「複数巻」とみなす
