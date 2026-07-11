@@ -23,7 +23,8 @@ data class ArchiveEntryInfo(
 /** アーカイブのスキャン結果 */
 data class ArchiveScanResult(
     val entries: List<ArchiveEntryInfo>, // 自然順ソート済みの画像エントリ一覧
-    val volumes: List<String>?           // 複数巻フォルダが検出された場合、その一覧（自然順）。単巻ならnull
+    val volumes: List<String>?,          // 複数巻フォルダが検出された場合、その一覧（自然順）。単巻ならnull
+    val zipCharset: String? = null       // ZIP展開時に使うべき文字コード名（スキャンで採用したもの）。RAR/7zはnull
 )
 
 /**
@@ -36,18 +37,20 @@ object ArchiveScanner {
 
     /** 拡張子からアーカイブ形式を判定してスキャンする。失敗しても空リストを返す（クラッシュしない） */
     fun scan(file: File): ArchiveScanResult {
-        val names = try {
+        return try {
             when (file.extension.lowercase()) {
-                "zip", "cbz" -> scanZip(file)
-                "rar", "cbr" -> scanRar(file)
-                "7z"         -> scan7z(file)
-                else         -> emptyList()
+                "zip", "cbz" -> {
+                    val (names, charsetName) = scanZip(file)
+                    buildResult(names).copy(zipCharset = charsetName)
+                }
+                "rar", "cbr" -> buildResult(scanRar(file))
+                "7z"         -> buildResult(scan7z(file))
+                else         -> buildResult(emptyList())
             }
         } catch (e: Exception) {
             Log.e("ComicVeil", "ArchiveScanner.scan失敗: ${e.message}", e)
-            emptyList()
+            buildResult(emptyList())
         }
-        return buildResult(names)
     }
 
     /**
@@ -56,7 +59,7 @@ object ArchiveScanner {
      * どちらも失敗する場合は、より緩い逐次読み込み方式にフォールバックする。
      * （libarchiveではAndroid上で日本語パス名のUTF-8取得が安定しなかったため、ZIPはCommons Compressに戻している）
      */
-    private fun scanZip(file: File): List<String> {
+    private fun scanZip(file: File): Pair<List<String>, String?> {
         for (csName in listOf("UTF-8", "Shift_JIS")) {
             try {
                 val names = mutableListOf<String>()
@@ -65,10 +68,10 @@ object ArchiveScanner {
                         if (!entry.isDirectory && isImage(entry.name)) names.add(entry.name)
                     }
                 }
-                if (names.isNotEmpty() && !looksGarbled(names)) return names
+                if (names.isNotEmpty() && !looksGarbled(names)) return names to csName
                 if (names.isNotEmpty() && csName == "Shift_JIS") {
                     // 最後の候補。これ以上試す手段がないのでこのまま採用する
-                    return names
+                    return names to csName
                 }
             } catch (e: Exception) {
                 Log.d("ComicVeil", "ZipFileランダムアクセス失敗（$csName）: ${e.message}")
@@ -87,8 +90,9 @@ object ArchiveScanner {
      * nextZipEntry()だけに頼ると、非標準なZIPでは正しく次のエントリへ進めないことがあるため、
      * 各エントリのデータを実際に読んで消費してから次へ進む（展開処理と同じ考え方）。
      */
-    private fun scanZipSequential(file: File): List<String> {
+    private fun scanZipSequential(file: File): Pair<List<String>, String?> {
         val names = mutableListOf<String>()
+        var usedCharset: String? = null
         for (cs in listOf("UTF-8", "Shift_JIS")) {
             names.clear()
             try {
@@ -107,9 +111,9 @@ object ArchiveScanner {
             } catch (e: Exception) {
                 Log.d("ComicVeil", "ZIP逐次読み込み失敗（$cs）: ${e.message}")
             }
-            if (names.isNotEmpty()) break
+            if (names.isNotEmpty()) { usedCharset = cs; break }
         }
-        return names
+        return names to usedCharset
     }
 
     /** ストリームからエントリのデータを最後まで読んで消費する（上限を超えたら異常とみなしfalse） */

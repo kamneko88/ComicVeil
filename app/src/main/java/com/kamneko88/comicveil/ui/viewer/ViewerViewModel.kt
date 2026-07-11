@@ -199,7 +199,7 @@ class ViewerViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 when (ext) {
-                    "zip", "cbz" -> extractZipProgressive(file, targetEntries, pageDir, password)
+                    "zip", "cbz" -> extractZipProgressive(file, targetEntries, pageDir, password, scan.zipCharset)
                     "rar", "cbr" -> extractRarProgressive(file, targetEntries, pageDir)
                     "7z"         -> extract7zProgressive(file, targetEntries, pageDir)
                 }
@@ -375,7 +375,8 @@ private fun extractZipProgressive(
     file: File,
     targetEntries: List<com.kamneko88.comicveil.data.ArchiveEntryInfo>,
     pageDir: File,
-    password: String?
+    password: String?,
+    zipCharset: String?
 ) {
     if (password != null) {
         val zipFile = Zip4jFile(file, password.toCharArray())
@@ -393,7 +394,9 @@ private fun extractZipProgressive(
     }
 
     val success = try {
-        CommonsZipFile.builder().setFile(file).get().use { zip ->
+        val builder = CommonsZipFile.builder().setFile(file)
+        if (zipCharset != null) builder.setCharset(charset(zipCharset))
+        builder.get().use { zip ->
             targetEntries.forEachIndexed { index, info ->
                 val entry = zip.getEntry(info.name) ?: return@forEachIndexed
                 zip.getInputStream(entry).use { input ->
