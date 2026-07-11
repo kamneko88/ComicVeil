@@ -101,6 +101,7 @@ class SmbRepository {
 
             val buffer = ByteArray(256 * 1024)
             var downloaded = 0L
+            var lastReportedAt = 0L
 
             smbFile.inputStream.use { input ->
                 FileOutputStream(destFile).use { output ->
@@ -112,14 +113,19 @@ class SmbRepository {
                         if (read == -1) break
                         output.write(buffer, 0, read)
                         downloaded += read
-                        // バックグラウンドスレッドからの連続更新だとCompose側の再合成が取りこぼされることがあるため、
-                        // 明示的にMainディスパッチャで呼ぶ
-                        withContext(Dispatchers.Main.immediate) {
+                        // 進捗はIOスレッドから直接通知する（StateFlowの更新はスレッドセーフ）。
+                        // 毎チャンクMainへ切り替えると、大きいファイルでMainスレッドが詰まり
+                        // 進捗バーが固まるため、約100msごとに間引いて通知する。
+                        val now = System.currentTimeMillis()
+                        if (now - lastReportedAt >= 100L) {
+                            lastReportedAt = now
                             onProgress?.invoke(downloaded, totalSize)
                         }
                     }
                 }
             }
+            // 完了時は必ず最終値（100%）を通知する
+            onProgress?.invoke(downloaded, totalSize)
             destFile
         } finally {
             runCatching { client.close() }

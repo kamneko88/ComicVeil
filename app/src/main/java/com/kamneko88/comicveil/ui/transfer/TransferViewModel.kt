@@ -2,6 +2,7 @@ package com.kamneko88.comicveil.ui.transfer
 
 import android.app.Application
 import android.net.Uri
+import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -11,6 +12,7 @@ import com.kamneko88.comicveil.data.nas.NasServer
 import com.kamneko88.comicveil.data.nas.SmbRepository
 import com.kamneko88.comicveil.data.nas.TransferItem
 import com.kamneko88.comicveil.data.nas.TransferStatus
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -157,9 +159,10 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
         // 次のWAITINGアイテムを取得
         val next = _items.value.firstOrNull { it.status == TransferStatus.WAITING } ?: return
 
-        currentJob = viewModelScope.launch {
+        currentJob = viewModelScope.launch(Dispatchers.IO) {
             // TRANSFERRING に更新
             updateItem(next.id) { it.copy(status = TransferStatus.TRANSFERRING) }
+            Log.d("ComicVeil", "転送開始: ${next.fileName} (saf=${next.safTargetUri != null})")
 
             try {
                 val destFile = File(next.destPath)
@@ -190,12 +193,15 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                             }
                         }
                     )
+                    Log.d("ComicVeil", "DL完了: ${next.fileName} (${destFile.length()} bytes)")
                 }
 
                 // DL保存先がSAFフォルダの場合、ダウンロード済みファイルをSAF側へコピーする
                 if (next.safTargetUri != null) {
+                    Log.d("ComicVeil", "SAFコピー開始: ${next.fileName}")
                     copyToSafFolder(destFile, next.safTargetUri, next.fileName)
                     runCatching { destFile.delete() }
+                    Log.d("ComicVeil", "SAFコピー完了: ${next.fileName}")
                 }
 
                 // 完了
@@ -205,6 +211,7 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                         completedAt = System.currentTimeMillis()
                     )
                 }
+                Log.d("ComicVeil", "転送完了: ${next.fileName}")
 
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // キャンセル：不完全ファイルを削除
