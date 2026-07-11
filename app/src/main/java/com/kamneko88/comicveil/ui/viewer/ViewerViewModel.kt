@@ -189,8 +189,15 @@ class ViewerViewModel(
         val pageDir = pageDirFor(file, requestedVolume)
 
         if (File(pageDir, "complete").exists()) {
-            loadFromPageDirectory(pageDir, knownTotal = targetEntries.size)
-            return
+            val existingPageCount = pageDir.listFiles { f ->
+                f.name.endsWith(".jpg") && !f.name.startsWith("incoming_")
+            }?.size ?: 0
+            if (existingPageCount > 0) {
+                loadFromPageDirectory(pageDir, knownTotal = targetEntries.size)
+                return
+            }
+            // 完了マークはあるが実ページが0枚 = 過去の展開失敗キャッシュ。作り直す。
+            Log.d("ComicVeil", "空のcompleteキャッシュを検出したため再展開します: ${pageDir.name}")
         }
         pageDir.deleteRecursively()
         pageDir.mkdirs()
@@ -412,8 +419,11 @@ private fun extractZipProgressive(
         false
     }
 
+    Log.d("ComicVeil", "ZIP展開: ランダムアクセス=$success, 対象=${targetEntries.size}件, charset=$zipCharset")
+
     if (!success) {
         val ok = extractZipSequentialFallback(file, targetEntries, pageDir)
+        Log.d("ComicVeil", "ZIP逐次フォールバック結果: ok=$ok")
         if (!ok) {
             File(pageDir, "complete").writeText("0")
             return
@@ -472,6 +482,7 @@ private fun extractZipSequentialFallback(
     }
 
     val finalIndexByName = targetEntries.withIndex().associate { (i, info) -> info.name to i }
+    Log.d("ComicVeil", "逐次フォールバック: ${arrivalNameOrder.size}件取得 / 対象${targetNames.size}件 (aborted=$aborted)")
     arrivalNameOrder.forEachIndexed { arrivalIdx, name ->
         val finalIdx = finalIndexByName[name] ?: return@forEachIndexed
         File(pageDir, "incoming_%05d.jpg".format(arrivalIdx))
