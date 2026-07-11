@@ -1,12 +1,17 @@
 package com.kamneko88.comicveil
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -32,13 +37,30 @@ class MainActivity : ComponentActivity() {
     // ViewerScreen が DisposableEffect で登録・解除する
     var volumeKeyListener: ((keyCode: Int) -> Boolean)? = null
 
+    // 転送の進捗通知を表示するための許可リクエスト（Android 13以降で必要）
+    // 拒否されても転送自体は継続できるため、結果は特に扱わない
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        requestNotificationPermissionIfNeeded()
         setContent {
             ComicVeilTheme {
                 ComicVeilApp(intent = intent)
             }
+        }
+    }
+
+    /** Android 13以降で通知許可を求める（未許可の場合のみ） */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
