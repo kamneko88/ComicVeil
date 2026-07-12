@@ -124,6 +124,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.transformations
 import kotlinx.coroutines.launch
 import com.kamneko88.comicveil.MainActivity
 import kotlin.math.abs
@@ -173,6 +175,17 @@ fun ViewerScreen(
     val volumeKeyPageTurn = appPrefs.volumeKeyPageTurn
     val zoomBounce        = appPrefs.zoomBounce
     val doubleTapScale    = appPrefs.doubleTapZoom.scale
+    val trimMargins       = appPrefs.trimMargins
+
+    // 見開き表示を使うか（設定＋画面の向きで決まる）
+    val configuration = LocalConfiguration.current
+    val isLandscape   = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val spreadEnabled = when (appPrefs.spreadMode) {
+        com.kamneko88.comicveil.data.AppPrefs.SpreadMode.OFF       -> false
+        com.kamneko88.comicveil.data.AppPrefs.SpreadMode.LANDSCAPE -> isLandscape
+        com.kamneko88.comicveil.data.AppPrefs.SpreadMode.ALWAYS    -> true
+    }
+    val spreadCoverSingle = appPrefs.spreadCoverSingle
 
     LaunchedEffect(Unit) { viewModel.loadBookmarks() }
 
@@ -389,12 +402,28 @@ fun ViewerScreen(
                 else                            -> pages.size
             }.coerceAtLeast(1)
 
+            // 見開きの組（各要素は1ページ or 2ページ）。見開きがOFFなら全て単独ページになる。
+            val spreads = remember(pagerCount, spreadEnabled, spreadCoverSingle) {
+                buildSpreads(pagerCount, spreadEnabled, spreadCoverSingle)
+            }
+            // ページ番号 → そのページが入っている見開き番号
+            val spreadOfPage = remember(spreads, pagerCount) {
+                IntArray(pagerCount).also { arr ->
+                    spreads.forEachIndexed { spreadIdx, pagesInSpread ->
+                        pagesInSpread.forEach { p -> if (p in 0 until pagerCount) arr[p] = spreadIdx }
+                    }
+                }
+            }
+
             val pagerState = rememberPagerState(
-                initialPage = uiState.initialPage.coerceIn(0, pagerCount - 1),
-                pageCount   = { pagerCount }
+                initialPage = spreadOfPage.getOrElse(uiState.initialPage.coerceIn(0, pagerCount - 1)) { 0 },
+                pageCount   = { spreads.size }
             )
 
-            LaunchedEffect(pagerState.currentPage) { viewModel.savePage(pagerState.currentPage) }
+            // 現在表示している見開きの先頭ページ（進捗保存・ブックマーク・スライダーはページ単位で扱う）
+            val currentPageIndex = spreads.getOrNull(pagerState.currentPage)?.firstOrNull() ?: 0
+
+            LaunchedEffect(pagerState.currentPage) { viewModel.savePage(currentPageIndex) }
 
             var hasScrolled by remember { mutableStateOf(false) }
             LaunchedEffect(pagerState.isScrollInProgress) {
@@ -402,13 +431,13 @@ fun ViewerScreen(
                     hasScrolled = true
                 } else if (hasScrolled) {
                     when (pagerState.currentPage) {
-                        0              -> viewModel.onPageLimitReached(PageLimitEvent.FIRST)
-                        pagerCount - 1 -> viewModel.onPageLimitReached(PageLimitEvent.LAST)
+                        0                -> viewModel.onPageLimitReached(PageLimitEvent.FIRST)
+                        spreads.size - 1 -> viewModel.onPageLimitReached(PageLimitEvent.LAST)
                     }
                 }
             }
 
-            DisposableEffect(volumeKeyPageTurn, pagerCount) {
+            DisposableEffect(volumeKeyPageTurn, spreads.size) {
                 val mainActivity = context as? MainActivity
                 if (mainActivity != null && volumeKeyPageTurn) {
                     mainActivity.volumeKeyListener = { keyCode ->
@@ -422,7 +451,7 @@ fun ViewerScreen(
                             }
                             KeyEvent.KEYCODE_VOLUME_DOWN -> {
                                 scope.launch {
-                                    val target = (pagerState.currentPage + 1).coerceAtMost(pagerCount - 1)
+                                    val target = (pagerState.currentPage + 1).coerceAtMost(spreads.size - 1)
                                     pagerState.animateScrollToPage(target)
                                 }
                                 true
@@ -471,49 +500,43 @@ fun ViewerScreen(
                         reverseLayout           = isReverseLayout,
                         flingBehavior           = springFling,
                         beyondViewportPageCount = 2
-                    ) { pageIndex ->
-                        when {
-                            isProgressive && pageIndex < pageFiles.size -> {
-                                ZoomablePage(
-                                    imageModel    = pageFiles[pageIndex],
-                                    pageIndex     = pageIndex,
-                                    currentPage   = pagerState.currentPage,
-                                    isScrolling   = pagerState.isScrollInProgress,
-                                    zoomBounce    = zoomBounce,
-                                    doubleTapScale = doubleTapScale,
-                                    onMenuToggle  = { menuVisible = !menuVisible },
-                                    onPageLimit   = { viewModel.onPageLimitReached(it) },
-                                    isFirst       = pageIndex == 0,
-                                    isLast        = pageIndex == pagerCount - 1,
-                                    onZoomChanged = { isAnyPageZoomed = it }
-                                )
+                    ) { spreadIndex ->
+                        val pagesInSpread = spreads.getOrNull(spreadIndex) ?: emptyList()
+                        // 展開済みのページだけを集める（未展開なら空）
+                        val models: List<Any> = pagesInSpread.mapNotNull { p ->
+                            when {
+                                isProgressive && p < pageFiles.size -> pageFiles[p]
+                                !isProgressive && p < pages.size    -> pages[p]
+                                else                                -> null
                             }
-                            !isProgressive && pageIndex < pages.size -> {
-                                ZoomablePage(
-                                    imageModel    = pages[pageIndex],
-                                    pageIndex     = pageIndex,
-                                    currentPage   = pagerState.currentPage,
-                                    isScrolling   = pagerState.isScrollInProgress,
-                                    zoomBounce    = zoomBounce,
-                                    doubleTapScale = doubleTapScale,
-                                    onMenuToggle  = { menuVisible = !menuVisible },
-                                    onPageLimit   = { viewModel.onPageLimitReached(it) },
-                                    isFirst       = pageIndex == 0,
-                                    isLast        = pageIndex == pagerCount - 1,
-                                    onZoomChanged = { isAnyPageZoomed = it }
-                                )
-                            }
-                            else -> {
-                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        CircularProgressIndicator(color = Color.White)
-                                        Spacer(Modifier.height(8.dp))
-                                        Text(
-                                            text  = "読み込み中... (${pageIndex + 1}ページ)",
-                                            color = Color.White,
-                                            style = MaterialTheme.typography.bodySmall
-                                        )
-                                    }
+                        }
+
+                        if (models.isNotEmpty()) {
+                            ZoomablePage(
+                                imageModels    = models,
+                                pageIndex      = spreadIndex,
+                                currentPage    = pagerState.currentPage,
+                                isScrolling    = pagerState.isScrollInProgress,
+                                zoomBounce     = zoomBounce,
+                                doubleTapScale = doubleTapScale,
+                                trimMargins    = trimMargins,
+                                reverseLayout  = isReverseLayout,
+                                onMenuToggle   = { menuVisible = !menuVisible },
+                                onPageLimit    = { viewModel.onPageLimitReached(it) },
+                                isFirst        = spreadIndex == 0,
+                                isLast         = spreadIndex == spreads.size - 1,
+                                onZoomChanged  = { isAnyPageZoomed = it }
+                            )
+                        } else {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    CircularProgressIndicator(color = Color.White)
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        text  = "読み込み中... (${(pagesInSpread.firstOrNull() ?: 0) + 1}ページ)",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
                                 }
                             }
                         }
@@ -563,7 +586,11 @@ fun ViewerScreen(
                                                     .fillMaxWidth()
                                                     .clickable {
                                                         showBookmarkList = false
-                                                        scope.launch { pagerState.animateScrollToPage(bookmark.page) }
+                                                        scope.launch {
+                                                            pagerState.animateScrollToPage(
+                                                                spreadOfPage.getOrElse(bookmark.page) { 0 }
+                                                            )
+                                                        }
                                                     }
                                                     .padding(vertical = 8.dp)
                                             ) {
@@ -623,13 +650,13 @@ fun ViewerScreen(
                     ) {
                         val maxSlider = (pagerCount - 1).toFloat().coerceAtLeast(0f)
                         // 移動先プレビュー（サムネイルの中央・スライダー・現在ページを一元管理する）
-                        var previewPage by remember { mutableIntStateOf(pagerState.currentPage) }
-                        var sliderValue by remember { mutableFloatStateOf((pagerCount - 1 - pagerState.currentPage).toFloat().coerceIn(0f, maxSlider)) }
+                        var previewPage by remember { mutableIntStateOf(currentPageIndex) }
+                        var sliderValue by remember { mutableFloatStateOf((pagerCount - 1 - currentPageIndex).toFloat().coerceIn(0f, maxSlider)) }
                         val sliderTargetPage by remember { derivedStateOf { (pagerCount - 1 - sliderValue.toInt()).coerceIn(0, pagerCount - 1) } }
                         var isSliding by remember { mutableStateOf(false) }
 
                         // ページがめくられたら移動先プレビューも追従させる
-                        LaunchedEffect(pagerState.currentPage) { previewPage = pagerState.currentPage }
+                        LaunchedEffect(currentPageIndex) { previewPage = currentPageIndex }
 
                         // 移動先プレビュー（サムネイルを流したとき等）に合わせてスライダーを同期させる
                         LaunchedEffect(previewPage) {
@@ -676,7 +703,9 @@ fun ViewerScreen(
                                     reverseLayout  = isReverseLayout,
                                     onTargetChange = { previewPage = it },
                                     onSelect       = { target ->
-                                        scope.launch { pagerState.animateScrollToPage(target) }
+                                        scope.launch {
+                                            pagerState.animateScrollToPage(spreadOfPage.getOrElse(target) { 0 })
+                                        }
                                     }
                                 )
                             }
@@ -711,7 +740,12 @@ fun ViewerScreen(
                                         showBrightnessSlider = false
                                         previewPage = (pagerCount - 1 - it.toInt()).coerceIn(0, pagerCount - 1)
                                     },
-                                    onValueChangeFinished = { isSliding = false; scope.launch { pagerState.animateScrollToPage(sliderTargetPage) } },
+                                    onValueChangeFinished = {
+                                        isSliding = false
+                                        scope.launch {
+                                            pagerState.animateScrollToPage(spreadOfPage.getOrElse(sliderTargetPage) { 0 })
+                                        }
+                                    },
                                     valueRange = 0f..maxSlider,
                                     steps = if (pagerCount > 2) pagerCount - 2 else 0,
                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
@@ -740,7 +774,7 @@ fun ViewerScreen(
                                             tint = if (uiState.bookmarks.isNotEmpty()) Color(0xFFFFD700) else Color.White
                                         )
                                     }
-                                    IconButton(onClick = { viewModel.toggleBookmark(pagerState.currentPage) }) {
+                                    IconButton(onClick = { viewModel.toggleBookmark(currentPageIndex) }) {
                                         Icon(
                                             if (uiState.isCurrentPageBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                                             contentDescription = "このページをブックマーク",
@@ -949,12 +983,14 @@ private const val SWIPE_GUARD_MS = 300L
 
 @Composable
 private fun ZoomablePage(
-    imageModel: Any,
+    imageModels: List<Any>,
     pageIndex: Int,
     currentPage: Int,
     isScrolling: Boolean,
     zoomBounce: Boolean,
     doubleTapScale: Float,
+    trimMargins: Boolean,
+    reverseLayout: Boolean,
     onMenuToggle: () -> Unit,
     onPageLimit: (PageLimitEvent) -> Unit,
     isFirst: Boolean,
@@ -962,6 +998,7 @@ private fun ZoomablePage(
     onZoomChanged: (Boolean) -> Unit
 ) {
     val scope     = rememberCoroutineScope()
+    val context   = LocalContext.current
     val scaleAnim = remember { Animatable(MIN_SCALE) }
     var offset    by remember { mutableStateOf(Offset.Zero) }
 
@@ -1096,18 +1133,77 @@ private fun ZoomablePage(
             },
         contentAlignment = Alignment.Center
     ) {
-        AsyncImage(
-            model              = imageModel,
-            contentDescription = "ページ ${pageIndex + 1}",
-            modifier           = Modifier
+        // 見開きのときは2ページを並べる。
+        // 右綴じ（マンガ）はページ番号の小さい方が右に来るので、並び順を反転させる。
+        val ordered = if (reverseLayout) imageModels.reversed() else imageModels
+
+        Row(
+            modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer(
                     scaleX       = scaleAnim.value,
                     scaleY       = scaleAnim.value,
                     translationX = offset.x,
                     translationY = offset.y
-                ),
-            contentScale = ContentScale.Fit
-        )
+                )
+        ) {
+            ordered.forEachIndexed { i, model ->
+                // 余白削除がONのときは、表示直前に白・黒のフチを切り落とす
+                val request = remember(model, trimMargins) {
+                    ImageRequest.Builder(context)
+                        .data(model)
+                        .let { builder ->
+                            if (trimMargins) builder.transformations(TrimMarginsTransformation())
+                            else builder
+                        }
+                        .build()
+                }
+                AsyncImage(
+                    model              = request,
+                    contentDescription = "ページ",
+                    modifier           = Modifier
+                        .weight(1f)
+                        .fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+            }
+        }
     }
+}
+
+/**
+ * ページを見開きの組にまとめる。
+ *
+ * - 見開きがOFFなら、全ページを単独で返す
+ * - 見開きがONで「表紙を単独表示」なら、[0] / [1,2] / [3,4] ... となる
+ * - 見開きがONで表紙も見開きなら、[0,1] / [2,3] ... となる
+ * - 最後の組が1ページだけになることもある
+ */
+private fun buildSpreads(
+    pageCount: Int,
+    spreadEnabled: Boolean,
+    coverSingle: Boolean
+): List<List<Int>> {
+    if (!spreadEnabled || pageCount <= 1) {
+        return (0 until pageCount).map { listOf(it) }
+    }
+
+    val result = mutableListOf<List<Int>>()
+    var index  = 0
+
+    if (coverSingle) {
+        result.add(listOf(0))
+        index = 1
+    }
+
+    while (index < pageCount) {
+        if (index + 1 < pageCount) {
+            result.add(listOf(index, index + 1))
+            index += 2
+        } else {
+            result.add(listOf(index))
+            index += 1
+        }
+    }
+    return result
 }

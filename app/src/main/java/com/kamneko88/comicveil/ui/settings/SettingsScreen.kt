@@ -66,6 +66,9 @@ fun SettingsScreen(
     var volumeKeyPageTurn by remember { mutableStateOf(appPrefs.volumeKeyPageTurn) }
     var zoomBounce        by remember { mutableStateOf(appPrefs.zoomBounce) }
     var doubleTapZoom     by remember { mutableStateOf(appPrefs.doubleTapZoom) }
+    var spreadMode        by remember { mutableStateOf(appPrefs.spreadMode) }
+    var spreadCoverSingle by remember { mutableStateOf(appPrefs.spreadCoverSingle) }
+    var trimMargins       by remember { mutableStateOf(appPrefs.trimMargins) }
 
     // ── ファイル・フォルダ ────────────────────────────────────────────────
     var homeFolderType     by remember { mutableStateOf(appPrefs.homeFolderType) }
@@ -284,6 +287,51 @@ fun SettingsScreen(
                     }
                 )
             }
+
+            SettingsDivider()
+
+            // ── 見開き表示 ───────────────────────────────
+            SettingsItemHeader(
+                title       = "見開き表示",
+                description = "2ページを並べて表示する（紙の本と同じ見え方）"
+            )
+            AppPrefs.SpreadMode.entries.forEach { mode ->
+                SettingsRadioItem(
+                    label       = mode.label,
+                    description = mode.description,
+                    selected    = spreadMode == mode,
+                    onSelect    = {
+                        spreadMode          = mode
+                        appPrefs.spreadMode = mode
+                    }
+                )
+            }
+
+            if (spreadMode != AppPrefs.SpreadMode.OFF) {
+                Spacer(Modifier.height(8.dp))
+                SettingsSwitchItem(
+                    title       = "表紙を単独で表示",
+                    description = "1ページ目だけを単独表示し、2ページ目以降を見開きにする。マンガは通常ON",
+                    checked     = spreadCoverSingle,
+                    onCheckedChange = {
+                        spreadCoverSingle          = it
+                        appPrefs.spreadCoverSingle = it
+                    }
+                )
+            }
+
+            SettingsDivider()
+
+            // ── 余白削除 ────────────────────────────────
+            SettingsSwitchItem(
+                title       = "余白を削除",
+                description = "ページ周囲の白・黒のフチを自動で切り落とし、本文を大きく表示する",
+                checked     = trimMargins,
+                onCheckedChange = {
+                    trimMargins          = it
+                    appPrefs.trimMargins = it
+                }
+            )
 
             Spacer(Modifier.height(24.dp))
 

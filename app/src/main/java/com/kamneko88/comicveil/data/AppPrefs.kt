@@ -106,6 +106,34 @@ class AppPrefs(context: Context) {
         )
         set(value) = prefs.edit().putString(KEY_DOUBLE_TAP_ZOOM, value.name).apply()
 
+    // ─── 見開き表示 ──────────────────────────────────────
+
+    enum class SpreadMode(val label: String, val description: String) {
+        OFF("しない", "常に1ページずつ表示する"),
+        LANDSCAPE("横向きのときだけ", "端末を横にすると2ページ並べて表示する"),
+        ALWAYS("常に見開き", "縦向きでも2ページ並べて表示する")
+    }
+
+    var spreadMode: SpreadMode
+        get() = runCatching {
+            SpreadMode.valueOf(
+                prefs.getString(KEY_SPREAD_MODE, SpreadMode.OFF.name) ?: SpreadMode.OFF.name
+            )
+        }.getOrDefault(SpreadMode.OFF)
+        set(value) = prefs.edit().putString(KEY_SPREAD_MODE, value.name).apply()
+
+    /** 見開き時に1ページ目（表紙）を単独で表示するか。マンガは通常ON。 */
+    var spreadCoverSingle: Boolean
+        get() = prefs.getBoolean(KEY_SPREAD_COVER_SINGLE, true)
+        set(value) = prefs.edit().putBoolean(KEY_SPREAD_COVER_SINGLE, value).apply()
+
+    // ─── 余白削除 ───────────────────────────────────────
+
+    /** ページ周囲の白・黒の余白を自動で切り落とし、画面を広く使う */
+    var trimMargins: Boolean
+        get() = prefs.getBoolean(KEY_TRIM_MARGINS, false)
+        set(value) = prefs.edit().putBoolean(KEY_TRIM_MARGINS, value).apply()
+
     // ─── ファイル一覧表示モード ───────────────────────────────────────────
 
     enum class ListDisplayMode { DETAIL, COMPACT }
@@ -127,6 +155,9 @@ class AppPrefs(context: Context) {
         private const val KEY_VOLUME_KEY_PAGE_TURN   = "volume_key_page_turn"
         private const val KEY_ZOOM_BOUNCE            = "zoom_bounce"
         private const val KEY_DOUBLE_TAP_ZOOM        = "double_tap_zoom"
+        private const val KEY_SPREAD_MODE            = "spread_mode"
+        private const val KEY_SPREAD_COVER_SINGLE    = "spread_cover_single"
+        private const val KEY_TRIM_MARGINS           = "trim_margins"
         private const val KEY_LIST_DISPLAY_MODE      = "list_display_mode"
 
         fun getAppFolder(context: Context): File {
