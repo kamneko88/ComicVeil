@@ -1158,12 +1158,22 @@ private fun ZoomablePage(
                         }
                         .build()
                 }
+
+                // 見開きのときは左右のページを内側に寄せて、真ん中に隙間ができないようにする
+                // （ページはそれぞれ画面の半分を占めるため、中央寄せのままだと内側に余白が残る）
+                val alignment = when {
+                    ordered.size < 2 -> Alignment.Center
+                    i == 0           -> Alignment.CenterEnd    // 左側のページ→右寄せ
+                    else             -> Alignment.CenterStart  // 右側のページ→左寄せ
+                }
+
                 AsyncImage(
                     model              = request,
                     contentDescription = "ページ",
                     modifier           = Modifier
                         .weight(1f)
                         .fillMaxSize(),
+                    alignment    = alignment,
                     contentScale = ContentScale.Fit
                 )
             }
