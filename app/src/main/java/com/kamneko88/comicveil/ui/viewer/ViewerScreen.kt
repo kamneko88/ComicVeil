@@ -1,6 +1,7 @@
 package com.kamneko88.comicveil.ui.viewer
 
 import android.app.Application
+import android.content.pm.ActivityInfo
 import android.os.Build
 import android.view.KeyEvent
 import android.view.WindowManager
@@ -24,6 +25,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,6 +35,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -48,16 +51,22 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Brightness4
 import androidx.compose.material.icons.filled.Brightness7
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ScreenLockRotation
+import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ViewCarousel
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -103,6 +112,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
@@ -113,7 +125,8 @@ import kotlin.math.abs
 @Composable
 fun ViewerScreen(
     filePath: String,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    onOpenSettings: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -135,6 +148,15 @@ fun ViewerScreen(
     var brightness           by remember { mutableFloatStateOf(initialBrightness) }
     var showBrightnessSlider by remember { mutableStateOf(false) }
     var showBookmarkList     by remember { mutableStateOf(false) }
+    var showPageJumpDialog   by remember { mutableStateOf(false) }
+    var orientationLocked    by remember { mutableStateOf(false) }
+
+    // 表示用のファイル名（巻マーカー付きの場合は「ファイル名 - 巻名」にする）
+    val displayFileName = remember(filePath) {
+        val parts = filePath.split("##vol##")
+        val base  = java.io.File(parts[0]).name
+        if (parts.size > 1) "$base - ${parts[1]}" else base
+    }
 
     var isAnyPageZoomed by remember { mutableStateOf(false) }
 
@@ -164,6 +186,30 @@ fun ViewerScreen(
                 attrs.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
                 window.attributes = attrs
             }
+            // 画面の向きロックを解除してから抜ける
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    // 閲覧中はシステムUI（ステータスバー・ナビゲーションバー）を隠して画像に没入できるようにし、
+    // メニュー表示中だけ戻す（Comic Glassと同じ挙動）
+    DisposableEffect(Unit) {
+        val window     = activity?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+        controller?.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        onDispose {
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    LaunchedEffect(menuVisible) {
+        val window     = activity?.window ?: return@LaunchedEffect
+        val controller = WindowCompat.getInsetsController(window, view)
+        if (menuVisible) {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.hide(WindowInsetsCompat.Type.systemBars())
         }
     }
 
@@ -387,14 +433,11 @@ fun ViewerScreen(
                 containerColor = Color.Black
             ) { innerPadding ->
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding)
-                        .statusBarsPadding()
+                    modifier = Modifier.fillMaxSize()
                 ) {
                     HorizontalPager(
                         state                   = pagerState,
-                        userScrollEnabled       = !isAnyPageZoomed,
+                        userScrollEnabled       = !isAnyPageZoomed && !menuVisible,
                         modifier                = Modifier.fillMaxSize(),
                         reverseLayout           = isReverseLayout,
                         flingBehavior           = springFling,
@@ -447,8 +490,18 @@ fun ViewerScreen(
                         }
                     }
 
+                    // メニュー表示中の暗転オーバーレイ。
+                    // ここでタッチを受け止めるので、メニュー中に下のページへ操作が素通りしない（誤操作防止）。
+                    // 背景をタップするとメニューを閉じる。
                     AnimatedVisibility(visible = menuVisible, enter = fadeIn(tween(200)), exit = fadeOut(tween(200))) {
-                        Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.55f))
+                                .pointerInput(Unit) {
+                                    detectTapGestures { menuVisible = false }
+                                }
+                        )
                     }
 
                     if (showBookmarkList) {
@@ -507,14 +560,86 @@ fun ViewerScreen(
                         )
                     }
 
-                    AnimatedVisibility(visible = menuVisible, enter = fadeIn(tween(200)), exit = fadeOut(tween(200)), modifier = Modifier.align(Alignment.Center)) {
-                        Button(onClick = onClose, modifier = Modifier.padding(16.dp)) {
+                    // ページ移動ダイアログ（下部バーのページ移動ボタンから呼び出す）
+                    if (showPageJumpDialog) {
+                        var jumpValue by remember { mutableFloatStateOf(pagerState.currentPage.toFloat()) }
+                        val jumpTarget = jumpValue.toInt().coerceIn(0, pagerCount - 1)
+
+                        AlertDialog(
+                            onDismissRequest = { showPageJumpDialog = false },
+                            title = { Text("ページ移動") },
+                            text  = {
+                                Column {
+                                    if (!isProgressive && pages.isNotEmpty()) {
+                                        PageThumbnailStrip(pages = pages, targetPage = jumpTarget, visibleCount = 5)
+                                        Spacer(Modifier.height(8.dp))
+                                    }
+                                    Text(
+                                        text       = "${jumpTarget + 1} / $pagerCount ページ",
+                                        fontWeight = FontWeight.Bold,
+                                        modifier   = Modifier.align(Alignment.CenterHorizontally)
+                                    )
+                                    if (pagerCount > 1) {
+                                        Slider(
+                                            value         = jumpValue,
+                                            onValueChange = { jumpValue = it },
+                                            valueRange    = 0f..(pagerCount - 1).toFloat(),
+                                            steps         = if (pagerCount > 2) pagerCount - 2 else 0
+                                        )
+                                    }
+                                    Row(
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier              = Modifier.fillMaxWidth()
+                                    ) {
+                                        TextButton(onClick = { jumpValue = 0f }) { Text("最初のページ") }
+                                        TextButton(onClick = { jumpValue = (pagerCount - 1).toFloat() }) { Text("最後のページ") }
+                                    }
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    showPageJumpDialog = false
+                                    scope.launch { pagerState.animateScrollToPage(jumpTarget) }
+                                }) { Text("移動") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showPageJumpDialog = false }) { Text("キャンセル") }
+                            }
+                        )
+                    }
+
+                    // 上部：本を閉じる（幅広のピルボタン）
+                    AnimatedVisibility(
+                        visible  = menuVisible,
+                        enter    = slideInVertically(tween(200)) { -it } + fadeIn(tween(200)),
+                        exit     = slideOutVertically(tween(200)) { -it } + fadeOut(tween(200)),
+                        modifier = Modifier.align(Alignment.TopCenter)
+                    ) {
+                        Button(
+                            onClick = onClose,
+                            shape   = RoundedCornerShape(28.dp),
+                            colors  = ButtonDefaults.buttonColors(
+                                containerColor = Color.Black.copy(alpha = 0.6f),
+                                contentColor   = Color.White
+                            ),
+                            modifier = Modifier
+                                .statusBarsPadding()
+                                .padding(16.dp)
+                                .fillMaxWidth(0.85f)
+                                .height(52.dp)
+                        ) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
-                            Text(text = "  本を閉じる", fontSize = 16.sp)
+                            Text(text = "  本を閉じる", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
-                    AnimatedVisibility(visible = menuVisible, enter = slideInVertically(tween(200)) { it }, exit = slideOutVertically(tween(200)) { it }, modifier = Modifier.align(Alignment.BottomCenter)) {
+                    // 下部：ページ情報＋ページ移動スライダー＋操作バー（左右2グループ）
+                    AnimatedVisibility(
+                        visible  = menuVisible,
+                        enter    = slideInVertically(tween(200)) { it } + fadeIn(tween(200)),
+                        exit     = slideOutVertically(tween(200)) { it } + fadeOut(tween(200)),
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    ) {
                         val maxSlider = (pagerCount - 1).toFloat().coerceAtLeast(0f)
                         var sliderValue by remember { mutableFloatStateOf((pagerCount - 1 - pagerState.currentPage).toFloat().coerceIn(0f, maxSlider)) }
                         val sliderTargetPage by remember { derivedStateOf { (pagerCount - 1 - sliderValue.toInt()).coerceIn(0, pagerCount - 1) } }
@@ -524,41 +649,132 @@ fun ViewerScreen(
                             if (!isSliding) sliderValue = (pagerCount - 1 - pagerState.currentPage).toFloat().coerceIn(0f, maxSlider)
                         }
 
-                        Column(modifier = Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.7f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding()
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            // 明るさスライダー（明るさボタンで開閉。ページ移動スライダーとは離して配置）
+                            AnimatedVisibility(visible = showBrightnessSlider, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 8.dp)
+                                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(24.dp))
+                                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(Icons.Default.Brightness4, contentDescription = null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                                    Slider(
+                                        value = brightness,
+                                        onValueChange = { brightness = it },
+                                        valueRange = 0.01f..1f,
+                                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                                    )
+                                    Icon(Icons.Default.BrightnessHigh, contentDescription = null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                                }
+                            }
+
+                            // スライド中のサムネイルプレビュー
                             AnimatedVisibility(visible = isSliding && !isProgressive, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
                                 PageThumbnailStrip(pages = pages, targetPage = sliderTargetPage, visibleCount = 5)
                             }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                                IconButton(onClick = { showBookmarkList = true }) {
-                                    Icon(Icons.Default.BookmarkBorder, contentDescription = "ブックマーク一覧", tint = if (uiState.bookmarks.isNotEmpty()) Color(0xFFFFD700) else Color.White)
-                                }
-                                IconButton(onClick = { viewModel.toggleBookmark(pagerState.currentPage) }) {
-                                    Icon(if (uiState.isCurrentPageBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder, contentDescription = "ブックマーク", tint = if (uiState.isCurrentPageBookmarked) Color(0xFFFFD700) else Color.White)
-                                }
+
+                            // ページ数・ファイル名
+                            Text(
+                                text       = "${if (isSliding) sliderTargetPage + 1 else pagerState.currentPage + 1} / $pagerCount ページ",
+                                color      = Color.White,
+                                fontSize   = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text     = displayFileName,
+                                color    = Color.White.copy(alpha = 0.6f),
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp)
+                            )
+
+                            // ページ移動スライダー（下部バーから離して配置し、明るさボタン等との誤タップを防ぐ）
+                            if (maxSlider > 0f) {
+                                Slider(
+                                    value = sliderValue,
+                                    onValueChange = { sliderValue = it; isSliding = true; showBrightnessSlider = false },
+                                    onValueChangeFinished = { isSliding = false; scope.launch { pagerState.animateScrollToPage(sliderTargetPage) } },
+                                    valueRange = 0f..maxSlider,
+                                    steps = if (pagerCount > 2) pagerCount - 2 else 0,
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                                    thumb = { Box(modifier = Modifier.size(28.dp).background(Color.White, CircleShape)) }
+                                )
                             }
-                            Text(text = "${if (isSliding) sliderTargetPage + 1 else pagerState.currentPage + 1} / $pagerCount", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.CenterHorizontally))
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                if (maxSlider > 0f) {
-                                    Slider(
-                                        value = sliderValue,
-                                        onValueChange = { sliderValue = it; isSliding = true; showBrightnessSlider = false },
-                                        onValueChangeFinished = { isSliding = false; scope.launch { pagerState.animateScrollToPage(sliderTargetPage) } },
-                                        valueRange = 0f..maxSlider,
-                                        steps = if (pagerCount > 2) pagerCount - 2 else 0,
-                                        modifier = Modifier.weight(1f),
-                                        thumb = { Box(modifier = Modifier.size(28.dp).background(Color.White, CircleShape)) }
-                                    )
-                                } else { Spacer(Modifier.weight(1f)) }
-                                IconButton(onClick = { showBrightnessSlider = !showBrightnessSlider }) {
-                                    Icon(imageVector = when { brightness < 0.33f -> Icons.Default.Brightness4; brightness < 0.66f -> Icons.Default.Brightness7; else -> Icons.Default.BrightnessHigh }, contentDescription = "明るさ", tint = if (showBrightnessSlider) androidx.compose.ui.graphics.Color.Yellow else Color.White)
+
+                            Spacer(Modifier.height(8.dp))
+
+                            // 操作バー：左（ブックマーク一覧・登録・ページ移動）／右（明るさ・向きロック・設定）
+                            Row(
+                                modifier              = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment     = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(28.dp))
+                                        .padding(horizontal = 4.dp)
+                                ) {
+                                    IconButton(onClick = { showBookmarkList = true }) {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.MenuBook,
+                                            contentDescription = "ブックマーク一覧",
+                                            tint = if (uiState.bookmarks.isNotEmpty()) Color(0xFFFFD700) else Color.White
+                                        )
+                                    }
+                                    IconButton(onClick = { viewModel.toggleBookmark(pagerState.currentPage) }) {
+                                        Icon(
+                                            if (uiState.isCurrentPageBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                            contentDescription = "このページをブックマーク",
+                                            tint = if (uiState.isCurrentPageBookmarked) Color(0xFFFFD700) else Color.White
+                                        )
+                                    }
+                                    IconButton(onClick = { showPageJumpDialog = true }) {
+                                        Icon(Icons.Default.ViewCarousel, contentDescription = "ページ移動", tint = Color.White)
+                                    }
                                 }
-                            }
-                            AnimatedVisibility(visible = showBrightnessSlider, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-                                    Icon(Icons.Default.Brightness4, contentDescription = null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
-                                    Slider(value = brightness, onValueChange = { brightness = it }, valueRange = 0.01f..1f, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
-                                    Icon(Icons.Default.BrightnessHigh, contentDescription = null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(28.dp))
+                                        .padding(horizontal = 4.dp)
+                                ) {
+                                    IconButton(onClick = { showBrightnessSlider = !showBrightnessSlider }) {
+                                        Icon(
+                                            imageVector = when {
+                                                brightness < 0.33f -> Icons.Default.Brightness4
+                                                brightness < 0.66f -> Icons.Default.Brightness7
+                                                else               -> Icons.Default.BrightnessHigh
+                                            },
+                                            contentDescription = "明るさ",
+                                            tint = if (showBrightnessSlider) Color.Yellow else Color.White
+                                        )
+                                    }
+                                    IconButton(onClick = {
+                                        orientationLocked = !orientationLocked
+                                        activity?.requestedOrientation =
+                                            if (orientationLocked) ActivityInfo.SCREEN_ORIENTATION_LOCKED
+                                            else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                                    }) {
+                                        Icon(
+                                            imageVector = if (orientationLocked) Icons.Default.ScreenLockRotation else Icons.Default.ScreenRotation,
+                                            contentDescription = "画面の向きをロック",
+                                            tint = if (orientationLocked) Color.Yellow else Color.White
+                                        )
+                                    }
+                                    IconButton(onClick = onOpenSettings) {
+                                        Icon(Icons.Default.Settings, contentDescription = "設定", tint = Color.White)
+                                    }
                                 }
                             }
                         }

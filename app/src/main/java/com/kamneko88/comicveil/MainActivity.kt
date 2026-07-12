@@ -131,8 +131,9 @@ fun ComicVeilApp(intent: Intent? = null) {
             val encodedPath = backStackEntry.arguments?.getString("filePath") ?: ""
             val filePath    = URLDecoder.decode(encodedPath, "UTF-8")
             ViewerScreen(
-                filePath = filePath,
-                onClose  = { navController.popBackStack() }
+                filePath       = filePath,
+                onClose        = { navController.popBackStack() },
+                onOpenSettings = { navController.navigate("settings") }
             )
         }
 
