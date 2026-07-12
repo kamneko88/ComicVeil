@@ -10,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.kamneko88.comicveil.BuildConfig
 import com.kamneko88.comicveil.data.ArchiveScanner
 import com.kamneko88.comicveil.data.db.Bookmark
 import com.kamneko88.comicveil.data.db.BookmarkRepository
@@ -40,6 +41,15 @@ import java.io.InputStream
 
 /** filePath内でアーカイブパスと巻フォルダ名を区切るマーカー（実際のパスに出現しない文字列） */
 private const val VOLUME_MARKER = "##vol##"
+
+/**
+ * 開発時のみ出力されるデバッグログ。
+ * リリースビルドでは何も出力しない（ログの整理）。
+ * エラー・警告（Log.e / Log.w）は常に出力する。
+ */
+private fun logD(message: String) {
+    if (BuildConfig.DEBUG) Log.d("ComicVeil", message)
+}
 
 data class ViewerUiState(
     val pages: List<ByteArray> = emptyList(),
@@ -128,11 +138,11 @@ class ViewerViewModel(
                         val encrypted = try {
                             Zip4jFile(file).isEncrypted
                         } catch (e: Exception) {
-                            Log.d("ComicVeil", "zip4j暗号化チェック失敗: ${e.message}")
+                            logD("zip4j暗号化チェック失敗: ${e.message}")
                             false
                         }
                         if (encrypted) {
-                            Log.d("ComicVeil", "パスワード付きZIPを検出: ${file.name}")
+                            logD("パスワード付きZIPを検出: ${file.name}")
                             _uiState.update { it.copy(isLoading = false, needsPassword = true) }
                             return@withContext
                         }
@@ -142,7 +152,7 @@ class ViewerViewModel(
                         "zip", "cbz", "rar", "cbr", "7z" ->
                             loadArchiveProgressive(file, ext, requestedVolume, password)
                         "pdf" -> {
-                            Log.d("ComicVeil", "展開開始: ${file.name} (${file.length()} bytes)")
+                            logD("展開開始: ${file.name} (${file.length()} bytes)")
                             val pages = extractPdf(file)
                             _uiState.update {
                                 it.copy(
@@ -174,7 +184,30 @@ class ViewerViewModel(
         requestedVolume: String?,
         password: String?
     ) {
+        val pageDir = pageDirFor(file, requestedVolume)
+
+        // 【高速化】展開済みキャッシュがあれば、アーカイブには一切触らずに即表示する。
+        // 以前はキャッシュの有無に関わらず先に ArchiveScanner.scan() を実行していたため、
+        // 開くたびにアーカイブ全体を読み直していた（特に中央ディレクトリが壊れたZIPは
+        // 先頭から全体を逐次読みするため、数百MBを毎回フルスキャンしていた）。
+        // これが「初回以降もモッサリする」「1ページ目が出るまで待たされる」原因だった。
+        if (File(pageDir, "complete").exists()) {
+            val existingPageCount = pageDir.listFiles { f ->
+                f.name.endsWith(".jpg") && !f.name.startsWith("incoming_")
+            }?.size ?: 0
+            if (existingPageCount > 0) {
+                logD("キャッシュから即表示: ${pageDir.name} (${existingPageCount}ページ)")
+                loadFromPageDirectory(pageDir)
+                return
+            }
+            // 完了マークはあるが実ページが0枚 = 過去の展開失敗キャッシュ。作り直す。
+            logD("空のcompleteキャッシュを検出したため再展開します: ${pageDir.name}")
+        }
+
+        val scanStart = System.currentTimeMillis()
         val scan = ArchiveScanner.scan(file)
+        logD("アーカイブ走査: ${System.currentTimeMillis() - scanStart}ms (${scan.entries.size}件)")
+
         val targetEntries = if (requestedVolume != null) {
             scan.entries.filter { it.volumeName == requestedVolume }
         } else {
@@ -186,23 +219,11 @@ class ViewerViewModel(
             return
         }
 
-        val pageDir = pageDirFor(file, requestedVolume)
-
-        if (File(pageDir, "complete").exists()) {
-            val existingPageCount = pageDir.listFiles { f ->
-                f.name.endsWith(".jpg") && !f.name.startsWith("incoming_")
-            }?.size ?: 0
-            if (existingPageCount > 0) {
-                loadFromPageDirectory(pageDir, knownTotal = targetEntries.size)
-                return
-            }
-            // 完了マークはあるが実ページが0枚 = 過去の展開失敗キャッシュ。作り直す。
-            Log.d("ComicVeil", "空のcompleteキャッシュを検出したため再展開します: ${pageDir.name}")
-        }
         pageDir.deleteRecursively()
         pageDir.mkdirs()
 
         // バックグラウンドで1ページずつ展開（メモリに全ページを溜め込まない）
+        val extractStart = System.currentTimeMillis()
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 when (ext) {
@@ -210,6 +231,7 @@ class ViewerViewModel(
                     "rar", "cbr" -> extractRarProgressive(file, targetEntries, pageDir)
                     "7z"         -> extract7zProgressive(file, targetEntries, pageDir)
                 }
+                logD("展開完了: ${System.currentTimeMillis() - extractStart}ms (${targetEntries.size}ページ)")
             } catch (e: Exception) {
                 Log.e("ComicVeil", "段階展開エラー: ${e.message}", e)
                 // 失敗時も complete マーカーを置き、無限ローディングにしない
@@ -234,11 +256,19 @@ class ViewerViewModel(
         if (knownTotal != null) {
             _uiState.update { it.copy(totalPageCount = knownTotal) }
         }
+        var firstPageShownAt = 0L
+        val start = System.currentTimeMillis()
         while (true) {
             val files = pageDir.listFiles { f -> f.name.endsWith(".jpg") && !f.name.startsWith("incoming_") }
                 ?.sortedBy { it.name } ?: emptyList()
             val isComplete = File(pageDir, "complete").exists()
             val filePaths = files.map { it.absolutePath }
+
+            if (firstPageShownAt == 0L && filePaths.isNotEmpty()) {
+                firstPageShownAt = System.currentTimeMillis()
+                logD("1ページ目表示まで: ${firstPageShownAt - start}ms")
+            }
+
             _uiState.update {
                 it.copy(
                     pageFiles          = filePaths,
@@ -253,10 +283,11 @@ class ViewerViewModel(
                 val total = knownTotal ?: runCatching {
                     File(pageDir, "complete").readText().toInt()
                 }.getOrDefault(filePaths.size)
-                _uiState.update { it.copy(totalPageCount = total) }
+                _uiState.update { it.copy(totalPageCount = maxOf(total, filePaths.size)) }
                 break
             }
-            kotlinx.coroutines.delay(300)
+            // 展開中は短い間隔で見に行く（以前は300msで、その分だけ初回表示が遅れていた）
+            kotlinx.coroutines.delay(100)
         }
     }
 
@@ -415,15 +446,15 @@ private fun extractZipProgressive(
         }
         true
     } catch (e: Exception) {
-        Log.d("ComicVeil", "ZIPランダムアクセス展開失敗、逐次方式にフォールバック: ${e.message}")
+        logD("ZIPランダムアクセス展開失敗、逐次方式にフォールバック: ${e.message}")
         false
     }
 
-    Log.d("ComicVeil", "ZIP展開: ランダムアクセス=$success, 対象=${targetEntries.size}件, charset=$zipCharset")
+    logD("ZIP展開: ランダムアクセス=$success, 対象=${targetEntries.size}件, charset=$zipCharset")
 
     if (!success) {
         val ok = extractZipSequentialFallback(file, targetEntries, pageDir)
-        Log.d("ComicVeil", "ZIP逐次フォールバック結果: ok=$ok")
+        logD("ZIP逐次フォールバック結果: ok=$ok")
         if (!ok) {
             File(pageDir, "complete").writeText("0")
             return
@@ -470,7 +501,7 @@ private fun extractZipSequentialFallback(
                 }
             }
         } catch (e: Exception) {
-            Log.d("ComicVeil", "ZIP逐次フォールバック失敗（$cs）: ${e.message}")
+            logD("ZIP逐次フォールバック失敗（$cs）: ${e.message}")
         }
         if (aborted) break
         if (arrivalNameOrder.isNotEmpty()) break
@@ -482,7 +513,7 @@ private fun extractZipSequentialFallback(
     }
 
     val finalIndexByName = targetEntries.withIndex().associate { (i, info) -> info.name to i }
-    Log.d("ComicVeil", "逐次フォールバック: ${arrivalNameOrder.size}件取得 / 対象${targetNames.size}件 (aborted=$aborted)")
+    logD("逐次フォールバック: ${arrivalNameOrder.size}件取得 / 対象${targetNames.size}件 (aborted=$aborted)")
     arrivalNameOrder.forEachIndexed { arrivalIdx, name ->
         val finalIdx = finalIndexByName[name] ?: return@forEachIndexed
         File(pageDir, "incoming_%05d.jpg".format(arrivalIdx))
