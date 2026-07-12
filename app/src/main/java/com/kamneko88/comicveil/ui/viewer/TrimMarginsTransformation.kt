@@ -16,11 +16,16 @@ import coil3.transform.Transformation
  * 2. 上下左右から順に走査し、背景色でない画素（＝本文）が現れる位置を探す
  * 3. 見つかった範囲だけを切り出す
  *
- * 判定はサンプリング（数画素おき）で行うため、大きな画像でも軽量に動作する。
+ * @param whiteOnly    true の場合、白い余白だけを削除する（黒背景のページはそのまま）
+ * @param keepAspect   true の場合、切り出し範囲を広げて元の縦横比を保つ
+ *                     （ページごとに大きさがバラつくのを防ぐ）
  */
-class TrimMarginsTransformation : Transformation() {
+class TrimMarginsTransformation(
+    private val whiteOnly: Boolean = false,
+    private val keepAspect: Boolean = true
+) : Transformation() {
 
-    override val cacheKey: String = "trim_margins"
+    override val cacheKey: String = "trim_margins_${whiteOnly}_$keepAspect"
 
     override suspend fun transform(input: Bitmap, size: Size): Bitmap {
         val width  = input.width
@@ -34,14 +39,15 @@ class TrimMarginsTransformation : Transformation() {
             input.getPixel(0, height - 1),
             input.getPixel(width - 1, height - 1)
         )
-        val cornerLuma  = corners.map { luminance(it) }
-        val isLightEdge = cornerLuma.average() > 128
+        val isLightEdge = corners.map { luminance(it) }.average() > 128
+
+        // 「白い余白のみ」設定のときは、黒フチのページには手を付けない
+        if (whiteOnly && !isLightEdge) return input
 
         // 走査の刻み幅（大きな画像でも軽く済ませるための間引き）
         val stepX = (width  / SAMPLE_COUNT).coerceAtLeast(1)
         val stepY = (height / SAMPLE_COUNT).coerceAtLeast(1)
 
-        /** その行・列が「まるごと余白」かどうか */
         fun isBackgroundRow(y: Int): Boolean {
             var x = 0
             while (x < width) {
@@ -72,14 +78,36 @@ class TrimMarginsTransformation : Transformation() {
         var right = width - 1
         while (right > left + MIN_SIZE && isBackgroundColumn(right)) right--
 
-        val newWidth  = right - left + 1
-        val newHeight = bottom - top + 1
+        var cropLeft   = left
+        var cropTop    = top
+        var cropWidth  = right - left + 1
+        var cropHeight = bottom - top + 1
+
+        // 縦横比を保つ場合は、切り出し範囲を足りない方向へ広げて元の比率に合わせる
+        if (keepAspect) {
+            val targetRatio = width.toFloat() / height
+            val cropRatio   = cropWidth.toFloat() / cropHeight
+
+            if (cropRatio < targetRatio) {
+                // 横が足りない → 左右に広げる
+                val wanted = (cropHeight * targetRatio).toInt().coerceAtMost(width)
+                val extra  = wanted - cropWidth
+                cropLeft  = (cropLeft - extra / 2).coerceAtLeast(0)
+                cropWidth = wanted.coerceAtMost(width - cropLeft)
+            } else if (cropRatio > targetRatio) {
+                // 縦が足りない → 上下に広げる
+                val wanted = (cropWidth / targetRatio).toInt().coerceAtMost(height)
+                val extra  = wanted - cropHeight
+                cropTop    = (cropTop - extra / 2).coerceAtLeast(0)
+                cropHeight = wanted.coerceAtMost(height - cropTop)
+            }
+        }
 
         // 切り落とす量がごくわずかなら、そのまま返す（無駄なコピーを避ける）
-        if (newWidth >= width * 0.98 && newHeight >= height * 0.98) return input
-        if (newWidth < MIN_SIZE || newHeight < MIN_SIZE) return input
+        if (cropWidth >= width * 0.98 && cropHeight >= height * 0.98) return input
+        if (cropWidth < MIN_SIZE || cropHeight < MIN_SIZE) return input
 
-        return Bitmap.createBitmap(input, left, top, newWidth, newHeight)
+        return Bitmap.createBitmap(input, cropLeft, cropTop, cropWidth, cropHeight)
     }
 
     private fun isBackground(pixel: Int, isLightEdge: Boolean): Boolean {
@@ -95,7 +123,10 @@ class TrimMarginsTransformation : Transformation() {
         return (r * 30 + g * 59 + b * 11) / 100
     }
 
-    override fun equals(other: Any?): Boolean = other is TrimMarginsTransformation
+    override fun equals(other: Any?): Boolean =
+        other is TrimMarginsTransformation &&
+            other.whiteOnly == whiteOnly &&
+            other.keepAspect == keepAspect
 
     override fun hashCode(): Int = cacheKey.hashCode()
 

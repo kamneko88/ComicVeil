@@ -68,7 +68,11 @@ fun SettingsScreen(
     var doubleTapZoom     by remember { mutableStateOf(appPrefs.doubleTapZoom) }
     var spreadMode        by remember { mutableStateOf(appPrefs.spreadMode) }
     var spreadCoverSingle by remember { mutableStateOf(appPrefs.spreadCoverSingle) }
-    var trimMargins       by remember { mutableStateOf(appPrefs.trimMargins) }
+    var spreadGutter      by remember { mutableStateOf(appPrefs.spreadGutter) }
+    var trimMode          by remember { mutableStateOf(appPrefs.trimMode) }
+    var trimKeepAspect    by remember { mutableStateOf(appPrefs.trimKeepAspect) }
+    var backgroundColor   by remember { mutableStateOf(appPrefs.backgroundColor) }
+    var pageTurnAnimation by remember { mutableStateOf(appPrefs.pageTurnAnimation) }
 
     // ── ファイル・フォルダ ────────────────────────────────────────────────
     var homeFolderType     by remember { mutableStateOf(appPrefs.homeFolderType) }
@@ -235,7 +239,19 @@ fun SettingsScreen(
             // ── ページ送りアニメーション ───────────────────────
             SettingsSwitchItem(
                 title       = "ページ送りアニメーション",
-                description = "スワイプ時のバウンスアニメーションの有無",
+                description = "OFFにすると即座にページが切り替わる（非力な端末向け）",
+                checked     = pageTurnAnimation,
+                onCheckedChange = {
+                    pageTurnAnimation          = it
+                    appPrefs.pageTurnAnimation = it
+                }
+            )
+
+            SettingsDivider()
+
+            SettingsSwitchItem(
+                title       = "ページ送りのバウンス",
+                description = "スワイプ時にぶるんと戻る動きをつける",
                 checked     = pageAnimation,
                 onCheckedChange = {
                     pageAnimation          = it
@@ -318,20 +334,75 @@ fun SettingsScreen(
                         appPrefs.spreadCoverSingle = it
                     }
                 )
+
+                Spacer(Modifier.height(12.dp))
+                SettingsItemHeader(
+                    title       = "見開きの綴じ代",
+                    description = "見開き表示のとき、左右ページの中央に余白を挿入します"
+                )
+                AppPrefs.SpreadGutter.entries.forEach { gutter ->
+                    SettingsRadioItem(
+                        label       = gutter.label,
+                        description = "",
+                        selected    = spreadGutter == gutter,
+                        onSelect    = {
+                            spreadGutter          = gutter
+                            appPrefs.spreadGutter = gutter
+                        }
+                    )
+                }
             }
 
             SettingsDivider()
 
             // ── 余白削除 ────────────────────────────────
-            SettingsSwitchItem(
+            SettingsItemHeader(
                 title       = "余白を削除",
-                description = "ページ周囲の白・黒のフチを自動で切り落とし、本文を大きく表示する",
-                checked     = trimMargins,
-                onCheckedChange = {
-                    trimMargins          = it
-                    appPrefs.trimMargins = it
-                }
+                description = "ページ周囲のフチを自動で切り落とし、本文を大きく表示する"
             )
+            AppPrefs.TrimMode.entries.forEach { mode ->
+                SettingsRadioItem(
+                    label       = mode.label,
+                    description = mode.description,
+                    selected    = trimMode == mode,
+                    onSelect    = {
+                        trimMode          = mode
+                        appPrefs.trimMode = mode
+                    }
+                )
+            }
+
+            if (trimMode != AppPrefs.TrimMode.OFF) {
+                Spacer(Modifier.height(8.dp))
+                SettingsSwitchItem(
+                    title       = "縦横比を維持",
+                    description = "切り落としたあとも元の縦横比を保ち、ページごとに大きさが変わるのを防ぐ",
+                    checked     = trimKeepAspect,
+                    onCheckedChange = {
+                        trimKeepAspect          = it
+                        appPrefs.trimKeepAspect = it
+                    }
+                )
+            }
+
+            SettingsDivider()
+
+            // ── 背景色 ──────────────────────────────────
+            SettingsItemHeader(
+                title       = "背景色",
+                description = "ページの周りの色"
+            )
+            AppPrefs.BackgroundColor.entries.forEach { bg ->
+                SettingsRadioItem(
+                    label       = bg.label,
+                    description = "",
+                    selected    = backgroundColor == bg,
+                    onSelect    = {
+                        backgroundColor          = bg
+                        appPrefs.backgroundColor = bg
+                    }
+                )
+            }
 
             Spacer(Modifier.height(24.dp))
 

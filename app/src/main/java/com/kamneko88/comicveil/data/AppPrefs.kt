@@ -79,6 +79,11 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean(KEY_PAGE_ANIMATION, true)
         set(value) = prefs.edit().putBoolean(KEY_PAGE_ANIMATION, value).apply()
 
+    /** ページ送りのアニメーション自体の有無（OFFで即座に切り替わる・非力な端末向け） */
+    var pageTurnAnimation: Boolean
+        get() = prefs.getBoolean(KEY_PAGE_TURN_ANIMATION, true)
+        set(value) = prefs.edit().putBoolean(KEY_PAGE_TURN_ANIMATION, value).apply()
+
     // ─── 音量ボタンでページ送り ───────────────────────────────────────────
 
     var volumeKeyPageTurn: Boolean
@@ -127,12 +132,58 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean(KEY_SPREAD_COVER_SINGLE, true)
         set(value) = prefs.edit().putBoolean(KEY_SPREAD_COVER_SINGLE, value).apply()
 
+    /** 見開きの綴じ代（左右ページの中央に入れる余白。画像幅に対する割合） */
+    enum class SpreadGutter(val percent: Int, val label: String) {
+        G1(1, "1%"),
+        G3(3, "3%"),
+        G5(5, "5%"),
+        G10(10, "10%")
+    }
+
+    var spreadGutter: SpreadGutter
+        get() = runCatching {
+            SpreadGutter.valueOf(
+                prefs.getString(KEY_SPREAD_GUTTER, SpreadGutter.G1.name) ?: SpreadGutter.G1.name
+            )
+        }.getOrDefault(SpreadGutter.G1)
+        set(value) = prefs.edit().putString(KEY_SPREAD_GUTTER, value.name).apply()
+
+    // 背景色
+
+    enum class BackgroundColor(val label: String) {
+        BLACK("黒"),
+        WHITE("白"),
+        GRAY("グレー")
+    }
+
+    var backgroundColor: BackgroundColor
+        get() = runCatching {
+            BackgroundColor.valueOf(
+                prefs.getString(KEY_BACKGROUND_COLOR, BackgroundColor.BLACK.name)
+                    ?: BackgroundColor.BLACK.name
+            )
+        }.getOrDefault(BackgroundColor.BLACK)
+        set(value) = prefs.edit().putString(KEY_BACKGROUND_COLOR, value.name).apply()
+
     // ─── 余白削除 ───────────────────────────────────────
 
     /** ページ周囲の白・黒の余白を自動で切り落とし、画面を広く使う */
-    var trimMargins: Boolean
-        get() = prefs.getBoolean(KEY_TRIM_MARGINS, false)
-        set(value) = prefs.edit().putBoolean(KEY_TRIM_MARGINS, value).apply()
+    enum class TrimMode(val label: String, val description: String) {
+        OFF("しない", "余白をそのまま表示する"),
+        ON("削除する", "白・黒どちらの余白も切り落とす"),
+        WHITE_ONLY("白い余白のみ", "黒背景のページはそのままにする")
+    }
+
+    var trimMode: TrimMode
+        get() = runCatching {
+            TrimMode.valueOf(prefs.getString(KEY_TRIM_MODE, TrimMode.OFF.name) ?: TrimMode.OFF.name)
+        }.getOrDefault(TrimMode.OFF)
+        set(value) = prefs.edit().putString(KEY_TRIM_MODE, value.name).apply()
+
+    /** 余白削除後も元の縦横比を保つ（ページごとに大きさが変わるのを防ぐ） */
+    var trimKeepAspect: Boolean
+        get() = prefs.getBoolean(KEY_TRIM_KEEP_ASPECT, true)
+        set(value) = prefs.edit().putBoolean(KEY_TRIM_KEEP_ASPECT, value).apply()
 
     // ─── ファイル一覧表示モード ───────────────────────────────────────────
 
@@ -152,12 +203,16 @@ class AppPrefs(context: Context) {
         private const val KEY_DOWNLOAD_FOLDER_SAF_URI = "download_folder_saf_uri"
         private const val KEY_PAGE_DIRECTION         = "page_direction"
         private const val KEY_PAGE_ANIMATION         = "page_animation"
+        private const val KEY_PAGE_TURN_ANIMATION    = "page_turn_animation"
         private const val KEY_VOLUME_KEY_PAGE_TURN   = "volume_key_page_turn"
         private const val KEY_ZOOM_BOUNCE            = "zoom_bounce"
         private const val KEY_DOUBLE_TAP_ZOOM        = "double_tap_zoom"
         private const val KEY_SPREAD_MODE            = "spread_mode"
         private const val KEY_SPREAD_COVER_SINGLE    = "spread_cover_single"
-        private const val KEY_TRIM_MARGINS           = "trim_margins"
+        private const val KEY_SPREAD_GUTTER          = "spread_gutter"
+        private const val KEY_BACKGROUND_COLOR       = "background_color"
+        private const val KEY_TRIM_MODE              = "trim_mode"
+        private const val KEY_TRIM_KEEP_ASPECT       = "trim_keep_aspect"
         private const val KEY_LIST_DISPLAY_MODE      = "list_display_mode"
 
         fun getAppFolder(context: Context): File {

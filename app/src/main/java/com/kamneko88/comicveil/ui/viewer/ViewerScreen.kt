@@ -11,6 +11,7 @@ import androidx.core.view.doOnLayout
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -33,6 +34,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -175,7 +177,17 @@ fun ViewerScreen(
     val volumeKeyPageTurn = appPrefs.volumeKeyPageTurn
     val zoomBounce        = appPrefs.zoomBounce
     val doubleTapScale    = appPrefs.doubleTapZoom.scale
-    val trimMargins       = appPrefs.trimMargins
+    val trimMode          = appPrefs.trimMode
+    val trimKeepAspect    = appPrefs.trimKeepAspect
+    val pageTurnAnimation = appPrefs.pageTurnAnimation
+    val spreadGutter      = appPrefs.spreadGutter.percent
+
+    // 背景色（ページの周りの色）
+    val backgroundColor = when (appPrefs.backgroundColor) {
+        com.kamneko88.comicveil.data.AppPrefs.BackgroundColor.BLACK -> Color.Black
+        com.kamneko88.comicveil.data.AppPrefs.BackgroundColor.WHITE -> Color.White
+        com.kamneko88.comicveil.data.AppPrefs.BackgroundColor.GRAY  -> Color(0xFF808080)
+    }
 
     // 見開き表示を使うか（設定＋画面の向きで決まる）
     val configuration = LocalConfiguration.current
@@ -467,7 +479,10 @@ fun ViewerScreen(
 
             val springFling = PagerDefaults.flingBehavior(
                 state = pagerState,
-                snapAnimationSpec = if (pageAnimation) {
+                snapAnimationSpec = if (!pageTurnAnimation) {
+                    // アニメーションOFF：即座に切り替える（非力な端末向け）
+                    snap()
+                } else if (pageAnimation) {
                     spring(
                         dampingRatio = Spring.DampingRatioHighBouncy,
                         stiffness    = Spring.StiffnessVeryLow
@@ -488,10 +503,12 @@ fun ViewerScreen(
                         )
                     }
                 },
-                containerColor = Color.Black
+                containerColor = backgroundColor
             ) { innerPadding ->
                 Box(
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(backgroundColor)
                 ) {
                     HorizontalPager(
                         state                   = pagerState,
@@ -519,7 +536,9 @@ fun ViewerScreen(
                                 isScrolling    = pagerState.isScrollInProgress,
                                 zoomBounce     = zoomBounce,
                                 doubleTapScale = doubleTapScale,
-                                trimMargins    = trimMargins,
+                                trimMode       = trimMode,
+                                trimKeepAspect = trimKeepAspect,
+                                spreadGutter   = spreadGutter,
                                 reverseLayout  = isReverseLayout,
                                 onMenuToggle   = { menuVisible = !menuVisible },
                                 onPageLimit    = { viewModel.onPageLimitReached(it) },
@@ -989,7 +1008,9 @@ private fun ZoomablePage(
     isScrolling: Boolean,
     zoomBounce: Boolean,
     doubleTapScale: Float,
-    trimMargins: Boolean,
+    trimMode: com.kamneko88.comicveil.data.AppPrefs.TrimMode,
+    trimKeepAspect: Boolean,
+    spreadGutter: Int,
     reverseLayout: Boolean,
     onMenuToggle: () -> Unit,
     onPageLimit: (PageLimitEvent) -> Unit,
@@ -1149,22 +1170,32 @@ private fun ZoomablePage(
         ) {
             ordered.forEachIndexed { i, model ->
                 // 余白削除がONのときは、表示直前に白・黒のフチを切り落とす
-                val request = remember(model, trimMargins) {
+                val request = remember(model, trimMode, trimKeepAspect) {
                     ImageRequest.Builder(context)
                         .data(model)
                         .let { builder ->
-                            if (trimMargins) builder.transformations(TrimMarginsTransformation())
-                            else builder
+                            when (trimMode) {
+                                com.kamneko88.comicveil.data.AppPrefs.TrimMode.OFF -> builder
+                                com.kamneko88.comicveil.data.AppPrefs.TrimMode.ON ->
+                                    builder.transformations(
+                                        TrimMarginsTransformation(whiteOnly = false, keepAspect = trimKeepAspect)
+                                    )
+                                com.kamneko88.comicveil.data.AppPrefs.TrimMode.WHITE_ONLY ->
+                                    builder.transformations(
+                                        TrimMarginsTransformation(whiteOnly = true, keepAspect = trimKeepAspect)
+                                    )
+                            }
                         }
                         .build()
                 }
 
                 // 見開きのときは左右のページを内側に寄せて、真ん中に隙間ができないようにする
                 // （ページはそれぞれ画面の半分を占めるため、中央寄せのままだと内側に余白が残る）
+                val isSpread  = ordered.size >= 2
                 val alignment = when {
-                    ordered.size < 2 -> Alignment.Center
-                    i == 0           -> Alignment.CenterEnd    // 左側のページ→右寄せ
-                    else             -> Alignment.CenterStart  // 右側のページ→左寄せ
+                    !isSpread -> Alignment.Center
+                    i == 0    -> Alignment.CenterEnd    // 左側のページ→右寄せ
+                    else      -> Alignment.CenterStart  // 右側のページ→左寄せ
                 }
 
                 AsyncImage(
@@ -1176,6 +1207,11 @@ private fun ZoomablePage(
                     alignment    = alignment,
                     contentScale = ContentScale.Fit
                 )
+
+                // 綴じ代（左右ページの間に入れる余白）
+                if (isSpread && i == 0 && spreadGutter > 0) {
+                    Spacer(Modifier.fillMaxHeight().width((spreadGutter * 2).dp))
+                }
             }
         }
     }
