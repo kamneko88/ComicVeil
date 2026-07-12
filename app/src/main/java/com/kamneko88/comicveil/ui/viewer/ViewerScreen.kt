@@ -199,11 +199,25 @@ fun ViewerScreen(
     }
 
     // 閲覧中はシステムUI（ステータスバー・ナビゲーションバー）を隠して画像に没入できるようにし、
-    // メニュー表示中だけ戻す（Comic Glassと同じ挙動）
+    // メニュー表示中だけ戻す（Comic Glassと同じ挙動）。
+    //
+    // 【重要】ビューワーの背景は黒なので、システムバーのアイコンは白にする必要がある。
+    // enableEdgeToEdge() は端末のテーマに合わせて「明るい背景用＝黒いアイコン」を選ぶことがあり、
+    // そのままだと黒背景に黒アイコンで時刻やWi-Fiが見えなくなる（バッテリーのような
+    // 塗りつぶし表示だけが見える状態になる）。
     DisposableEffect(Unit) {
         val window     = activity?.window
         val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+
+        val previousLightStatusBars = controller?.isAppearanceLightStatusBars ?: false
+        val previousLightNavBars     = controller?.isAppearanceLightNavigationBars ?: false
+
+        controller?.isAppearanceLightStatusBars     = false  // 白いアイコンにする
+        controller?.isAppearanceLightNavigationBars = false
+
         onDispose {
+            controller?.isAppearanceLightStatusBars     = previousLightStatusBars
+            controller?.isAppearanceLightNavigationBars = previousLightNavBars
             controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
             controller?.show(WindowInsetsCompat.Type.systemBars())
         }
@@ -212,9 +226,13 @@ fun ViewerScreen(
     LaunchedEffect(menuVisible) {
         val window     = activity?.window ?: return@LaunchedEffect
         val controller = WindowCompat.getInsetsController(window, view)
+
+        // 黒背景の上に出すので、常に白いアイコンにしておく
+        controller.isAppearanceLightStatusBars     = false
+        controller.isAppearanceLightNavigationBars = false
+
         if (menuVisible) {
-            // 通常のシステムバーとして表示する。
-            // （一時表示モードのままだと簡易表示になり、時刻やWi-Fi等が出ないことがある）
+            // 通常のシステムバーとして表示する（時刻・Wi-Fi・電波等を含む完全な表示）
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
             controller.show(WindowInsetsCompat.Type.systemBars())
         } else {
