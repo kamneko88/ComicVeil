@@ -92,6 +92,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -142,6 +143,7 @@ fun ViewerScreen(
     val pageAnimation     = appPrefs.pageAnimation
     val volumeKeyPageTurn = appPrefs.volumeKeyPageTurn
     val zoomBounce        = appPrefs.zoomBounce
+    val doubleTapScale    = appPrefs.doubleTapZoom.scale
 
     LaunchedEffect(Unit) { viewModel.loadBookmarks() }
 
@@ -406,6 +408,7 @@ fun ViewerScreen(
                                     currentPage   = pagerState.currentPage,
                                     isScrolling   = pagerState.isScrollInProgress,
                                     zoomBounce    = zoomBounce,
+                                    doubleTapScale = doubleTapScale,
                                     onMenuToggle  = { menuVisible = !menuVisible },
                                     onPageLimit   = { viewModel.onPageLimitReached(it) },
                                     isFirst       = pageIndex == 0,
@@ -420,6 +423,7 @@ fun ViewerScreen(
                                     currentPage   = pagerState.currentPage,
                                     isScrolling   = pagerState.isScrollInProgress,
                                     zoomBounce    = zoomBounce,
+                                    doubleTapScale = doubleTapScale,
                                     onMenuToggle  = { menuVisible = !menuVisible },
                                     onPageLimit   = { viewModel.onPageLimitReached(it) },
                                     isFirst       = pageIndex == 0,
@@ -598,6 +602,7 @@ private fun ZoomablePage(
     currentPage: Int,
     isScrolling: Boolean,
     zoomBounce: Boolean,
+    doubleTapScale: Float,
     onMenuToggle: () -> Unit,
     onPageLimit: (PageLimitEvent) -> Unit,
     isFirst: Boolean,
@@ -633,15 +638,25 @@ private fun ZoomablePage(
                     val downTime  = System.currentTimeMillis()
                     val downPos   = firstDown.position
 
-                    val isPinch = withTimeoutOrNull(80L) {
-                        var found = false
-                        while (true) {
-                            val ev = awaitPointerEvent()
-                            if (ev.changes.size >= 2) { found = true; break }
-                            if (ev.changes.any { it.positionChanged() && abs(it.position.x - downPos.x) > 8f }) break
+                    // 指が離れるまで（または2本目の指が触れるまで）イベントを追う。
+                    // 以前は「最初の80ms以内に2本目の指が来たらピンチ」と判定していたが、
+                    // 素早いタップだと「指を離した」イベントがこの80msの窓に飲み込まれてしまい、
+                    // タップとして成立せずメニューが出ない原因になっていた。
+                    var isPinch = false
+                    var moved   = false
+                    while (true) {
+                        val ev = awaitPointerEvent()
+                        if (ev.changes.size >= 2) { isPinch = true; break }
+                        val change = ev.changes.firstOrNull() ?: break
+                        // ブレの許容量はシステム標準（タッチスロップ）に合わせる
+                        if ((change.position - downPos).getDistance() > viewConfiguration.touchSlop) moved = true
+                        // ズーム中は1本指ドラッグで画像を動かせるようにする
+                        if (moved && scaleAnim.value > MIN_SCALE) {
+                            offset += change.positionChange()
+                            change.consume()
                         }
-                        found
-                    } ?: false
+                        if (!change.pressed) break   // 指が離れた
+                    }
 
                     if (isPinch) {
                         val maxScale = if (zoomBounce) OVERSHOOT_MAX else MAX_SCALE
@@ -674,19 +689,45 @@ private fun ZoomablePage(
                         }
 
                     } else {
-                        var moved = false
-                        while (true) {
-                            val ev     = awaitPointerEvent()
-                            val change = ev.changes.firstOrNull() ?: break
-                            if (abs(change.position.x - downPos.x) > 10f ||
-                                abs(change.position.y - downPos.y) > 10f) moved = true
-                            if (!change.pressed) break
-                        }
-
+                        // スワイプ（＝ページ送り／ズーム中のパン）だった場合はメニューを出さない
                         if (moved) return@awaitEachGesture
-                        if (System.currentTimeMillis() - downTime > 300L) return@awaitEachGesture
+                        // 長押しでない限りタップとして扱う（以前は300ms以上押すと無効になっていた）
+                        if (System.currentTimeMillis() - downTime > viewConfiguration.longPressTimeoutMillis) return@awaitEachGesture
+                        // ページ送り直後の誤タップを防ぐガード
                         if (System.currentTimeMillis() - lastScrollEndTime < SWIPE_GUARD_MS) return@awaitEachGesture
 
+                        // ダブルタップ待ち：一定時間内に2回目のタップが来るかを確認する。
+                        // 来ればズーム切り替え、来なければシングルタップ（メニュー表示）として扱う。
+                        // このためメニューはごく短い間を置いてから表示される（Comic Glassと同じ挙動）。
+                        val secondDown = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) {
+                            awaitFirstDown(requireUnconsumed = false)
+                        }
+
+                        if (secondDown != null) {
+                            // 2回目の指が離れるまで待つ（ドラッグならダブルタップとしない）
+                            var secondMoved = false
+                            while (true) {
+                                val ev     = awaitPointerEvent()
+                                val change = ev.changes.firstOrNull() ?: break
+                                if ((change.position - secondDown.position).getDistance() > viewConfiguration.touchSlop) secondMoved = true
+                                if (!change.pressed) break
+                            }
+                            if (secondMoved) return@awaitEachGesture
+
+                            // ダブルタップ：ズーム中なら等倍に戻し、等倍なら設定倍率へズームする
+                            scope.launch {
+                                if (scaleAnim.value > MIN_SCALE) {
+                                    scaleAnim.animateTo(MIN_SCALE, tween(200))
+                                    offset = Offset.Zero
+                                } else {
+                                    offset = Offset.Zero
+                                    scaleAnim.animateTo(doubleTapScale, tween(200))
+                                }
+                            }
+                            return@awaitEachGesture
+                        }
+
+                        // ここまで来たらシングルタップ確定
                         if (isZoomed) {
                             onMenuToggle()
                         } else {
