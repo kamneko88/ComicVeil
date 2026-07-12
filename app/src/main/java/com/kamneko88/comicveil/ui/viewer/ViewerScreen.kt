@@ -29,6 +29,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -41,7 +42,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
@@ -79,6 +82,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -88,6 +92,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -104,7 +109,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -148,7 +155,7 @@ fun ViewerScreen(
     var brightness           by remember { mutableFloatStateOf(initialBrightness) }
     var showBrightnessSlider by remember { mutableStateOf(false) }
     var showBookmarkList     by remember { mutableStateOf(false) }
-    var showPageJumpDialog   by remember { mutableStateOf(false) }
+    var showPageStrip        by remember { mutableStateOf(false) }
     var orientationLocked    by remember { mutableStateOf(false) }
 
     // 表示用のファイル名（巻マーカー付きの場合は「ファイル名 - 巻名」にする）
@@ -196,9 +203,8 @@ fun ViewerScreen(
     DisposableEffect(Unit) {
         val window     = activity?.window
         val controller = window?.let { WindowCompat.getInsetsController(it, view) }
-        controller?.systemBarsBehavior =
-            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         onDispose {
+            controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
             controller?.show(WindowInsetsCompat.Type.systemBars())
         }
     }
@@ -207,8 +213,13 @@ fun ViewerScreen(
         val window     = activity?.window ?: return@LaunchedEffect
         val controller = WindowCompat.getInsetsController(window, view)
         if (menuVisible) {
+            // 通常のシステムバーとして表示する。
+            // （一時表示モードのままだと簡易表示になり、時刻やWi-Fi等が出ないことがある）
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
             controller.show(WindowInsetsCompat.Type.systemBars())
         } else {
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             controller.hide(WindowInsetsCompat.Type.systemBars())
         }
     }
@@ -560,54 +571,6 @@ fun ViewerScreen(
                         )
                     }
 
-                    // ページ移動ダイアログ（下部バーのページ移動ボタンから呼び出す）
-                    if (showPageJumpDialog) {
-                        var jumpValue by remember { mutableFloatStateOf(pagerState.currentPage.toFloat()) }
-                        val jumpTarget = jumpValue.toInt().coerceIn(0, pagerCount - 1)
-
-                        AlertDialog(
-                            onDismissRequest = { showPageJumpDialog = false },
-                            title = { Text("ページ移動") },
-                            text  = {
-                                Column {
-                                    if (!isProgressive && pages.isNotEmpty()) {
-                                        PageThumbnailStrip(pages = pages, targetPage = jumpTarget, visibleCount = 5)
-                                        Spacer(Modifier.height(8.dp))
-                                    }
-                                    Text(
-                                        text       = "${jumpTarget + 1} / $pagerCount ページ",
-                                        fontWeight = FontWeight.Bold,
-                                        modifier   = Modifier.align(Alignment.CenterHorizontally)
-                                    )
-                                    if (pagerCount > 1) {
-                                        Slider(
-                                            value         = jumpValue,
-                                            onValueChange = { jumpValue = it },
-                                            valueRange    = 0f..(pagerCount - 1).toFloat(),
-                                            steps         = if (pagerCount > 2) pagerCount - 2 else 0
-                                        )
-                                    }
-                                    Row(
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        modifier              = Modifier.fillMaxWidth()
-                                    ) {
-                                        TextButton(onClick = { jumpValue = 0f }) { Text("最初のページ") }
-                                        TextButton(onClick = { jumpValue = (pagerCount - 1).toFloat() }) { Text("最後のページ") }
-                                    }
-                                }
-                            },
-                            confirmButton = {
-                                TextButton(onClick = {
-                                    showPageJumpDialog = false
-                                    scope.launch { pagerState.animateScrollToPage(jumpTarget) }
-                                }) { Text("移動") }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { showPageJumpDialog = false }) { Text("キャンセル") }
-                            }
-                        )
-                    }
-
                     // 上部：本を閉じる（幅広のピルボタン）
                     AnimatedVisibility(
                         visible  = menuVisible,
@@ -677,8 +640,24 @@ fun ViewerScreen(
                                 }
                             }
 
-                            // スライド中のサムネイルプレビュー
-                            AnimatedVisibility(visible = isSliding && !isProgressive, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
+                            // ページ移動サムネイル（ページ移動ボタンで開閉）。
+                            // サムネイルを見ながら細かくページを選べる（下のスライダーは大まかな移動用）
+                            AnimatedVisibility(visible = showPageStrip, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
+                                PageJumpStrip(
+                                    pages         = pages,
+                                    pageFiles     = pageFiles,
+                                    isProgressive = isProgressive,
+                                    pageCount     = pagerCount,
+                                    currentPage   = if (isSliding) sliderTargetPage else pagerState.currentPage,
+                                    reverseLayout = isReverseLayout,
+                                    onSelect      = { target ->
+                                        scope.launch { pagerState.animateScrollToPage(target) }
+                                    }
+                                )
+                            }
+
+                            // スライド中のサムネイルプレビュー（ストリップ非表示時のみ）
+                            AnimatedVisibility(visible = isSliding && !isProgressive && !showPageStrip, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
                                 PageThumbnailStrip(pages = pages, targetPage = sliderTargetPage, visibleCount = 5)
                             }
 
@@ -738,8 +717,15 @@ fun ViewerScreen(
                                             tint = if (uiState.isCurrentPageBookmarked) Color(0xFFFFD700) else Color.White
                                         )
                                     }
-                                    IconButton(onClick = { showPageJumpDialog = true }) {
-                                        Icon(Icons.Default.ViewCarousel, contentDescription = "ページ移動", tint = Color.White)
+                                    IconButton(onClick = {
+                                        showPageStrip = !showPageStrip
+                                        if (showPageStrip) showBrightnessSlider = false
+                                    }) {
+                                        Icon(
+                                            Icons.Default.ViewCarousel,
+                                            contentDescription = "ページ移動",
+                                            tint = if (showPageStrip) Color.Yellow else Color.White
+                                        )
                                     }
                                 }
 
@@ -749,7 +735,10 @@ fun ViewerScreen(
                                         .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(28.dp))
                                         .padding(horizontal = 4.dp)
                                 ) {
-                                    IconButton(onClick = { showBrightnessSlider = !showBrightnessSlider }) {
+                                    IconButton(onClick = {
+                                        showBrightnessSlider = !showBrightnessSlider
+                                        if (showBrightnessSlider) showPageStrip = false
+                                    }) {
                                         Icon(
                                             imageVector = when {
                                                 brightness < 0.33f -> Icons.Default.Brightness4
@@ -784,6 +773,101 @@ fun ViewerScreen(
         }
     }
 }
+
+// ─── ページ移動ストリップ（サムネイルを見ながら細かく移動） ──────────
+
+/**
+ * ページ移動ボタンで開閉するサムネイルの横スクロール。
+ *
+ * 使い分け：
+ * - 下部のスライダー：大まかに飛ばしたいとき
+ * - このストリップ：中身を見ながら細かくページを指定したいとき
+ *
+ * サムネイルをタップすると即座にそのページへ移動し、スライダーも連動する。
+ * 右綴じ（マンガ）のときはページ番号が右から左へ並ぶ。
+ */
+@Composable
+private fun PageJumpStrip(
+    pages: List<ByteArray>,
+    pageFiles: List<Any>,
+    isProgressive: Boolean,
+    pageCount: Int,
+    currentPage: Int,
+    reverseLayout: Boolean,
+    onSelect: (Int) -> Unit
+) {
+    val listState     = rememberLazyListState()
+    val density       = LocalDensity.current
+    val configuration = LocalConfiguration.current
+
+    // 選択中のサムネイルが中央に来るようスクロール位置を計算する
+    val centerOffsetPx = remember(configuration.screenWidthDp) {
+        with(density) { ((configuration.screenWidthDp.dp - SELECTED_THUMB_WIDTH) / 2).roundToPx() }
+    }
+
+    // 現在ページが変わったら（スライダー操作・ページめくり含む）サムネイルを追従させる
+    LaunchedEffect(currentPage) {
+        listState.animateScrollToItem(
+            index        = currentPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)),
+            scrollOffset = -centerOffsetPx
+        )
+    }
+
+    LazyRow(
+        state                 = listState,
+        reverseLayout         = reverseLayout,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment     = Alignment.Bottom,
+        modifier              = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+    ) {
+        items(pageCount) { index ->
+            val isSelected = index == currentPage
+            val model: Any? = when {
+                isProgressive && index < pageFiles.size -> pageFiles[index]
+                !isProgressive && index < pages.size    -> pages[index]
+                else                                    -> null
+            }
+
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    modifier = Modifier
+                        .width(if (isSelected) SELECTED_THUMB_WIDTH else NORMAL_THUMB_WIDTH)
+                        .aspectRatio(0.71f)
+                        .clip(RoundedCornerShape(4.dp))
+                        .border(
+                            2.dp,
+                            if (isSelected) Color.White else Color.Transparent,
+                            RoundedCornerShape(4.dp)
+                        )
+                        .alpha(if (isSelected) 1f else 0.6f)
+                        .background(Color.DarkGray)
+                        .clickable { onSelect(index) }
+                ) {
+                    if (model != null) {
+                        AsyncImage(
+                            model              = model,
+                            contentDescription = "ページ ${index + 1}",
+                            contentScale       = ContentScale.Crop,
+                            modifier           = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+                Text(
+                    text       = "${index + 1}",
+                    color      = if (isSelected) Color.White else Color.White.copy(alpha = 0.5f),
+                    fontSize   = if (isSelected) 14.sp else 12.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                    modifier   = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+private val SELECTED_THUMB_WIDTH = 120.dp
+private val NORMAL_THUMB_WIDTH   = 96.dp
 
 // ─── サムネイルストリップ ─────────────────────────────────────────────────────
 
