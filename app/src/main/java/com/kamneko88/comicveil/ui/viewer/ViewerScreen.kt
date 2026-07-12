@@ -604,12 +604,18 @@ fun ViewerScreen(
                         modifier = Modifier.align(Alignment.BottomCenter)
                     ) {
                         val maxSlider = (pagerCount - 1).toFloat().coerceAtLeast(0f)
+                        // 移動先プレビュー（サムネイルの中央・スライダー・現在ページを一元管理する）
+                        var previewPage by remember { mutableIntStateOf(pagerState.currentPage) }
                         var sliderValue by remember { mutableFloatStateOf((pagerCount - 1 - pagerState.currentPage).toFloat().coerceIn(0f, maxSlider)) }
                         val sliderTargetPage by remember { derivedStateOf { (pagerCount - 1 - sliderValue.toInt()).coerceIn(0, pagerCount - 1) } }
                         var isSliding by remember { mutableStateOf(false) }
 
-                        LaunchedEffect(pagerState.currentPage) {
-                            if (!isSliding) sliderValue = (pagerCount - 1 - pagerState.currentPage).toFloat().coerceIn(0f, maxSlider)
+                        // ページがめくられたら移動先プレビューも追従させる
+                        LaunchedEffect(pagerState.currentPage) { previewPage = pagerState.currentPage }
+
+                        // 移動先プレビュー（サムネイルを流したとき等）に合わせてスライダーを同期させる
+                        LaunchedEffect(previewPage) {
+                            if (!isSliding) sliderValue = (pagerCount - 1 - previewPage).toFloat().coerceIn(0f, maxSlider)
                         }
 
                         Column(
@@ -644,13 +650,14 @@ fun ViewerScreen(
                             // サムネイルを見ながら細かくページを選べる（下のスライダーは大まかな移動用）
                             AnimatedVisibility(visible = showPageStrip, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
                                 PageJumpStrip(
-                                    pages         = pages,
-                                    pageFiles     = pageFiles,
-                                    isProgressive = isProgressive,
-                                    pageCount     = pagerCount,
-                                    currentPage   = if (isSliding) sliderTargetPage else pagerState.currentPage,
-                                    reverseLayout = isReverseLayout,
-                                    onSelect      = { target ->
+                                    pages          = pages,
+                                    pageFiles      = pageFiles,
+                                    isProgressive  = isProgressive,
+                                    pageCount      = pagerCount,
+                                    targetPage     = previewPage,
+                                    reverseLayout  = isReverseLayout,
+                                    onTargetChange = { previewPage = it },
+                                    onSelect       = { target ->
                                         scope.launch { pagerState.animateScrollToPage(target) }
                                     }
                                 )
@@ -663,7 +670,7 @@ fun ViewerScreen(
 
                             // ページ数・ファイル名
                             Text(
-                                text       = "${if (isSliding) sliderTargetPage + 1 else pagerState.currentPage + 1} / $pagerCount ページ",
+                                text       = "${previewPage + 1} / $pagerCount ページ",
                                 color      = Color.White,
                                 fontSize   = 15.sp,
                                 fontWeight = FontWeight.Bold
@@ -680,7 +687,12 @@ fun ViewerScreen(
                             if (maxSlider > 0f) {
                                 Slider(
                                     value = sliderValue,
-                                    onValueChange = { sliderValue = it; isSliding = true; showBrightnessSlider = false },
+                                    onValueChange = {
+                                        sliderValue = it
+                                        isSliding = true
+                                        showBrightnessSlider = false
+                                        previewPage = (pagerCount - 1 - it.toInt()).coerceIn(0, pagerCount - 1)
+                                    },
                                     onValueChangeFinished = { isSliding = false; scope.launch { pagerState.animateScrollToPage(sliderTargetPage) } },
                                     valueRange = 0f..maxSlider,
                                     steps = if (pagerCount > 2) pagerCount - 2 else 0,
@@ -783,7 +795,11 @@ fun ViewerScreen(
  * - 下部のスライダー：大まかに飛ばしたいとき
  * - このストリップ：中身を見ながら細かくページを指定したいとき
  *
- * サムネイルをタップすると即座にそのページへ移動し、スライダーも連動する。
+ * 挙動（Comic Glassと同じ）：
+ * - サムネイルを流すと、**中央に来ているページがその都度「移動先」になる**（番号がハイライトし、スライダーも連動する）
+ * - サムネイルをタップすると、そのページを実際に開く
+ * つまり「流して目的ページを探す→タップして開く」の2ステップで使える。
+ *
  * 右綴じ（マンガ）のときはページ番号が右から左へ並ぶ。
  */
 @Composable
@@ -792,38 +808,57 @@ private fun PageJumpStrip(
     pageFiles: List<Any>,
     isProgressive: Boolean,
     pageCount: Int,
-    currentPage: Int,
+    targetPage: Int,
     reverseLayout: Boolean,
+    onTargetChange: (Int) -> Unit,
     onSelect: (Int) -> Unit
 ) {
     val listState     = rememberLazyListState()
-    val density       = LocalDensity.current
     val configuration = LocalConfiguration.current
 
-    // 選択中のサムネイルが中央に来るようスクロール位置を計算する
-    val centerOffsetPx = remember(configuration.screenWidthDp) {
-        with(density) { ((configuration.screenWidthDp.dp - SELECTED_THUMB_WIDTH) / 2).roundToPx() }
+    // 先頭・末尾のページも中央に持ってこられるよう、左右に余白を確保する
+    val sidePadding = ((configuration.screenWidthDp.dp - THUMB_WIDTH) / 2).coerceAtLeast(0.dp)
+
+    // 中央に来ているサムネイル＝現在の移動先
+    val centeredIndex by remember {
+        derivedStateOf {
+            val info           = listState.layoutInfo
+            val viewportCenter = (info.viewportStartOffset + info.viewportEndOffset) / 2
+            info.visibleItemsInfo
+                .minByOrNull { abs((it.offset + it.size / 2) - viewportCenter) }
+                ?.index
+                ?: targetPage
+        }
     }
 
-    // 現在ページが変わったら（スライダー操作・ページめくり含む）サムネイルを追従させる
-    LaunchedEffect(currentPage) {
-        listState.animateScrollToItem(
-            index        = currentPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)),
-            scrollOffset = -centerOffsetPx
-        )
+    // 外部（スライダー操作・ページめくり）から移動先が変わったときだけ、サムネイルをスクロールさせて追従させる
+    var programmatic by remember { mutableStateOf(false) }
+    LaunchedEffect(targetPage) {
+        if (targetPage != centeredIndex) {
+            programmatic = true
+            listState.animateScrollToItem(targetPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)))
+            programmatic = false
+        }
+    }
+
+    // ユーザーがサムネイルを流している間、中央のページをその都度移動先として通知する
+    // （これによりページ番号のハイライトとスライダーがリアルタイムに連動する）
+    LaunchedEffect(centeredIndex) {
+        if (!programmatic && centeredIndex != targetPage) onTargetChange(centeredIndex)
     }
 
     LazyRow(
         state                 = listState,
         reverseLayout         = reverseLayout,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding        = PaddingValues(horizontal = sidePadding),
         verticalAlignment     = Alignment.Bottom,
         modifier              = Modifier
             .fillMaxWidth()
             .padding(bottom = 8.dp)
     ) {
         items(pageCount) { index ->
-            val isSelected = index == currentPage
+            val isTarget = index == targetPage
             val model: Any? = when {
                 isProgressive && index < pageFiles.size -> pageFiles[index]
                 !isProgressive && index < pages.size    -> pages[index]
@@ -833,15 +868,15 @@ private fun PageJumpStrip(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Box(
                     modifier = Modifier
-                        .width(if (isSelected) SELECTED_THUMB_WIDTH else NORMAL_THUMB_WIDTH)
+                        .width(THUMB_WIDTH)
                         .aspectRatio(0.71f)
                         .clip(RoundedCornerShape(4.dp))
                         .border(
                             2.dp,
-                            if (isSelected) Color.White else Color.Transparent,
+                            if (isTarget) Color.White else Color.Transparent,
                             RoundedCornerShape(4.dp)
                         )
-                        .alpha(if (isSelected) 1f else 0.6f)
+                        .alpha(if (isTarget) 1f else 0.5f)
                         .background(Color.DarkGray)
                         .clickable { onSelect(index) }
                 ) {
@@ -856,9 +891,9 @@ private fun PageJumpStrip(
                 }
                 Text(
                     text       = "${index + 1}",
-                    color      = if (isSelected) Color.White else Color.White.copy(alpha = 0.5f),
-                    fontSize   = if (isSelected) 14.sp else 12.sp,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                    color      = if (isTarget) Color.White else Color.White.copy(alpha = 0.4f),
+                    fontSize   = if (isTarget) 15.sp else 12.sp,
+                    fontWeight = if (isTarget) FontWeight.Bold else FontWeight.Normal,
                     modifier   = Modifier.padding(top = 4.dp)
                 )
             }
@@ -866,8 +901,7 @@ private fun PageJumpStrip(
     }
 }
 
-private val SELECTED_THUMB_WIDTH = 120.dp
-private val NORMAL_THUMB_WIDTH   = 96.dp
+private val THUMB_WIDTH = 110.dp
 
 // ─── サムネイルストリップ ─────────────────────────────────────────────────────
 
