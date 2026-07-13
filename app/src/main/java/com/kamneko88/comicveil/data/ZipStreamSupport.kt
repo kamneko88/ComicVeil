@@ -131,7 +131,17 @@ class GrowingFileInputStream(
     private val expectedSize: Long
 ) : InputStream() {
 
-    private val raf = RandomAccessFile(file, "r")
+    // 【重要】ダウンロードは別スレッドで始まるため、ここに来た時点ではまだ
+    // ファイルが1バイトも作られていないことがある。
+    // そのまま開こうとすると FileNotFoundException になるので、作られるまで待つ。
+    private val raf: RandomAccessFile = run {
+        val deadline = System.currentTimeMillis() + OPEN_TIMEOUT_MS
+        while (!file.exists() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(WAIT_MS)
+        }
+        RandomAccessFile(file, "r")
+    }
+
     private var position = 0L
 
     override fun read(): Int {
@@ -171,5 +181,8 @@ class GrowingFileInputStream(
 
     companion object {
         private const val WAIT_MS = 120L
+
+        /** ダウンロードがファイルを作り始めるのを待つ上限 */
+        private const val OPEN_TIMEOUT_MS = 30_000L
     }
 }
