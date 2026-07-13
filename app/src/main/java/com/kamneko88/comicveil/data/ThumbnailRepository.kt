@@ -204,62 +204,62 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
 
 private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
 
-private fun extractFirstImageFromZipBytes(bytes: ByteArray): ByteArray? {
-    val candidates = mutableListOf<Pair<String, ByteArray>>()
-    for (cs in listOf(kotlin.text.Charsets.UTF_8, charset("Shift_JIS"))) {
-        candidates.clear()
+/** サムネイル1枚の上限サイズ（これを超える画像は表紙候補から外す） */
+private const val MAX_THUMBNAIL_SOURCE_BYTES = 30L * 1024 * 1024  // 30MB
+
+/**
+ * ZIPから「名前順で一番若い画像」（＝表紙）を１枚だけ取り出す。
+ *
+ * 【重要】以前は全ページをメモリに溜めてから名前順で選んでいたため、
+ * 大きなアーカイブ（例：713MB）で OutOfMemoryError が発生していた。
+ * 必要なのは1枚だけなので、「今の最有力候補」だけを保持する。
+ */
+private fun pickCoverImage(
+    openStream: (charsetName: String) -> ZipArchiveInputStream
+): ByteArray? {
+    for (cs in listOf(kotlin.text.Charsets.UTF_8.name(), "Shift_JIS")) {
+        var bestName : String? = null
+        var bestBytes: ByteArray? = null
+
         runCatching {
-            ZipArchiveInputStream(
-                ByteArrayInputStream(bytes), cs.name(), false, true
-            ).use { zis ->
+            openStream(cs).use { zis ->
                 var entry = zis.nextZipEntry
                 while (entry != null) {
                     val name = entry.name
                     val ext  = name.substringAfterLast(".").lowercase()
-                    if (!entry.isDirectory && ext in IMAGE_EXTENSIONS) {
-                        val b = zis.readBytes()
-                        if (b.isNotEmpty()) candidates.add(name to b)
+                    if (!entry.isDirectory &&
+                        ext in IMAGE_EXTENSIONS &&
+                        entry.size <= MAX_THUMBNAIL_SOURCE_BYTES
+                    ) {
+                        val current = bestName
+                        // 名前順でこれまでより若ければ、この1枚だけ読む
+                        if (current == null || name.lowercase() < current) {
+                            val bytes = zis.readBytes()
+                            if (bytes.isNotEmpty()) {
+                                bestName  = name.lowercase()
+                                bestBytes = bytes
+                            }
+                        }
                     }
                     entry = zis.nextZipEntry
                 }
             }
         }
-        if (candidates.isNotEmpty()) break
+        if (bestBytes != null) return bestBytes
     }
-    return candidates.minByOrNull { it.first.lowercase() }?.second
+    return null
 }
 
-private fun extractFirstImageFromZip(file: File): ByteArray? {
+private fun extractFirstImageFromZipBytes(bytes: ByteArray): ByteArray? =
+    pickCoverImage { cs ->
+        ZipArchiveInputStream(ByteArrayInputStream(bytes), cs, false, true)
+    }
+
+private fun extractFirstImageFromZip(file: File): ByteArray? =
     // Shift-JISエントリ名に対応するため Apache Commons Compress を使用
-    val candidates = mutableListOf<Pair<String, ByteArray>>()
-    try {
-        fun openStream(cs: java.nio.charset.Charset) =
-            ZipArchiveInputStream(FileInputStream(file), cs.name(), false, true)
-
-        // UTF-8で試行、失敗したら Shift-JIS で再試
-        for (cs in listOf(kotlin.text.Charsets.UTF_8, charset("Shift_JIS"))) {
-            candidates.clear()
-            runCatching {
-                openStream(cs).use { zis ->
-                    var entry = zis.nextZipEntry
-                    while (entry != null) {
-                        val name = entry.name
-                        val ext  = name.substringAfterLast(".").lowercase()
-                        if (!entry.isDirectory && ext in IMAGE_EXTENSIONS) {
-                            val bytes = zis.readBytes()
-                            if (bytes.isNotEmpty()) candidates.add(name to bytes)
-                        }
-                        entry = zis.nextZipEntry
-                    }
-                }
-            }
-            if (candidates.isNotEmpty()) break
-        }
-    } catch (e: Exception) {
-        return null
+    pickCoverImage { cs ->
+        ZipArchiveInputStream(FileInputStream(file), cs, false, true)
     }
-    return candidates.minByOrNull { it.first.lowercase() }?.second
-}
 
 private fun extractFirstImageFromRar(file: File): ByteArray? {
     return Archive(file).use { archive ->
