@@ -751,6 +751,7 @@ fun ViewerScreen(
 
                             // ページ移動スライダー（下部バーから離して配置し、明るさボタン等との誤タップを防ぐ）
                             if (maxSlider > 0f) {
+                                val downloadFraction = uiState.downloadFraction
                                 Slider(
                                     value = sliderValue,
                                     onValueChange = {
@@ -768,8 +769,40 @@ fun ViewerScreen(
                                     valueRange = 0f..maxSlider,
                                     steps = if (pagerCount > 2) pagerCount - 2 else 0,
                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                                    thumb = { Box(modifier = Modifier.size(28.dp).background(Color.White, CircleShape)) }
+                                    thumb = { Box(modifier = Modifier.size(28.dp).background(Color.White, CircleShape)) },
+                                    track = {
+                                        // ストリーミング中は、どこまで読めるかを色で示す。
+                                        // 右綴じなら若いページが右なので、右から伸びる。
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(6.dp)
+                                                .clip(RoundedCornerShape(3.dp))
+                                                .background(Color.White.copy(alpha = 0.25f)),
+                                            contentAlignment = if (isReverseLayout) Alignment.CenterEnd
+                                                               else Alignment.CenterStart
+                                        ) {
+                                            if (downloadFraction != null) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth(downloadFraction)
+                                                        .height(6.dp)
+                                                        .clip(RoundedCornerShape(3.dp))
+                                                        .background(Color(0xFF4CAF50).copy(alpha = 0.7f))
+                                                )
+                                            }
+                                        }
+                                    }
                                 )
+
+                                // ストリーミング中の読み込み状況
+                                if (downloadFraction != null) {
+                                    Text(
+                                        text     = "読み込み中 ${(downloadFraction * 100).toInt()}%",
+                                        color    = Color(0xFF81C784),
+                                        fontSize = 11.sp
+                                    )
+                                }
                             }
 
                             Spacer(Modifier.height(8.dp))

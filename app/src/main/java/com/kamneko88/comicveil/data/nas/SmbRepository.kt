@@ -180,6 +180,67 @@ class SmbRepository {
         }
     }
 
+    /**
+     * ファイルの**末尾だけ**を読む。
+     *
+     * ZIPの「目次」（中央ディレクトリ）はファイル末尾にあるため、
+     * ストリーミング再生の前にここだけ先に取得して総ページ数を知るのに使う。
+     *
+     * @return (ファイル全体のサイズ, 末尾のバイト列) 。失敗時は null
+     */
+    suspend fun readTail(
+        server: NasServer,
+        nasPath: String,
+        tailLength: Long = 2 * 1024 * 1024L
+    ): Pair<Long, ByteArray>? = withContext(Dispatchers.IO) {
+        val client = SMBClient()
+        try {
+            val connection = client.connect(server.host)
+            val auth = AuthenticationContext(
+                server.username,
+                server.password.toCharArray(),
+                null
+            )
+            val session = connection.authenticate(auth)
+            val share   = session.connectShare(server.shareName) as DiskShare
+            val smbPath = nasPath.replace("/", "\\")
+            val smbFile = share.openFile(
+                smbPath,
+                setOf(AccessMask.GENERIC_READ),
+                null,
+                setOf(SMB2ShareAccess.FILE_SHARE_READ),
+                SMB2CreateDisposition.FILE_OPEN,
+                null
+            )
+
+            val fileSize = smbFile.getFileInformation().standardInformation.endOfFile
+            if (fileSize <= 0L) return@withContext null
+
+            val readLength = minOf(tailLength, fileSize)
+            val startOffset = fileSize - readLength
+            val buffer = ByteArray(readLength.toInt())
+
+            var filled = 0
+            while (filled < buffer.size) {
+                val read = smbFile.read(
+                    buffer,
+                    startOffset + filled,
+                    filled,
+                    buffer.size - filled
+                )
+                if (read <= 0) break
+                filled += read
+            }
+            if (filled <= 0) return@withContext null
+
+            fileSize to (if (filled == buffer.size) buffer else buffer.copyOf(filled))
+        } catch (e: Exception) {
+            null
+        } finally {
+            runCatching { client.close() }
+        }
+    }
+
     // ※ downloadZipProgressive（NAS上でZIPを逐次ストリーミング展開する旧ロジック）は削除済み。
     // NASコミックは全体ダウンロード後にArchiveScannerで巻検出する方式に統一したため、
     // downloadFile()だけで十分となった（HomeViewModel.downloadThenOpenNasComic参照）。

@@ -12,6 +12,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.kamneko88.comicveil.BuildConfig
 import com.kamneko88.comicveil.data.ArchiveScanner
+import com.kamneko88.comicveil.data.GrowingFileInputStream
+import com.kamneko88.comicveil.data.ZipStreamSupport
 import com.kamneko88.comicveil.data.db.Bookmark
 import com.kamneko88.comicveil.data.db.BookmarkRepository
 import com.kamneko88.comicveil.data.db.ComicFileRepository
@@ -64,7 +66,9 @@ data class ViewerUiState(
     val isSavedPageLoaded: Boolean = false,
     val bookmarks: List<Bookmark> = emptyList(),
     val isCurrentPageBookmarked: Boolean = false,
-    val needsPassword: Boolean = false
+    val needsPassword: Boolean = false,
+    /** ストリーミング中のダウンロード進捗（0.0〜1.0）。通常の開き方のときは null */
+    val downloadFraction: Float? = null
 )
 
 enum class PageLimitEvent { FIRST, LAST }
@@ -186,6 +190,19 @@ class ViewerViewModel(
     ) {
         val pageDir = pageDirFor(file, requestedVolume)
 
+        // 【ストリーミング】ダウンロードしながら読む場合。
+        // Home側でZIPの目次（中央ディレクトリ）を先読みしてサイドカーに保存してある。
+        // ファイルがまだ完成していなければ、届いた分から順にページを取り出していく。
+        val streamInfo = ZipStreamSupport.readSidecar(file)
+        if (streamInfo != null) {
+            if (file.length() < streamInfo.expectedSize) {
+                loadZipStreaming(file, streamInfo, pageDir)
+                return
+            }
+            // ダウンロード完了済みなのでサイドカーは不要
+            ZipStreamSupport.deleteSidecar(file)
+        }
+
         // 【高速化】展開済みキャッシュがあれば、アーカイブには一切触らずに即表示する。
         // 以前はキャッシュの有無に関わらず先に ArchiveScanner.scan() を実行していたため、
         // 開くたびにアーカイブ全体を読み直していた（特に中央ディレクトリが壊れたZIPは
@@ -245,6 +262,61 @@ class ViewerViewModel(
     private fun pageDirFor(file: File, volume: String?): File {
         val key = "${file.absolutePath}::${volume ?: ""}".hashCode()
         return File(File(getApplication<Application>().cacheDir, "archive_pages"), "arc_$key")
+    }
+
+    /**
+     * 【ZIPストリーミング】ダウンロードしながら読む。
+     *
+     * ZIPは先頭から順にページが並んでいるので、落ちてきた分から順に展開できる。
+     * まだ届いていない位置まで読み進んだら、その場で少し待って再挑戦する（GrowingFileInputStream）。
+     *
+     * 総ページ数はHome側で先読みした目次から分かっているので、
+     * ページ移動バーも最初から正しく作れる。
+     */
+    private suspend fun loadZipStreaming(
+        file: File,
+        info: ZipStreamSupport.StreamInfo,
+        pageDir: File
+    ) {
+        logD("ZIPストリーミング開始: ${file.name} (全${info.entryNames.size}ページ / ${info.expectedSize} bytes)")
+
+        pageDir.deleteRecursively()
+        pageDir.mkdirs()
+
+        _uiState.update {
+            it.copy(
+                isProgressiveMode = true,
+                totalPageCount    = info.entryNames.size,
+                isComplete        = false
+            )
+        }
+
+        // ダウンロードの進捗を見守る（ページ移動バーの色で表示する）
+        viewModelScope.launch {
+            while (true) {
+                val downloaded = file.length()
+                val fraction   = (downloaded.toFloat() / info.expectedSize).coerceIn(0f, 1f)
+                _uiState.update { it.copy(downloadFraction = fraction) }
+                if (downloaded >= info.expectedSize) break
+                kotlinx.coroutines.delay(300)
+            }
+            _uiState.update { it.copy(downloadFraction = null) }
+        }
+
+        // 届いた分から順に展開する
+        val extractStart = System.currentTimeMillis()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                extractZipStreaming(file, info, pageDir)
+                logD("ストリーミング展開完了: ${System.currentTimeMillis() - extractStart}ms")
+                ZipStreamSupport.deleteSidecar(file)
+            } catch (e: Exception) {
+                Log.e("ComicVeil", "ストリーミング展開エラー: ${e.message}", e)
+                runCatching { File(pageDir, "complete").writeText("0") }
+            }
+        }
+
+        loadFromPageDirectory(pageDir, knownTotal = info.entryNames.size)
     }
 
     fun retryWithPassword(password: String) {
@@ -521,6 +593,61 @@ private fun extractZipSequentialFallback(
     }
     return arrivalNameOrder.isNotEmpty()
 }
+
+/**
+ * 【ZIPストリーミング展開】ダウンロードしながら、届いた分から順にページを書き出す。
+ *
+ * ページの並び順（最終的なページ番号）は、先に読んだ目次から分かっている。
+ * そのため届いた順に展開しても、正しいページ番号の位置へ直接書ける。
+ *
+ * ダウンロードが止まってしまった場合（通信切断・キャンセル）は、
+ * 一定時間ファイルが伸びなければ打ち切る（無限に待たない）。
+ */
+private fun extractZipStreaming(
+    file: File,
+    info: com.kamneko88.comicveil.data.ZipStreamSupport.StreamInfo,
+    pageDir: File
+) {
+    val indexByName = info.entryNames.withIndex().associate { (i, name) -> name to i }
+
+    var lastLength   = file.length()
+    var lastGrowthAt = System.currentTimeMillis()
+
+    // まだダウンロードが進んでいるか（伸びなくなったら止まったとみなす）
+    val isDownloading = {
+        val length = file.length()
+        if (length != lastLength) {
+            lastLength   = length
+            lastGrowthAt = System.currentTimeMillis()
+        }
+        length < info.expectedSize &&
+            (System.currentTimeMillis() - lastGrowthAt) < STREAM_STALL_TIMEOUT_MS
+    }
+
+    var written = 0
+    GrowingFileInputStream(file, isDownloading, info.expectedSize).use { growing ->
+        ZipArchiveInputStream(growing.buffered(), info.charset, false, true).use { zis ->
+            var entry = zis.nextEntry
+            while (entry != null) {
+                val finalIndex = if (!entry.isDirectory) indexByName[entry.name] else null
+                if (finalIndex != null) {
+                    val bytes = readBoundedBytes(zis, entry.size)
+                    if (bytes != null && bytes.isNotEmpty()) {
+                        writePage(pageDir, finalIndex, bytes)
+                        written++
+                    }
+                }
+                entry = zis.nextEntry
+            }
+        }
+    }
+
+    logD("ストリーミング展開: ${written}ページ / 全${info.entryNames.size}ページ")
+    File(pageDir, "complete").writeText(written.toString())
+}
+
+/** ダウンロードがこれだけ伸びなければ、止まったとみなして待つのをやめる */
+private const val STREAM_STALL_TIMEOUT_MS = 30_000L
 
 /**
  * libarchiveで逐次読み込みし、目的のページだけ最終位置へ直接書き込む。RAR（RAR5含む）専用。

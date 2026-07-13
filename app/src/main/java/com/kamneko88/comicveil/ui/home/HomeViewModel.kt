@@ -637,8 +637,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * NASコミックをストリーミング（STR）モードで開く。
-     * キャッシュ済み・未ダウンロード問わず、ローカルファイルと同じ感覚でタップ直後に開く
-     * （未ダウンロードの場合も確認ダイアログは挟まず、そのままダウンロードを開始する）。
+     *
+     * ZIPなら、ダウンロードを待たずに**落ちてきた分から読み始める**（数秒で開く）。
+     * RAR/7z/PDFや壊れたZIPは構造上それができないので、従来どおり全体を落としてから開く。
      */
     private fun openNasComicStr(fileItem: FileItem) {
         val ext      = fileItem.name.substringAfterLast(".")
@@ -647,10 +648,75 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             "nas_${fileItem.nasPath.hashCode()}.$ext"
         )
 
-        if (destFile.exists() && destFile.length() > 0) {
+        // すでに全体が落ちているなら、そのまま開く
+        val isFullyCached = destFile.exists() && destFile.length() > 0 &&
+            (fileItem.size <= 0 || destFile.length() >= fileItem.size)
+        if (isFullyCached) {
             viewModelScope.launch { openLocalOrVolumeComic(fileItem.copy(file = destFile)) }
+            return
+        }
+
+        if (ext.lowercase() in setOf("zip", "cbz")) {
+            startZipStreaming(fileItem, destFile)
         } else {
             downloadThenOpenNasComic(fileItem)
+        }
+    }
+
+    /**
+     * ZIPのストリーミング再生を開始する。
+     *
+     * ZIPの「目次」（中央ディレクトリ）はファイル末尾にあるので、まずそこだけを先に読む。
+     * 目次が読めれば総ページ数が分かるので、ダウンロードを始めながら読み始められる。
+     * 目次が壊れている・巻フォルダ構成などの場合は、黙って従来方式（全DL）に切り替える。
+     */
+    private fun startZipStreaming(fileItem: FileItem, destFile: File) {
+        val server = fileItem.nasServer ?: run {
+            _nasError.value = "NASサーバー情報がありません"
+            return
+        }
+
+        viewModelScope.launch {
+            // 目次の先読み中だけ短くローディングを出す
+            _downloadProgress.value = DownloadProgress(
+                fileName   = fileItem.name,
+                downloaded = 0L,
+                total      = -1L
+            )
+
+            val tail = withContext(Dispatchers.IO) {
+                smbRepository.readTail(server, fileItem.nasPath)
+            }
+            _downloadProgress.value = null
+
+            if (tail == null) {
+                downloadThenOpenNasComic(fileItem)
+                return@launch
+            }
+
+            val (fileSize, tailBytes) = tail
+            val cacheDir = File(getApplication<Application>().cacheDir, "nas_cache")
+
+            val scan = withContext(Dispatchers.IO) {
+                com.kamneko88.comicveil.data.ZipStreamSupport.probeFromTail(cacheDir, fileSize, tailBytes)
+            }
+
+            // 目次が読めない（壊れている）・巻フォルダ構成 → 従来どおり全DLしてから開く
+            if (scan == null || scan.volumes != null) {
+                downloadThenOpenNasComic(fileItem)
+                return@launch
+            }
+
+            withContext(Dispatchers.IO) {
+                destFile.parentFile?.mkdirs()
+                // 途中まで落ちていたファイルがあれば作り直す
+                runCatching { destFile.delete() }
+                com.kamneko88.comicveil.data.ZipStreamSupport.writeSidecar(destFile, scan, fileSize)
+            }
+
+            // フォアグラウンドサービスでダウンロードを開始し、すぐにビューワーへ
+            transferViewModel?.enqueue(fileItem, isStreaming = true)
+            _navigateEvent.tryEmit(destFile.absolutePath)
         }
     }
 
