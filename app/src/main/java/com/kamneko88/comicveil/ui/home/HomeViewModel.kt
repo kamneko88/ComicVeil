@@ -42,6 +42,15 @@ sealed class ViewLocation {
     }
 }
 
+/** スクロール位置を覚えておくための、場所ごとに一意なキー */
+val ViewLocation.key: String
+    get() = when (this) {
+        is ViewLocation.Home        -> "home"
+        is ViewLocation.LocalFolder -> "local:${folder.absolutePath}"
+        is ViewLocation.SafFolder   -> "saf:$uri"
+        is ViewLocation.NasFolder   -> "nas:${server.id}:$path"
+    }
+
 data class ResumeDialogState(
     val fileItem: FileItem,
     val savedPage: Int,
@@ -186,6 +195,22 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    // ─── スクロール位置の記憶 ────────────────────────────
+
+    /**
+     * フォルダごとの一覧のスクロール位置。
+     * ビューワーへ移動すると画面は破棄されるが、ViewModelは生き残るので
+     * ここに位置を覚えておき、戻ってきたときに元の位置へ戻せるようにする。
+     * （続きの巻を探すとき、毎回先頭に戻されるのを防ぐ）
+     */
+    private val scrollPositions = mutableMapOf<String, Pair<Int, Int>>()
+
+    fun saveScrollPosition(key: String, index: Int, offset: Int) {
+        scrollPositions[key] = index to offset
+    }
+
+    fun getScrollPosition(key: String): Pair<Int, Int>? = scrollPositions[key]
 
     // ─── ソート・フィルター ────────────────────────────────────────────────
 

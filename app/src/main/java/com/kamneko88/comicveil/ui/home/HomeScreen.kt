@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -65,6 +66,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -143,6 +145,33 @@ fun HomeScreen(
 
     val isRoot = currentLocation is ViewLocation.Home
     val isNas  = currentLocation is ViewLocation.NasFolder
+
+    // ── 一覧のスクロール位置を覚えておく ──────────────────────
+    // ビューワーへ移動するとこの画面は破棄されるため、戻ってくると一覧が先頭に戻ってしまう。
+    // ViewModel（画面遷移をまたいで生き残る）に位置を預けて、戻ったときに復元する。
+    val listState   = rememberLazyListState()
+    val locationKey = currentLocation.key
+
+    // 復元すべき位置は、保存処理が上書きする前に押さえておく
+    val pendingRestore = remember(locationKey) { viewModel.getScrollPosition(locationKey) }
+    var restoredKey    by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(locationKey, files.isNotEmpty()) {
+        if (files.isNotEmpty() && restoredKey != locationKey) {
+            pendingRestore?.let { (index, offset) ->
+                listState.scrollToItem(index, offset)
+            }
+            restoredKey = locationKey
+        }
+    }
+
+    LaunchedEffect(locationKey) {
+        snapshotFlow {
+            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+        }.collect { (index, offset) ->
+            viewModel.saveScrollPosition(locationKey, index, offset)
+        }
+    }
 
     val screenTitle = when (val loc = currentLocation) {
         is ViewLocation.Home        -> "HOME"
@@ -508,8 +537,6 @@ fun HomeScreen(
                                         )
                                     }
                                 }
-                            } else {
-                                TextButton(onClick = { }) { Text("C") }
                             }
 
                             IconButton(onClick = { viewModel.openTransferScreen() }) {
@@ -535,7 +562,10 @@ fun HomeScreen(
                     }
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(
+                    state    = listState,
+                    modifier = Modifier.fillMaxSize()
+                ) {
                     if (isRoot && nasServers.isNotEmpty()) {
                         item {
                             Text(
