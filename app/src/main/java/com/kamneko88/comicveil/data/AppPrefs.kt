@@ -187,7 +187,7 @@ class AppPrefs(context: Context) {
 
     // ─── ファイル一覧表示モード ───────────────────────────────────────────
 
-    enum class ListDisplayMode { DETAIL, COMPACT }
+    enum class ListDisplayMode { DETAIL, COMPACT, SHELF }
 
     var listDisplayMode: ListDisplayMode
         get() = ListDisplayMode.valueOf(
@@ -195,6 +195,11 @@ class AppPrefs(context: Context) {
                 ?: ListDisplayMode.DETAIL.name
         )
         set(value) = prefs.edit().putString(KEY_LIST_DISPLAY_MODE, value.name).apply()
+
+    /** 本棚モードで表紙の下にタイトルを表示するか（初期値は表紙のみ） */
+    var shelfShowTitle: Boolean
+        get() = prefs.getBoolean(KEY_SHELF_SHOW_TITLE, false)
+        set(value) = prefs.edit().putBoolean(KEY_SHELF_SHOW_TITLE, value).apply()
 
     companion object {
         private const val KEY_HOME_FOLDER            = "home_folder_type"
@@ -214,6 +219,7 @@ class AppPrefs(context: Context) {
         private const val KEY_TRIM_MODE              = "trim_mode"
         private const val KEY_TRIM_KEEP_ASPECT       = "trim_keep_aspect"
         private const val KEY_LIST_DISPLAY_MODE      = "list_display_mode"
+        private const val KEY_SHELF_SHOW_TITLE       = "shelf_show_title"
 
         fun getAppFolder(context: Context): File {
             val dir = File(context.getExternalFilesDir(null), "Comics")

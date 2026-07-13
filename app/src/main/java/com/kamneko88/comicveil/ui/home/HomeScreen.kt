@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,6 +22,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -34,6 +40,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -127,9 +134,8 @@ fun HomeScreen(
     viewModel.transferViewModel = transferViewModel
 
     val appPrefs         = remember { viewModel.appPrefs }
-    var isListMode       by remember {
-        mutableStateOf(appPrefs.listDisplayMode == com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.DETAIL)
-    }
+    var displayMode      by remember { mutableStateOf(appPrefs.listDisplayMode) }
+    val shelfShowTitle   = appPrefs.shelfShowTitle
     var showAddNasDialog by remember { mutableStateOf(false) }
     var editingServer    by remember { mutableStateOf<NasServer?>(null) }
 
@@ -150,6 +156,7 @@ fun HomeScreen(
     // ビューワーへ移動するとこの画面は破棄されるため、戻ってくると一覧が先頭に戻ってしまう。
     // ViewModel（画面遷移をまたいで生き残る）に位置を預けて、戻ったときに復元する。
     val listState   = rememberLazyListState()
+    val gridState   = rememberLazyGridState()
     val locationKey = currentLocation.key
 
     // 復元すべき位置は、保存処理が上書きする前に押さえておく
@@ -160,14 +167,17 @@ fun HomeScreen(
         if (files.isNotEmpty() && restoredKey != locationKey) {
             pendingRestore?.let { (index, offset) ->
                 listState.scrollToItem(index, offset)
+                gridState.scrollToItem(index, offset)
             }
             restoredKey = locationKey
         }
     }
 
-    LaunchedEffect(locationKey) {
+    LaunchedEffect(locationKey, displayMode) {
+        val isShelf = displayMode == com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.SHELF
         snapshotFlow {
-            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+            if (isShelf) gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
+            else         listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
         }.collect { (index, offset) ->
             viewModel.saveScrollPosition(locationKey, index, offset)
         }
@@ -439,15 +449,26 @@ fun HomeScreen(
                             )
                         }
                         IconButton(onClick = {
-                            isListMode = !isListMode
-                            appPrefs.listDisplayMode = if (isListMode)
-                                com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.DETAIL
-                            else
-                                com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.COMPACT
+                            // 詳細 → コンパクト → 本棚 → 詳細 … と巡回する
+                            displayMode = when (displayMode) {
+                                com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.DETAIL  ->
+                                    com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.COMPACT
+                                com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.COMPACT ->
+                                    com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.SHELF
+                                com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.SHELF   ->
+                                    com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.DETAIL
+                            }
+                            appPrefs.listDisplayMode = displayMode
                         }) {
                             Icon(
-                                if (isListMode) Icons.Default.GridView
-                                else Icons.AutoMirrored.Filled.List,
+                                imageVector = when (displayMode) {
+                                    com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.DETAIL  ->
+                                        Icons.AutoMirrored.Filled.List
+                                    com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.COMPACT ->
+                                        Icons.Default.GridView
+                                    com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.SHELF   ->
+                                        Icons.Default.MenuBook
+                                },
                                 contentDescription = "表示切替"
                             )
                         }
@@ -561,6 +582,92 @@ fun HomeScreen(
                         Text("NASを読み込み中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+            } else if (displayMode == com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.SHELF) {
+                // ── 本棚モード（表紙をタイル状に並べる） ───────────────
+                LazyVerticalGrid(
+                    state    = gridState,
+                    columns  = GridCells.Adaptive(minSize = 110.dp),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(8.dp)
+                ) {
+                    // リモートサーバーはタイルにしても意味がないので、横幅いっぱいのリストで表示
+                    if (isRoot && nasServers.isNotEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Text(
+                                text     = "リモートサーバー",
+                                style    = MaterialTheme.typography.labelMedium,
+                                color    = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                            )
+                        }
+                        items(
+                            count = nasServers.size,
+                            span  = { GridItemSpan(maxLineSpan) }
+                        ) { index ->
+                            val server = nasServers[index]
+                            val isServerSelected = server.id in selectedPaths
+                            NasServerListItem(
+                                server         = server,
+                                isEditMode     = isEditMode,
+                                isSelected     = isServerSelected,
+                                onToggleSelect = {
+                                    selectedPaths = if (isServerSelected)
+                                        selectedPaths - server.id
+                                    else
+                                        selectedPaths + server.id
+                                },
+                                onClick  = {
+                                    isEditMode    = false
+                                    selectedPaths = emptySet()
+                                    viewModel.navigateToNas(server)
+                                },
+                                onEdit   = { editingServer = it; showAddNasDialog = true },
+                                onDelete = { viewModel.deleteNasServer(it.id) }
+                            )
+                        }
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            HorizontalDivider(
+                                thickness = 4.dp,
+                                color     = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        }
+                    }
+
+                    if (files.isEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Box(
+                                modifier         = Modifier.fillMaxWidth().padding(32.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text  = "ファイルが見つかりません",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    } else {
+                        items(count = files.size) { index ->
+                            val fileItem     = files[index]
+                            val itemStatus   = fileStatuses[fileItem.path] ?: ReadStatus.UNREAD
+                            val isSelected   = fileItem.path in selectedPaths
+                            val isCached     = fileItem.isNas && viewModel.isNasCached(fileItem)
+                            val isDlSelected = !isStreamingMode && !fileItem.isFolder &&
+                                               fileItem.path in dlSelectedPaths
+                            ShelfFileItem(
+                                fileItem            = fileItem,
+                                thumbnailRepository = thumbnailRepository,
+                                showTitle           = shelfShowTitle,
+                                status              = itemStatus,
+                                isEditMode          = isEditMode && !isNas,
+                                isSelected          = isSelected,
+                                isDlSelected        = isDlSelected,
+                                isCached            = isCached,
+                                onClick     = { handleFileClick(fileItem, isEditMode, isNas, isStreamingMode, isSelected, selectedPaths, viewModel, onSelectChange = { selectedPaths = it }) },
+                                onLongClick = { if (!isEditMode && fileItem.isComic) viewModel.openFileInfo(fileItem) }
+                            )
+                        }
+                    }
+                }
             } else {
                 LazyColumn(
                     state    = listState,
@@ -632,7 +739,7 @@ fun HomeScreen(
                             // DLモード時はファイルのみ選択状態色を適用
                             val isDlSelected = !isStreamingMode && !fileItem.isFolder &&
                                                fileItem.path in dlSelectedPaths
-                            if (isListMode) {
+                            if (displayMode == com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.DETAIL) {
                                 FileListItem(
                                     fileItem            = fileItem,
                                     thumbnailRepository = thumbnailRepository,
@@ -1385,6 +1492,133 @@ fun CompactFileListItem(
                     tint               = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+        }
+    }
+}
+
+// ─── 本棚タイル ────────────────────────────────────
+
+/**
+ * 本棚モードの1タイル。
+ *
+ * 「棚を眺める」ための画面なので、見せるのは表紙だけ。
+ * カラーラベルやレーティングなどの細かい情報は長押しのファイル情報で確認する。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun ShelfFileItem(
+    fileItem: FileItem,
+    thumbnailRepository: ThumbnailRepository,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
+    showTitle: Boolean = false,
+    status: ReadStatus = ReadStatus.UNREAD,
+    isEditMode: Boolean = false,
+    isSelected: Boolean = false,
+    isDlSelected: Boolean = false,
+    isCached: Boolean = false
+) {
+    val repository = remember { LocalFileRepository() }
+    val (title, _) = remember(fileItem.name) { repository.parseFileName(fileItem.name) }
+
+    var thumbnailFile by remember(fileItem.path) { mutableStateOf<File?>(null) }
+    LaunchedEffect(fileItem.path) {
+        thumbnailFile = thumbnailRepository.getOrGenerateThumbnail(fileItem)
+    }
+
+    Column(
+        modifier = Modifier
+            .padding(4.dp)
+            .combinedClickable(
+                onClick     = onClick,
+                onLongClick = onLongClick
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.71f)   // 本の形
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            if (fileItem.isFolder) {
+                // フォルダは表紙がないのでアイコンを中央に
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector        = Icons.Default.Folder,
+                        contentDescription = null,
+                        modifier           = Modifier.size(48.dp),
+                        tint               = MaterialTheme.colorScheme.primary
+                    )
+                }
+            } else if (thumbnailFile != null) {
+                AsyncImage(
+                    model              = thumbnailFile,
+                    contentDescription = title,
+                    modifier           = Modifier.fillMaxSize(),
+                    contentScale       = ContentScale.Crop
+                )
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector        = Icons.Default.InsertDriveFile,
+                        contentDescription = null,
+                        modifier           = Modifier.size(36.dp),
+                        tint               = MaterialTheme.colorScheme.secondary
+                    )
+                }
+            }
+
+            // 読書状態バッジ（左上）
+            if (fileItem.isComic && status != ReadStatus.UNREAD) {
+                Box(modifier = Modifier.align(Alignment.TopStart).padding(4.dp)) {
+                    ReadStatusBadge(status = status)
+                }
+            }
+
+            // キャッシュ済みバッジ（右上）
+            if (isCached) {
+                Box(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
+                    CachedBadge()
+                }
+            }
+
+            // 選択状態の色重ね
+            val overlayColor = when {
+                isSelected   -> MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                isDlSelected -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.35f)
+                else         -> Color.Transparent
+            }
+            if (overlayColor != Color.Transparent) {
+                Box(Modifier.fillMaxSize().background(overlayColor))
+            }
+
+            // 編集モード：チェック（右下）
+            if (isEditMode) {
+                Icon(
+                    imageVector        = if (isSelected) Icons.Default.CheckBox
+                                         else Icons.Default.CheckBoxOutlineBlank,
+                    contentDescription = null,
+                    modifier           = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(4.dp)
+                        .size(22.dp),
+                    tint               = if (isSelected) MaterialTheme.colorScheme.primary
+                                         else Color.White
+                )
+            }
+        }
+
+        if (showTitle) {
+            Text(
+                text      = if (fileItem.isFolder) fileItem.name else title,
+                style     = MaterialTheme.typography.labelSmall,
+                maxLines  = 2,
+                overflow  = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier  = Modifier.padding(top = 4.dp)
+            )
         }
     }
 }

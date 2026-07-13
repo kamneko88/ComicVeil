@@ -73,6 +73,7 @@ fun SettingsScreen(
     var trimKeepAspect    by remember { mutableStateOf(appPrefs.trimKeepAspect) }
     var backgroundColor   by remember { mutableStateOf(appPrefs.backgroundColor) }
     var pageTurnAnimation by remember { mutableStateOf(appPrefs.pageTurnAnimation) }
+    var shelfShowTitle    by remember { mutableStateOf(appPrefs.shelfShowTitle) }
 
     // ── ファイル・フォルダ ────────────────────────────────────────────────
     var homeFolderType     by remember { mutableStateOf(appPrefs.homeFolderType) }
@@ -403,6 +404,19 @@ fun SettingsScreen(
                     }
                 )
             }
+
+            SettingsDivider()
+
+            // ── 本棚モード ────────────────────────────────
+            SettingsSwitchItem(
+                title       = "本棚にタイトルを表示",
+                description = "OFFなら表紙だけを並べる（棚を眺める感覚になる）",
+                checked     = shelfShowTitle,
+                onCheckedChange = {
+                    shelfShowTitle          = it
+                    appPrefs.shelfShowTitle = it
+                }
+            )
 
             Spacer(Modifier.height(24.dp))
 
