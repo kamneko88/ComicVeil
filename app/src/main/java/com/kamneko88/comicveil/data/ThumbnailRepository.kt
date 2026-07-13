@@ -208,11 +208,43 @@ private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
 private const val MAX_THUMBNAIL_SOURCE_BYTES = 30L * 1024 * 1024  // 30MB
 
 /**
+ * 表紙を探す際に見るエントリ数の上限。
+ * 表紙はアーカイブの先頭付近にあるので、全体を読み切る必要はない。
+ * （中央ディレクトリが壊れたZIPは先頭から順に読むしかなく、
+     数百MBを毎回読み切るとサムネイルがいつまでも完成しない）
+ */
+private const val MAX_ENTRIES_TO_SCAN = 40
+
+/**
+ * ストリームから上限付きで読む。上限を超えたら nullを返す。
+ *
+ * 【なぜ必要か】壊れたZIPではエントリの申告サイズが取れない（-1）ことがあり、
+ * readBytes()をそのまま使うとファイル終端まで読み続けてしまう。
+ * （実際、713MBのアーカイブで OutOfMemoryError が発生していた）
+ */
+private fun readBounded(input: java.io.InputStream, cap: Long): ByteArray? {
+    val out   = ByteArrayOutputStream()
+    val chunk = ByteArray(64 * 1024)
+    var total = 0L
+    while (true) {
+        val read = input.read(chunk)
+        if (read < 0) break
+        total += read
+        if (total > cap) return null   // 大きすぎる＝表紙としては異常
+        out.write(chunk, 0, read)
+    }
+    return out.toByteArray()
+}
+
+/**
  * ZIPから「名前順で一番若い画像」（＝表紙）を１枚だけ取り出す。
  *
  * 【重要】以前は全ページをメモリに溜めてから名前順で選んでいたため、
  * 大きなアーカイブ（例：713MB）で OutOfMemoryError が発生していた。
- * 必要なのは1枚だけなので、「今の最有力候補」だけを保持する。
+ * また、壊れたZIPはエントリの申告サイズが信用できないため、
+ * 読みながら上限で打ち切る。
+ *
+ * 表紙は先頭付近にあるので、先頭の数十エントリだけ見て打ち切る。
  */
 private fun pickCoverImage(
     openStream: (charsetName: String) -> ZipArchiveInputStream
@@ -220,22 +252,21 @@ private fun pickCoverImage(
     for (cs in listOf(kotlin.text.Charsets.UTF_8.name(), "Shift_JIS")) {
         var bestName : String? = null
         var bestBytes: ByteArray? = null
+        var examined = 0
 
         runCatching {
             openStream(cs).use { zis ->
                 var entry = zis.nextZipEntry
-                while (entry != null) {
+                while (entry != null && examined < MAX_ENTRIES_TO_SCAN) {
                     val name = entry.name
                     val ext  = name.substringAfterLast(".").lowercase()
-                    if (!entry.isDirectory &&
-                        ext in IMAGE_EXTENSIONS &&
-                        entry.size <= MAX_THUMBNAIL_SOURCE_BYTES
-                    ) {
+                    if (!entry.isDirectory && ext in IMAGE_EXTENSIONS) {
+                        examined++
                         val current = bestName
-                        // 名前順でこれまでより若ければ、この1枚だけ読む
+                        // 名前順でこれまでより若ければ、この1枚だけ読む（上限付き）
                         if (current == null || name.lowercase() < current) {
-                            val bytes = zis.readBytes()
-                            if (bytes.isNotEmpty()) {
+                            val bytes = readBounded(zis, MAX_THUMBNAIL_SOURCE_BYTES)
+                            if (bytes != null && bytes.isNotEmpty()) {
                                 bestName  = name.lowercase()
                                 bestBytes = bytes
                             }
