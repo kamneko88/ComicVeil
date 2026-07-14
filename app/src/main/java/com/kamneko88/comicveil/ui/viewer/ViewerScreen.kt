@@ -153,10 +153,21 @@ fun ViewerScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     val activity = remember { context as? ComponentActivity }
-    val initialBrightness = remember {
-        activity?.window?.attributes?.screenBrightness?.takeIf { it >= 0f } ?: 0.5f
+
+    // 明るさはアプリ全体で覚える（作品別ではない）。
+    // 未設定のうちは端末の明るさに従い、画面の明るさには手を出さない。
+    val savedBrightness = remember { appPrefsForBrightness(context) }
+    val systemBrightness = remember {
+        runCatching {
+            android.provider.Settings.System.getInt(
+                context.contentResolver,
+                android.provider.Settings.System.SCREEN_BRIGHTNESS
+            ) / 255f
+        }.getOrDefault(0.5f).coerceIn(0.01f, 1f)
     }
-    var brightness           by remember { mutableFloatStateOf(initialBrightness) }
+
+    var brightness        by remember { mutableFloatStateOf(if (savedBrightness >= 0f) savedBrightness else systemBrightness) }
+    var brightnessApplied by remember { mutableStateOf(savedBrightness >= 0f) }
     var showBrightnessSlider by remember { mutableStateOf(false) }
     var showBookmarkList     by remember { mutableStateOf(false) }
     var showPageStrip        by remember { mutableStateOf(false) }
@@ -211,7 +222,8 @@ fun ViewerScreen(
 
     LaunchedEffect(Unit) { viewModel.loadBookmarks() }
 
-    LaunchedEffect(brightness) {
+    LaunchedEffect(brightness, brightnessApplied) {
+        if (!brightnessApplied) return@LaunchedEffect
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
             activity?.window?.let { window ->
                 val attrs = window.attributes
@@ -712,7 +724,11 @@ fun ViewerScreen(
                                     Icon(Icons.Default.Brightness4, contentDescription = null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
                                     Slider(
                                         value = brightness,
-                                        onValueChange = { brightness = it },
+                                        onValueChange = {
+                                            brightness        = it
+                                            brightnessApplied = true
+                                            appPrefs.viewerBrightness = it   // 次回以降もこの明るさで開く
+                                        },
                                         valueRange = 0.01f..1f,
                                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                                     )
@@ -1045,6 +1061,10 @@ private const val SWIPE_GUARD_MS = 300L
 
 /** 明るさを最後に動かしてから、これだけ経ったらバーを自動で閉じる */
 private const val BRIGHTNESS_AUTO_HIDE_MS = 2500L
+
+/** 保存済みの明るさを読む（-1 なら未設定） */
+private fun appPrefsForBrightness(context: android.content.Context): Float =
+    com.kamneko88.comicveil.data.AppPrefs(context).viewerBrightness
 
 @Composable
 private fun ZoomablePage(

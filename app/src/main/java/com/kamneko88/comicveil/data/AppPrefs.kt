@@ -201,6 +201,15 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean(KEY_SHELF_SHOW_TITLE, false)
         set(value) = prefs.edit().putBoolean(KEY_SHELF_SHOW_TITLE, value).apply()
 
+    /**
+     * ビューワーの明るさ（0.0〜1.0）。
+     * -1 は「未設定＝端末の明るさに従う」。
+     * 一度調整すれば、以降はすべての本でその明るさを使う（作品別ではなくアプリ全体）。
+     */
+    var viewerBrightness: Float
+        get() = prefs.getFloat(KEY_VIEWER_BRIGHTNESS, -1f)
+        set(value) = prefs.edit().putFloat(KEY_VIEWER_BRIGHTNESS, value).apply()
+
     companion object {
         private const val KEY_HOME_FOLDER            = "home_folder_type"
         private const val KEY_HOME_FOLDER_SAF_URI    = "home_folder_saf_uri"
@@ -220,6 +229,7 @@ class AppPrefs(context: Context) {
         private const val KEY_TRIM_KEEP_ASPECT       = "trim_keep_aspect"
         private const val KEY_LIST_DISPLAY_MODE      = "list_display_mode"
         private const val KEY_SHELF_SHOW_TITLE       = "shelf_show_title"
+        private const val KEY_VIEWER_BRIGHTNESS      = "viewer_brightness"
 
         fun getAppFolder(context: Context): File {
             val dir = File(context.getExternalFilesDir(null), "Comics")
