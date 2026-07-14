@@ -68,7 +68,9 @@ data class ViewerUiState(
     val isCurrentPageBookmarked: Boolean = false,
     val needsPassword: Boolean = false,
     /** ストリーミング中のダウンロード進捗（0.0〜1.0）。通常の開き方のときは null */
-    val downloadFraction: Float? = null
+    val downloadFraction: Float? = null,
+    /** 画面に出すファイル名。リモートの本はキャッシュ名ではなく元の作品名を出す */
+    val displayName: String = ""
 )
 
 enum class PageLimitEvent { FIRST, LAST }
@@ -81,6 +83,7 @@ class ViewerViewModel(
     private val progressRepository : ReadingProgressRepository
     private val comicFileRepository: ComicFileRepository
     private val bookmarkRepository : BookmarkRepository
+    private val fileTitleDao       : com.kamneko88.comicveil.data.db.FileTitleDao
 
     private val _uiState = MutableStateFlow(ViewerUiState())
     val uiState: StateFlow<ViewerUiState> = _uiState.asStateFlow()
@@ -109,6 +112,23 @@ class ViewerViewModel(
         progressRepository  = ReadingProgressRepository(db.readingProgressDao())
         comicFileRepository = ComicFileRepository(db.comicFileDao())
         bookmarkRepository  = BookmarkRepository(db.bookmarkDao())
+        fileTitleDao        = db.fileTitleDao()
+
+        // 表示用のファイル名を決める。
+        // リモートの本はキャッシュ上で nas_-409694946.zip のような名前になっているので、
+        // Home側で控えておいた元の作品名を優先する（一時ファイル名は内部でだけ使う）。
+        viewModelScope.launch {
+            val markerIndex = filePath.indexOf(VOLUME_MARKER)
+            val archivePath = if (markerIndex >= 0) filePath.substring(0, markerIndex) else filePath
+            val volumeName  = if (markerIndex >= 0) filePath.substring(markerIndex + VOLUME_MARKER.length) else null
+
+            val original = withContext(Dispatchers.IO) {
+                runCatching { fileTitleDao.getName(archivePath) }.getOrNull()
+            } ?: File(archivePath).name
+
+            val shown = if (volumeName != null) "$original ／ $volumeName" else original
+            _uiState.update { it.copy(displayName = shown) }
+        }
 
         viewModelScope.launch {
             val progress = withContext(Dispatchers.IO) { progressRepository.getProgress(filePath) }

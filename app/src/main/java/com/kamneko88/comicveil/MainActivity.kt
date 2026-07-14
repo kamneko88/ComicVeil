@@ -10,6 +10,7 @@ import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.runtime.Composable
@@ -45,7 +46,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // このアプリはダークテーマなので、システムバーのアイコンは白にする。
+        // 引数なしの enableEdgeToEdge() は端末のライト/ダーク設定に合わせて
+        // 「明るい背景用＝黒いアイコン」を選ぶことがあり、
+        // その場合、暗い背景の上で時刻やWi-Fiが見えなくなる。
+        enableEdgeToEdge(
+            statusBarStyle     = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
         requestNotificationPermissionIfNeeded()
         setContent {
             ComicVeilTheme {

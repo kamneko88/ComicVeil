@@ -162,8 +162,18 @@ fun ViewerScreen(
     var showPageStrip        by remember { mutableStateOf(false) }
     var orientationLocked    by remember { mutableStateOf(false) }
 
-    // 表示用のファイル名（巻マーカー付きの場合は「ファイル名 - 巻名」にする）
-    val displayFileName = remember(filePath) {
+    // 明るさを調整したら、少しして自動で引っ込める。
+    // 出しっぱなしだとページ移動スライダーと近くて誤タップのもとになるし、画面もうるさい。
+    LaunchedEffect(showBrightnessSlider, brightness) {
+        if (!showBrightnessSlider) return@LaunchedEffect
+        kotlinx.coroutines.delay(BRIGHTNESS_AUTO_HIDE_MS)
+        showBrightnessSlider = false
+    }
+
+    // 表示用のファイル名。
+    // リモートの本はキャッシュ上で機械的な名前になっているので、
+    // ViewModelが控えておいた元の作品名を使う（一時ファイル名は内部でだけ使う）。
+    val displayFileName = uiState.displayName.ifEmpty {
         val parts = filePath.split("##vol##")
         val base  = java.io.File(parts[0]).name
         if (parts.size > 1) "$base - ${parts[1]}" else base
@@ -1032,6 +1042,9 @@ private const val MAX_SCALE      = 3.0f
 private const val OVERSHOOT_MAX  = MAX_SCALE * 1.15f
 private const val OVERSHOOT_MIN  = MIN_SCALE * 0.85f
 private const val SWIPE_GUARD_MS = 300L
+
+/** 明るさを最後に動かしてから、これだけ経ったらバーを自動で閉じる */
+private const val BRIGHTNESS_AUTO_HIDE_MS = 2500L
 
 @Composable
 private fun ZoomablePage(
