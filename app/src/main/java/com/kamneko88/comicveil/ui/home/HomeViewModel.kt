@@ -92,6 +92,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val safFileRepository   = SafFileRepository()
     private val progressRepository  : ReadingProgressRepository
     private val comicFileRepository : ComicFileRepository
+    private val fileTitleDao        : com.kamneko88.comicveil.data.db.FileTitleDao
     private val smbRepository       = SmbRepository()
     private val nasServerPrefs      = NasServerPrefs(application)
     val appPrefs                    = AppPrefs(application)
@@ -173,6 +174,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val db = ComicVeilDatabase.getDatabase(application)
         progressRepository  = ReadingProgressRepository(db.readingProgressDao())
         comicFileRepository = ComicFileRepository(db.comicFileDao())
+        fileTitleDao        = db.fileTitleDao()
         refreshNasServers()
 
         viewModelScope.launch {
@@ -648,6 +650,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             "nas_${fileItem.nasPath.hashCode()}.$ext"
         )
 
+        // キャッシュの名前は nas_-409694946.zip のような機械的なものなので、
+        // 元の作品名を控えておく（閲覧履歴で正しいタイトルを出すため）
+        rememberOriginalName(destFile.absolutePath, fileItem.name)
+
         // すでに全体が落ちているなら、そのまま開く
         val isFullyCached = destFile.exists() && destFile.length() > 0 &&
             (fileItem.size <= 0 || destFile.length() >= fileItem.size)
@@ -660,6 +666,21 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             startZipStreaming(fileItem, destFile)
         } else {
             downloadThenOpenNasComic(fileItem)
+        }
+    }
+
+    /**
+     * キャッシュパスと元のファイル名の対応を覚えておく。
+     * リモートの本はキャッシュ上で機械的な名前になるため、
+     * これがないと閲覧履歴で作品名が分からない。
+     */
+    private fun rememberOriginalName(cachePath: String, originalName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                fileTitleDao.save(
+                    com.kamneko88.comicveil.data.db.FileTitle(cachePath, originalName)
+                )
+            }
         }
     }
 

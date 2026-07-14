@@ -6,8 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.kamneko88.comicveil.data.LocalFileRepository
 import com.kamneko88.comicveil.data.db.ComicVeilDatabase
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
@@ -39,33 +40,47 @@ data class HistoryItem(
  */
 class HistoryViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val dao      = ComicVeilDatabase.getDatabase(application).readingProgressDao()
-    private val fileRepo = LocalFileRepository()
+    private val dao          = ComicVeilDatabase.getDatabase(application).readingProgressDao()
+    private val fileTitleDao = ComicVeilDatabase.getDatabase(application).fileTitleDao()
+    private val fileRepo     = LocalFileRepository()
+
+    /** キャッシュパス → 元のファイル名（リモートの本用） */
+    private val originalNames = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    init {
+        viewModelScope.launch {
+            originalNames.value = runCatching {
+                fileTitleDao.getAll().associate { it.filePath to it.originalName }
+            }.getOrDefault(emptyMap())
+        }
+    }
 
     /** 履歴からビューワーを開くためのイベント */
     val navigateEvent = MutableSharedFlow<String>(extraBufferCapacity = 1)
 
-    val history = dao.observeHistory()
-        .map { list ->
-            list.map { progress ->
-                // ビューワーのキーは「アーカイブパス##vol##巻フォルダ名」の形式のことがある
-                val parts      = progress.filePath.split(VOLUME_MARKER)
-                val archive    = parts[0]
-                val volumeName = parts.getOrNull(1)
+    val history = combine(dao.observeHistory(), originalNames) { list, names ->
+        list.map { progress ->
+            // ビューワーのキーは「アーカイブパス##vol##巻フォルダ名」の形式のことがある
+            val parts      = progress.filePath.split(VOLUME_MARKER)
+            val archive    = parts[0]
+            val volumeName = parts.getOrNull(1)
 
-                val (title, _) = fileRepo.parseFileName(File(archive).name)
+            // リモートの本はキャッシュ上で機械的な名前になっているので、
+            // 控えておいた元の名前を優先する
+            val fileName   = names[archive] ?: File(archive).name
+            val (title, _) = fileRepo.parseFileName(fileName)
 
-                HistoryItem(
-                    key         = progress.filePath,
-                    title       = title,
-                    volumeName  = volumeName,
-                    currentPage = progress.currentPage,
-                    totalPages  = progress.totalPages,
-                    lastReadAt  = progress.lastReadAt,
-                    exists      = File(archive).exists()
-                )
-            }
+            HistoryItem(
+                key         = progress.filePath,
+                title       = title,
+                volumeName  = volumeName,
+                currentPage = progress.currentPage,
+                totalPages  = progress.totalPages,
+                lastReadAt  = progress.lastReadAt,
+                exists      = File(archive).exists()
+            )
         }
+    }
         .stateIn(
             scope        = viewModelScope,
             started      = SharingStarted.WhileSubscribed(5_000),

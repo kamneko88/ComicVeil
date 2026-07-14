@@ -12,8 +12,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * version 2：filesテーブルを追加
  */
 @Database(
-    entities = [ReadingProgress::class, ComicFile::class, Bookmark::class],
-    version = 4,
+    entities = [ReadingProgress::class, ComicFile::class, Bookmark::class, FileTitle::class],
+    version = 5,
     exportSchema = false
 )
 abstract class ComicVeilDatabase : RoomDatabase() {
@@ -21,6 +21,7 @@ abstract class ComicVeilDatabase : RoomDatabase() {
     abstract fun readingProgressDao(): ReadingProgressDao
     abstract fun comicFileDao(): ComicFileDao
     abstract fun bookmarkDao(): BookmarkDao
+    abstract fun fileTitleDao(): FileTitleDao
 
     companion object {
 
@@ -66,6 +67,20 @@ abstract class ComicVeilDatabase : RoomDatabase() {
             }
         }
 
+        /** version 4 → 5：file_titlesテーブルを追加（リモートの本の元の名前を覚える） */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `file_titles` (
+                        `filePath`     TEXT NOT NULL PRIMARY KEY,
+                        `originalName` TEXT NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getDatabase(context: Context): ComicVeilDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -73,7 +88,7 @@ abstract class ComicVeilDatabase : RoomDatabase() {
                     ComicVeilDatabase::class.java,
                     "comic_veil_database"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                 INSTANCE = instance
                 instance

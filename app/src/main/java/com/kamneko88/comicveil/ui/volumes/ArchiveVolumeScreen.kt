@@ -20,7 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.SortByAlpha
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
@@ -165,9 +165,10 @@ fun ArchiveVolumeScreen(
                     }
 
                     // 巻の並び順を入れ替える
+                    // （SwapVertはHOMEの「転送状況」で使っているので、別のアイコンにする）
                     IconButton(onClick = { viewModel.toggleSortOrder() }) {
                         Icon(
-                            imageVector        = Icons.Default.SwapVert,
+                            imageVector        = Icons.Default.SortByAlpha,
                             contentDescription = "並び順を入れ替え"
                         )
                     }
