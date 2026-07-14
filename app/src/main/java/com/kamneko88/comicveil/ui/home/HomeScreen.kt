@@ -608,7 +608,7 @@ fun HomeScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator()
                         Spacer(Modifier.height(8.dp))
-                        Text("NASを読み込み中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("リモートサーバーを読み込み中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             } else if (displayMode == com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.SHELF) {
@@ -705,7 +705,7 @@ fun HomeScreen(
                     if (isRoot && nasServers.isNotEmpty()) {
                         item {
                             Text(
-                                text     = "NASサーバー",
+                                text     = "リモートサーバー",
                                 style    = MaterialTheme.typography.labelMedium,
                                 color    = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
@@ -1365,7 +1365,7 @@ fun FileListItem(
             ) {
                 Text(
                     text  = when {
-                        fileItem.isFolder -> if (fileItem.isNas) "NASフォルダ" else "フォルダ"
+                        fileItem.isFolder -> if (fileItem.isNas) "リモートフォルダ" else "フォルダ"
                         else              -> fileItem.extension.uppercase()
                     },
                     style = MaterialTheme.typography.labelSmall,

@@ -693,7 +693,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun startZipStreaming(fileItem: FileItem, destFile: File) {
         val server = fileItem.nasServer ?: run {
-            _nasError.value = "NASサーバー情報がありません"
+            _nasError.value = "リモートサーバー情報がありません"
             return
         }
 
@@ -760,7 +760,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             "nas_${fileItem.nasPath.hashCode()}.$ext"
         )
         val server = fileItem.nasServer ?: run {
-            _nasError.value = "NASサーバー情報がありません"
+            _nasError.value = "リモートサーバー情報がありません"
             return
         }
 
