@@ -144,6 +144,7 @@ fun HomeScreen(
     var selectedPaths      by remember { mutableStateOf(setOf<String>()) }
     var showDeleteConfirm  by remember { mutableStateOf(false) }
     var showSortSheet      by remember { mutableStateOf(false) }
+    var showAboutDialog    by remember { mutableStateOf(false) }
 
     val thumbnailRepository = remember {
         ThumbnailRepository(File(context.cacheDir, "thumbnails"), context)
@@ -231,6 +232,11 @@ fun HomeScreen(
             selectedPaths = emptySet()
             viewModel.navigateUp()
         }
+    }
+
+    // このアプリについて
+    if (showAboutDialog) {
+        AboutDialog(onDismiss = { showAboutDialog = false })
     }
 
     // NASサーバー追加・編集ダイアログ
@@ -533,8 +539,31 @@ fun HomeScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         } else {
-                            IconButton(onClick = { }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "About")
+                            // その他メニュー（閲覧履歴・このアプリについて）
+                            Box {
+                                var showMoreMenu by remember { mutableStateOf(false) }
+                                IconButton(onClick = { showMoreMenu = true }) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = "その他")
+                                }
+                                DropdownMenu(
+                                    expanded         = showMoreMenu,
+                                    onDismissRequest = { showMoreMenu = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text    = { Text("閲覧履歴") },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            navController.navigate("history")
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text    = { Text("このアプリについて") },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            showAboutDialog = true
+                                        }
+                                    )
+                                }
                             }
                             TextButton(onClick = { showAddNasDialog = true }) { Text("リモート") }
 
@@ -845,6 +874,39 @@ fun HomeScreen(
             )
         }
     }
+}
+
+// ─── このアプリについて ───────────────────────────────
+
+@Composable
+fun AboutDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("ComicVeil") },
+        text  = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text  = "バージョン ${com.kamneko88.comicveil.BuildConfig.VERSION_NAME}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text  = "Android向けマンガ・コミックビューワー",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                HorizontalDivider()
+                Text(
+                    text  = "ZIP / RAR / 7z / PDF に対応。リモートサーバー（SMB）の本を、" +
+                            "ダウンロードしながら読めます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("閉じる") }
+        }
+    )
 }
 
 // ─── ファイル情報ポップアップ ─────────────────────────────────────────────────

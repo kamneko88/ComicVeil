@@ -21,6 +21,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.kamneko88.comicveil.ui.home.HomeScreen
+import com.kamneko88.comicveil.ui.history.HistoryScreen
 import com.kamneko88.comicveil.ui.settings.SettingsScreen
 import com.kamneko88.comicveil.ui.theme.ComicVeilTheme
 import com.kamneko88.comicveil.ui.transfer.TransferScreen
@@ -157,6 +158,10 @@ fun ComicVeilApp(intent: Intent? = null) {
                 viewModel = homeViewModel,
                 onClose   = { navController.popBackStack() }
             )
+        }
+
+        composable("history") {
+            HistoryScreen(navController = navController)
         }
 
         composable(

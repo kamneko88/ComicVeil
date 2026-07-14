@@ -18,8 +18,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -34,6 +40,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -42,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import com.kamneko88.comicveil.data.db.ReadStatus
+import com.kamneko88.comicveil.ui.home.AboutDialog
 import com.kamneko88.comicveil.ui.home.ReadStatusBadge
 import java.net.URLEncoder
 
@@ -67,6 +77,12 @@ fun ArchiveVolumeScreen(
     val isLoading        by viewModel.isLoading.collectAsState()
     val volumeStatuses    by viewModel.volumeStatuses.collectAsState()
     val dialogState        by viewModel.dialogState.collectAsState()
+
+    var showAboutDialog by remember { mutableStateOf(false) }
+
+    if (showAboutDialog) {
+        AboutDialog(onDismiss = { showAboutDialog = false })
+    }
 
     LaunchedEffect(Unit) {
         viewModel.navigateEvent.collect { key ->
@@ -113,6 +129,54 @@ fun ArchiveVolumeScreen(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
             )
+        },
+        bottomBar = {
+            BottomAppBar {
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    // その他メニュー（HOMEと同じ中身）
+                    Box {
+                        var showMoreMenu by remember { mutableStateOf(false) }
+                        IconButton(onClick = { showMoreMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "その他")
+                        }
+                        DropdownMenu(
+                            expanded         = showMoreMenu,
+                            onDismissRequest = { showMoreMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text    = { Text("閲覧履歴") },
+                                onClick = {
+                                    showMoreMenu = false
+                                    navController.navigate("history")
+                                }
+                            )
+                            DropdownMenuItem(
+                                text    = { Text("このアプリについて") },
+                                onClick = {
+                                    showMoreMenu    = false
+                                    showAboutDialog = true
+                                }
+                            )
+                        }
+                    }
+
+                    // 巻の並び順を入れ替える
+                    IconButton(onClick = { viewModel.toggleSortOrder() }) {
+                        Icon(
+                            imageVector        = Icons.Default.SwapVert,
+                            contentDescription = "並び順を入れ替え"
+                        )
+                    }
+
+                    IconButton(onClick = { navController.navigate("settings") }) {
+                        Icon(Icons.Default.Settings, contentDescription = "設定")
+                    }
+                }
+            }
         }
     ) { innerPadding ->
         Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {

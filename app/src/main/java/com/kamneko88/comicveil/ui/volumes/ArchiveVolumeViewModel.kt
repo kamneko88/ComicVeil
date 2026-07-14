@@ -115,6 +115,11 @@ class ArchiveVolumeViewModel(
         _dialogState.value = null
     }
 
+    /** 巻の並び順を入れ替える（名前順 ↔ 逆順） */
+    fun toggleSortOrder() {
+        _volumes.value = _volumes.value.reversed()
+    }
+
     companion object {
         fun Factory(application: Application, archivePath: String): ViewModelProvider.Factory {
             return object : ViewModelProvider.Factory {
