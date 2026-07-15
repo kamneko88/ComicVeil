@@ -128,11 +128,18 @@ object ArchiveScanner {
         }
     }
 
-    /** RAR：libarchiveで逐次読み込みして画像エントリ名を収集する（RAR5対応） */
+    /** RAR：バージョンに応じて読み分ける。RAR4はjunrar（日本語名対応）、RAR5はlibarchive。 */
     private fun scanRar(file: File): List<String> {
-        return scanWithLibarchive(file) { archive ->
-            Archive.readSupportFormatRar(archive)
-            Archive.readSupportFormatRar5(archive)
+        val version = RarSupport.detectVersion(file)
+        Log.d("ComicVeil", "RARバージョン判定: $version (${file.name})")
+        return when (version) {
+            // RAR4はjunrar。libarchiveはAndroidで日本語名（UTF-16）を取得できないため。
+            RarVersion.RAR4 -> RarSupport.scanNames(file).filter { isImage(it) }
+            // RAR5（または判定不能）はjunrar非対応なのでlibarchiveで読む
+            else -> scanWithLibarchive(file) { archive ->
+                Archive.readSupportFormatRar(archive)
+                Archive.readSupportFormatRar5(archive)
+            }
         }
     }
 

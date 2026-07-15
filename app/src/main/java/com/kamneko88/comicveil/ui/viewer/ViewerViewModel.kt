@@ -767,12 +767,22 @@ private fun isLibarchivePathnameWarning(e: ArchiveException): Boolean {
     return msg.contains("pathname") && (msg.contains("convert") || msg.contains("locale"))
 }
 
-/** RAR：libarchiveで逐次読み込み（RAR5対応） */
+/** RAR：バージョンに応じて展開する。RAR4はjunrar（日本語名対応）、RAR5はlibarchive。 */
 private fun extractRarProgressive(
     file: File,
     targetEntries: List<com.kamneko88.comicveil.data.ArchiveEntryInfo>,
     pageDir: File
 ) {
+    val version = com.kamneko88.comicveil.data.RarSupport.detectVersion(file)
+    if (version == com.kamneko88.comicveil.data.RarVersion.RAR4) {
+        // RAR4はjunrarで展開（libarchiveはAndroidで日本語名を取得できないため）
+        val written = com.kamneko88.comicveil.data.RarSupport.extractPages(
+            file, targetEntries, pageDir, MAX_PAGE_BYTES
+        )
+        File(pageDir, "complete").writeText(written.toString())
+        return
+    }
+    // RAR5（または判定不能）はlibarchiveで展開
     extractWithLibarchive(file, targetEntries, pageDir, "RAR") { archive ->
         Archive.readSupportFormatRar(archive)
         Archive.readSupportFormatRar5(archive)
