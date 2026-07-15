@@ -28,7 +28,9 @@ data class FileItem(
     val lastModified: Long  = file?.lastModified() ?: 0L,
     // NAS専用フィールド
     val nasServer: NasServer? = null,
-    val nasPath: String       = ""   // 共有フォルダ内の相対パス（/ 区切り）
+    val nasPath: String       = "",  // 共有フォルダ内の相対パス（/ 区切り）
+    /** HOMEに登録したリモートブックマークか（表示でバッジを付けて区別する） */
+    val isRemoteBookmark: Boolean = false
 ) {
     val isComic: Boolean  get() = type == FileItemType.COMIC_FILE
     val isFolder: Boolean get() = type == FileItemType.FOLDER

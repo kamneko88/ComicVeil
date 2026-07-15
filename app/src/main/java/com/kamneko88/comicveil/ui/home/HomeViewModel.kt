@@ -18,6 +18,8 @@ import com.kamneko88.comicveil.data.db.ReadStatus
 import com.kamneko88.comicveil.data.db.ReadingProgressRepository
 import com.kamneko88.comicveil.data.nas.NasServer
 import com.kamneko88.comicveil.data.nas.NasServerPrefs
+import com.kamneko88.comicveil.data.nas.RemoteBookmark
+import com.kamneko88.comicveil.data.nas.RemoteBookmarkPrefs
 import com.kamneko88.comicveil.data.nas.SmbRepository
 import com.kamneko88.comicveil.ui.transfer.TransferViewModel
 import kotlinx.coroutines.Job
@@ -95,6 +97,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val fileTitleDao        : com.kamneko88.comicveil.data.db.FileTitleDao
     private val smbRepository       = SmbRepository()
     private val nasServerPrefs      = NasServerPrefs(application)
+    private val remoteBookmarkPrefs = RemoteBookmarkPrefs(application)
     val appPrefs                    = AppPrefs(application)
     val sortPrefs                   = SortPrefs(application)
 
@@ -129,6 +132,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _nasServers = MutableStateFlow<List<NasServer>>(emptyList())
     val nasServers: StateFlow<List<NasServer>> = _nasServers.asStateFlow()
+
+    /** HOMEに表示するリモートブックマーク（解決済みFileItem） */
+    private val _bookmarks = MutableStateFlow<List<FileItem>>(emptyList())
+    val bookmarks: StateFlow<List<FileItem>> = _bookmarks.asStateFlow()
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -322,6 +329,48 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshNasServers() {
         _nasServers.value = nasServerPrefs.getServers()
+        refreshBookmarks()
+    }
+
+    // ─── リモートブックマーク（HOME登録） ────────────────────
+
+    /** 保存済みブックマークをFileItemに解決する。参照先サーバーがなければ除外する。 */
+    fun refreshBookmarks() {
+        val servers = nasServerPrefs.getServers().associateBy { it.id }
+        _bookmarks.value = remoteBookmarkPrefs.getBookmarks().mapNotNull { bm ->
+            val server = servers[bm.serverId] ?: return@mapNotNull null
+            FileItem.fromNas(
+                name        = bm.name,
+                nasPath     = bm.nasPath,
+                isDirectory = bm.isFolder,
+                size        = 0L,
+                server      = server
+            ).copy(isRemoteBookmark = true)
+        }
+    }
+
+    /** このリモート項目がすでにHOMEに登録されているか */
+    fun isBookmarked(fileItem: FileItem): Boolean {
+        val serverId = fileItem.nasServer?.id ?: return false
+        return remoteBookmarkPrefs.exists(serverId, fileItem.nasPath)
+    }
+
+    /** リモート項目のHOME登録を切り替える（登録↔解除） */
+    fun toggleBookmark(fileItem: FileItem) {
+        val server = fileItem.nasServer ?: return
+        if (remoteBookmarkPrefs.exists(server.id, fileItem.nasPath)) {
+            remoteBookmarkPrefs.removeByTarget(server.id, fileItem.nasPath)
+        } else {
+            remoteBookmarkPrefs.add(
+                RemoteBookmark(
+                    serverId = server.id,
+                    nasPath  = fileItem.nasPath,
+                    name     = fileItem.name,
+                    isFolder = fileItem.isFolder
+                )
+            )
+        }
+        refreshBookmarks()
     }
 
     fun addNasServer(server: NasServer) {

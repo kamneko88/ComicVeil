@@ -30,6 +30,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
@@ -130,6 +132,7 @@ fun HomeScreen(
     val colorLabelFilter  by viewModel.colorLabelFilter.collectAsState()
     val folderOrder       by viewModel.folderOrder.collectAsState()
     val dlSelectedPaths   by viewModel.dlSelectedPaths.collectAsState()
+    val bookmarks         by viewModel.bookmarks.collectAsState()
 
     viewModel.transferViewModel = transferViewModel
 
@@ -145,6 +148,8 @@ fun HomeScreen(
     var showDeleteConfirm  by remember { mutableStateOf(false) }
     var showSortSheet      by remember { mutableStateOf(false) }
     var showAboutDialog    by remember { mutableStateOf(false) }
+    // リモート項目の長押しメニュー対象（HOME登録/解除・情報）
+    var contextTarget      by remember { mutableStateOf<FileItem?>(null) }
 
     val thumbnailRepository = remember {
         ThumbnailRepository(File(context.cacheDir, "thumbnails"), context)
@@ -300,6 +305,56 @@ fun HomeScreen(
             onRatingChange   = { rating -> viewModel.updateRating(info.fileItem, rating) },
             onColorLabelChange = { label -> viewModel.updateColorLabel(info.fileItem, label) },
             onDismiss        = { viewModel.dismissFileInfo() }
+        )
+    }
+
+    // リモート項目の長押しメニュー（HOMEに登録/解除・情報）
+    contextTarget?.let { target ->
+        val alreadyBookmarked = viewModel.isBookmarked(target)
+        AlertDialog(
+            onDismissRequest = { contextTarget = null },
+            title = { Text(target.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            text  = {
+                Column {
+                    if (target.isNas) {
+                        TextButton(
+                            onClick  = {
+                                viewModel.toggleBookmark(target)
+                                contextTarget = null
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                imageVector        = if (alreadyBookmarked) Icons.Default.Bookmark
+                                                     else Icons.Default.BookmarkBorder,
+                                contentDescription = null,
+                                modifier           = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text     = if (alreadyBookmarked) "HOMEから解除" else "HOMEに登録",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                    if (target.isComic) {
+                        TextButton(
+                            onClick  = {
+                                contextTarget = null
+                                viewModel.openFileInfo(target)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Info, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(text = "情報を見る", modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { contextTarget = null }) { Text("閉じる") }
+            }
         )
     }
 
@@ -619,6 +674,38 @@ fun HomeScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(8.dp)
                 ) {
+                    // ブックマーク（HOMEに登録したリモートのフォルダ・本）
+                    if (isRoot && bookmarks.isNotEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Text(
+                                text     = "ブックマーク",
+                                style    = MaterialTheme.typography.labelMedium,
+                                color    = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                            )
+                        }
+                        items(count = bookmarks.size) { index ->
+                            val bm = bookmarks[index]
+                            ShelfFileItem(
+                                fileItem            = bm,
+                                thumbnailRepository = thumbnailRepository,
+                                showTitle           = true,
+                                generateThumbnail   = false,
+                                onClick     = {
+                                    if (bm.isFolder) viewModel.navigateToNas(bm.nasServer!!, bm.nasPath)
+                                    else             viewModel.onComicTapped(bm)
+                                },
+                                onLongClick = { contextTarget = bm }
+                            )
+                        }
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            HorizontalDivider(
+                                thickness = 4.dp,
+                                color     = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        }
+                    }
+
                     // リモートサーバーはタイルにしても意味がないので、横幅いっぱいのリストで表示
                     if (isRoot && nasServers.isNotEmpty()) {
                         item(span = { GridItemSpan(maxLineSpan) }) {
@@ -692,7 +779,12 @@ fun HomeScreen(
                                 isDlSelected        = isDlSelected,
                                 isCached            = isCached,
                                 onClick     = { handleFileClick(fileItem, isEditMode, isNas, isStreamingMode, isSelected, selectedPaths, viewModel, onSelectChange = { selectedPaths = it }) },
-                                onLongClick = { if (!isEditMode && fileItem.isComic) viewModel.openFileInfo(fileItem) }
+                                onLongClick = {
+                                    if (!isEditMode) {
+                                        if (fileItem.isNas) contextTarget = fileItem
+                                        else if (fileItem.isComic) viewModel.openFileInfo(fileItem)
+                                    }
+                                }
                             )
                         }
                     }
@@ -702,6 +794,48 @@ fun HomeScreen(
                     state    = listState,
                     modifier = Modifier.fillMaxSize()
                 ) {
+                    // ブックマーク（HOMEに登録したリモートのフォルダ・本）
+                    if (isRoot && bookmarks.isNotEmpty()) {
+                        item {
+                            Text(
+                                text     = "ブックマーク",
+                                style    = MaterialTheme.typography.labelMedium,
+                                color    = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                            )
+                        }
+                        items(bookmarks) { bm ->
+                            val bmTap: () -> Unit = {
+                                if (bm.isFolder) viewModel.navigateToNas(bm.nasServer!!, bm.nasPath)
+                                else             viewModel.onComicTapped(bm)
+                            }
+                            if (displayMode == com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.COMPACT) {
+                                CompactFileListItem(
+                                    fileItem            = bm,
+                                    thumbnailRepository = thumbnailRepository,
+                                    generateThumbnail   = false,
+                                    onClick     = bmTap,
+                                    onLongClick = { contextTarget = bm }
+                                )
+                            } else {
+                                FileListItem(
+                                    fileItem            = bm,
+                                    thumbnailRepository = thumbnailRepository,
+                                    generateThumbnail   = false,
+                                    onClick     = bmTap,
+                                    onLongClick = { contextTarget = bm }
+                                )
+                            }
+                            HorizontalDivider()
+                        }
+                        item {
+                            HorizontalDivider(
+                                thickness = 4.dp,
+                                color     = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        }
+                    }
+
                     if (isRoot && nasServers.isNotEmpty()) {
                         item {
                             Text(
@@ -780,7 +914,8 @@ fun HomeScreen(
                                     rating              = meta?.rating ?: 0,
                                     colorLabel          = meta?.colorLabel ?: 0,
                                     onClick     = { handleFileClick(fileItem, isEditMode, isNas, isStreamingMode, isSelected, selectedPaths, viewModel, onSelectChange = { selectedPaths = it }) },
-                                    onInfoClick = { if (!isEditMode) viewModel.openFileInfo(fileItem) }
+                                    onInfoClick = { if (!isEditMode) viewModel.openFileInfo(fileItem) },
+                                    onLongClick = { if (!isEditMode && fileItem.isNas) contextTarget = fileItem }
                                 )
                             } else {
                                 CompactFileListItem(
@@ -791,7 +926,8 @@ fun HomeScreen(
                                     isSelected          = isSelected,
                                     isDlSelected        = isDlSelected,
                                     onClick     = { handleFileClick(fileItem, isEditMode, isNas, isStreamingMode, isSelected, selectedPaths, viewModel, onSelectChange = { selectedPaths = it }) },
-                                    onInfoClick = { if (!isEditMode) viewModel.openFileInfo(fileItem) }
+                                    onInfoClick = { if (!isEditMode) viewModel.openFileInfo(fileItem) },
+                                    onLongClick = { if (!isEditMode && fileItem.isNas) contextTarget = fileItem }
                                 )
                             }
                             HorizontalDivider()
@@ -1141,6 +1277,32 @@ fun CachedBadge() {
     }
 }
 
+@Composable
+fun BookmarkBadge() {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .padding(horizontal = 5.dp, vertical = 1.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector        = Icons.Default.Bookmark,
+                contentDescription = null,
+                modifier           = Modifier.size(10.dp),
+                tint               = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            Spacer(Modifier.width(2.dp))
+            Text(
+                text     = "HOME",
+                style    = MaterialTheme.typography.labelSmall,
+                color    = MaterialTheme.colorScheme.onSecondaryContainer,
+                fontSize = 10.sp
+            )
+        }
+    }
+}
+
 // ─── NASサーバーリストアイテム ────────────────────────────────────────────────
 
 @Composable
@@ -1241,26 +1403,31 @@ fun NasServerListItem(
 
 // ─── ファイルリストアイテム ───────────────────────────────────────────────────
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FileListItem(
     fileItem: FileItem,
     thumbnailRepository: ThumbnailRepository,
     onClick: () -> Unit,
     onInfoClick: () -> Unit = {},
+    onLongClick: () -> Unit = {},
     status: ReadStatus = ReadStatus.UNREAD,
     isEditMode: Boolean = false,
     isSelected: Boolean = false,
     isDlSelected: Boolean = false,
     isCached: Boolean = false,
     rating: Int = 0,
-    colorLabel: Int = 0
+    colorLabel: Int = 0,
+    generateThumbnail: Boolean = true
 ) {
     val repository = remember { LocalFileRepository() }
     val (title, author) = remember(fileItem.name) { repository.parseFileName(fileItem.name) }
 
     var thumbnailFile by remember(fileItem.path) { mutableStateOf<File?>(null) }
-    LaunchedEffect(fileItem.path) {
-        thumbnailFile = thumbnailRepository.getOrGenerateThumbnail(fileItem)
+    LaunchedEffect(fileItem.path, generateThumbnail) {
+        if (generateThumbnail) {
+            thumbnailFile = thumbnailRepository.getOrGenerateThumbnail(fileItem)
+        }
     }
 
     val backgroundColor = when {
@@ -1275,7 +1442,7 @@ fun FileListItem(
         modifier          = Modifier
             .fillMaxWidth()
             .background(backgroundColor)
-            .clickable { onClick() },
+            .combinedClickable(onClick = { onClick() }, onLongClick = { onLongClick() }),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // カラーラベル左端ライン
@@ -1377,6 +1544,9 @@ fun FileListItem(
                 if (isCached) {
                     CachedBadge()
                 }
+                if (fileItem.isRemoteBookmark) {
+                    BookmarkBadge()
+                }
             }
             // 更新日
             if (fileItem.lastModified > 0 && !fileItem.isFolder) {
@@ -1453,20 +1623,25 @@ private fun handleFileClick(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CompactFileListItem(
     fileItem: FileItem,
     thumbnailRepository: ThumbnailRepository,
     onClick: () -> Unit,
     onInfoClick: () -> Unit = {},
+    onLongClick: () -> Unit = {},
     status: ReadStatus = ReadStatus.UNREAD,
     isEditMode: Boolean = false,
     isSelected: Boolean = false,
     isDlSelected: Boolean = false,
+    generateThumbnail: Boolean = true
 ) {
     var thumbnailFile by remember(fileItem.path) { mutableStateOf<File?>(null) }
-    LaunchedEffect(fileItem.path) {
-        thumbnailFile = thumbnailRepository.getOrGenerateThumbnail(fileItem)
+    LaunchedEffect(fileItem.path, generateThumbnail) {
+        if (generateThumbnail) {
+            thumbnailFile = thumbnailRepository.getOrGenerateThumbnail(fileItem)
+        }
     }
 
     val backgroundColor = when {
@@ -1479,7 +1654,7 @@ fun CompactFileListItem(
         modifier          = Modifier
             .fillMaxWidth()
             .background(backgroundColor)
-            .clickable { onClick() }
+            .combinedClickable(onClick = { onClick() }, onLongClick = { onLongClick() })
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1538,6 +1713,12 @@ fun CompactFileListItem(
             modifier = Modifier.weight(1f)
         )
 
+        // ブックマークバッジ
+        if (fileItem.isRemoteBookmark) {
+            Spacer(Modifier.width(4.dp))
+            BookmarkBadge()
+        }
+
         // 読書状態バッジ（読書中/既読のみ）
         if (fileItem.isComic && status != ReadStatus.UNREAD) {
             Spacer(Modifier.width(4.dp))
@@ -1578,14 +1759,17 @@ fun ShelfFileItem(
     isEditMode: Boolean = false,
     isSelected: Boolean = false,
     isDlSelected: Boolean = false,
-    isCached: Boolean = false
+    isCached: Boolean = false,
+    generateThumbnail: Boolean = true
 ) {
     val repository = remember { LocalFileRepository() }
     val (title, _) = remember(fileItem.name) { repository.parseFileName(fileItem.name) }
 
     var thumbnailFile by remember(fileItem.path) { mutableStateOf<File?>(null) }
-    LaunchedEffect(fileItem.path) {
-        thumbnailFile = thumbnailRepository.getOrGenerateThumbnail(fileItem)
+    LaunchedEffect(fileItem.path, generateThumbnail) {
+        if (generateThumbnail) {
+            thumbnailFile = thumbnailRepository.getOrGenerateThumbnail(fileItem)
+        }
     }
 
     Column(
@@ -1643,6 +1827,13 @@ fun ShelfFileItem(
             if (isCached) {
                 Box(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
                     CachedBadge()
+                }
+            }
+
+            // ブックマークバッジ（左上）
+            if (fileItem.isRemoteBookmark) {
+                Box(modifier = Modifier.align(Alignment.TopStart).padding(4.dp)) {
+                    BookmarkBadge()
                 }
             }
 
