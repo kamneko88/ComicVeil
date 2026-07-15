@@ -177,6 +177,13 @@ object ArchiveScanner {
                             // 本来EOFで終了すべきところを例外経由で通知してくるケース（並の終了として扱う）
                             isEof = true
                         }
+                        isPathnameConversionWarning(e) -> {
+                            // パス名の文字コード変換警告（UTF-16→端末ロケールへの変換失敗・code=84/EILSEQ）。
+                            // Androidはロケール変換が弱いためこの警告が出るが、ヘッダの読み取り自体は
+                            // 成功しており、pathnameUtf8() ならUTF-8で正しく名前を取得できる。
+                            // 致命的ではないので中断せず続行する（UTF-16BE名のRARが読めない問題の修正）。
+                            Log.w("ComicVeil", "scanパス名変換警告(index=$index, code=${e.code}) 続行します")
+                        }
                         else -> {
                             Log.e("ComicVeil", "スキャン中断(index=$index, code=${e.code}): ${e.message}")
                             isFatal = true
@@ -212,6 +219,19 @@ object ArchiveScanner {
         val fileName = name.substringAfterLast("/")
         if (fileName.startsWith(".") || name.startsWith("__") || name.contains("..")) return false
         return name.substringAfterLast(".").lowercase() in IMAGE_EXTENSIONS
+    }
+
+    /**
+     * libarchiveのパス名変換警告か（UTF-16→端末ロケールへの変換失敗）。
+     * Androidはロケール変換が弱いため、UTF-16で名前を持つRAR/7zでこの警告が出る。
+     * ヘッダの読み取り自体は成功しており、pathnameUtf8()でUTF-8名を取得できるため、
+     * これは致命的エラーではなく続行してよい。
+     * code=84 は EILSEQ（不正なバイト列）。
+     */
+    private fun isPathnameConversionWarning(e: ArchiveException): Boolean {
+        if (e.code == 84) return true
+        val msg = e.message?.lowercase() ?: return false
+        return msg.contains("pathname") && (msg.contains("convert") || msg.contains("locale"))
     }
 
     private fun buildResult(rawNames: List<String>): ArchiveScanResult {

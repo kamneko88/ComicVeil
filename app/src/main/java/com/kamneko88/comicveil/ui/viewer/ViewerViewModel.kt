@@ -701,6 +701,11 @@ private fun extractWithLibarchive(
                     e.message?.contains("eof", ignoreCase = true) == true -> {
                         isEof = true
                     }
+                    isLibarchivePathnameWarning(e) -> {
+                        // パス名の文字コード変換警告（UTF-16→端末ロケール・code=84/EILSEQ）。
+                        // ヘッダは読めており pathnameUtf8() でUTF-8名を取得できるので、中断せず続行する。
+                        Log.w("ComicVeil", "${formatLabel}パス名変換警告(code=${e.code}) 続行します")
+                    }
                     else -> {
                         Log.e("ComicVeil", "${formatLabel}展開中断(code=${e.code}): ${e.message}")
                         isFatal = true
@@ -749,6 +754,17 @@ private fun extractWithLibarchive(
         }
     }
     File(pageDir, "complete").writeText(targetEntries.size.toString())
+}
+
+/**
+ * libarchiveのパス名変換警告か（UTF-16→端末ロケールへの変換失敗）。
+ * Androidはロケール変換が弱いため、UTF-16で名前を持つRARでこの警告が出る。
+ * pathnameUtf8()でUTF-8名を取得できるため致命的ではない。code=84 は EILSEQ。
+ */
+private fun isLibarchivePathnameWarning(e: ArchiveException): Boolean {
+    if (e.code == 84) return true
+    val msg = e.message?.lowercase() ?: return false
+    return msg.contains("pathname") && (msg.contains("convert") || msg.contains("locale"))
 }
 
 /** RAR：libarchiveで逐次読み込み（RAR5対応） */
