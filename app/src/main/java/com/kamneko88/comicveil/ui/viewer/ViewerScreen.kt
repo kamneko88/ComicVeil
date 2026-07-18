@@ -202,6 +202,7 @@ fun ViewerScreen(
     val trimKeepAspect    = appPrefs.trimKeepAspect
     val pageTurnAnimation = appPrefs.pageTurnAnimation
     val spreadGutter      = appPrefs.spreadGutter.percent
+    val splitWidePages    = appPrefs.splitWidePages
 
     // 背景色（ページの周りの色）
     val backgroundColor = when (appPrefs.backgroundColor) {
@@ -440,8 +441,10 @@ fun ViewerScreen(
             // 横長ページ（見開きの1枚絵）を検出して自動で仮想2分割する（見開き分割機能）。
             // 見開き表示がONのときは見開き分割を行わない（見開き表示が優先）。
             val widePages = uiState.widePages
-            val (spreads, pageHalves) = remember(pagerCount, spreadEnabled, spreadCoverSingle, widePages, isReverseLayout) {
-                if (spreadEnabled) {
+            val (spreads, pageHalves) = remember(
+                pagerCount, spreadEnabled, spreadCoverSingle, widePages, isReverseLayout, splitWidePages
+            ) {
+                if (spreadEnabled || !splitWidePages) {
                     val grouped = buildSpreads(pagerCount, spreadEnabled, spreadCoverSingle)
                     grouped to List(grouped.size) { PageHalf.FULL }
                 } else {

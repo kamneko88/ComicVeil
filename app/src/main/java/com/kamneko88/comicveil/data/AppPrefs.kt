@@ -132,6 +132,14 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean(KEY_SPREAD_COVER_SINGLE, true)
         set(value) = prefs.edit().putBoolean(KEY_SPREAD_COVER_SINGLE, value).apply()
 
+    /**
+     * 見開き分割：見開き表示がOFFのとき、横長ページ（見開きの1枚絵）を検出して
+     * 自動で単ページ2枚（右半分→左半分、または左→右）として表示する。
+     */
+    var splitWidePages: Boolean
+        get() = prefs.getBoolean(KEY_SPLIT_WIDE_PAGES, true)
+        set(value) = prefs.edit().putBoolean(KEY_SPLIT_WIDE_PAGES, value).apply()
+
     /** 見開きの綴じ代（左右ページの中央に入れる余白。画像幅に対する割合） */
     enum class SpreadGutter(val percent: Int, val label: String) {
         G1(1, "1%"),
@@ -223,6 +231,7 @@ class AppPrefs(context: Context) {
         private const val KEY_DOUBLE_TAP_ZOOM        = "double_tap_zoom"
         private const val KEY_SPREAD_MODE            = "spread_mode"
         private const val KEY_SPREAD_COVER_SINGLE    = "spread_cover_single"
+        private const val KEY_SPLIT_WIDE_PAGES       = "split_wide_pages"
         private const val KEY_SPREAD_GUTTER          = "spread_gutter"
         private const val KEY_BACKGROUND_COLOR       = "background_color"
         private const val KEY_TRIM_MODE              = "trim_mode"

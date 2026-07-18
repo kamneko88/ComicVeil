@@ -69,6 +69,7 @@ fun SettingsScreen(
     var spreadMode        by remember { mutableStateOf(appPrefs.spreadMode) }
     var spreadCoverSingle by remember { mutableStateOf(appPrefs.spreadCoverSingle) }
     var spreadGutter      by remember { mutableStateOf(appPrefs.spreadGutter) }
+    var splitWidePages    by remember { mutableStateOf(appPrefs.splitWidePages) }
     var trimMode          by remember { mutableStateOf(appPrefs.trimMode) }
     var trimKeepAspect    by remember { mutableStateOf(appPrefs.trimKeepAspect) }
     var backgroundColor   by remember { mutableStateOf(appPrefs.backgroundColor) }
@@ -352,6 +353,17 @@ fun SettingsScreen(
                         }
                     )
                 }
+            } else {
+                Spacer(Modifier.height(8.dp))
+                SettingsSwitchItem(
+                    title       = "見開き分割",
+                    description = "横長ページ（見開きの1枚絵）を検出し、自動で単ページ2枚に分けて表示する",
+                    checked     = splitWidePages,
+                    onCheckedChange = {
+                        splitWidePages          = it
+                        appPrefs.splitWidePages = it
+                    }
+                )
             }
 
             SettingsDivider()
