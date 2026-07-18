@@ -191,6 +191,11 @@ class ViewerViewModel(
                         }
                         else -> _uiState.update { it.copy(isLoading = false) }
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // キャンセルは異常ではない（ViewModel破棄や再読込で普通に起きる）。
+                    // 以前はこれをExceptionでまとめて握りつぶし error="Job was cancelled" を出していたが、
+                    // CancellationExceptionは握りつぶさず再スローするのが正しい。
+                    throw e
                 } catch (e: Exception) {
                     Log.e("ComicVeil", "展開エラー: ${e::class.simpleName}: ${e.message}", e)
                     _uiState.update { it.copy(error = e.message, isLoading = false) }
@@ -644,17 +649,37 @@ private fun extractZipStreaming(
             (System.currentTimeMillis() - lastGrowthAt) < STREAM_STALL_TIMEOUT_MS
     }
 
+    // 【対策・v0.29.x】文字コード不一致への救済（2段構え）。
+    //
+    // ① 7-Zip等は日本語名を「主名欄=CP932 ＋ Unicode拡張フィールド=UTF-8」の形で併記する。
+    //    目次側(ZipFile)は既定で拡張フィールドを読むので正しいUTF-8名を得るが、
+    //    ストリーミング側はこれを読まない設定だったため主名欄(CP932)をUTF-8として解釈し文字化け→全不一致→0ページだった。
+    //    → useUnicodeExtraFields=true にして、ストリーミングでも拡張フィールドのUTF-8名で照合する。
+    //
+    // ② それでも拡張フィールドすら無い最悪ケース向けの保険：
+    //    名前が一致しない画像は「物理的な並び順のN番目＝Nページ目」とみなす。
+    //    （マンガのZIPはほぼ確実にページ順に格納されているため、この前提で正しく並ぶ）
+    val imageExts = setOf("jpg", "jpeg", "png", "webp", "gif", "bmp")
     var written = 0
+    var imagePos = 0
+    var nameMatched = 0
     GrowingFileInputStream(file, isDownloading, info.expectedSize).use { growing ->
-        ZipArchiveInputStream(growing.buffered(), info.charset, false, true).use { zis ->
+        ZipArchiveInputStream(growing.buffered(), info.charset, true, true).use { zis ->
             var entry = zis.nextEntry
             while (entry != null) {
-                val finalIndex = if (!entry.isDirectory) indexByName[entry.name] else null
-                if (finalIndex != null) {
-                    val bytes = readBoundedBytes(zis, entry.size)
-                    if (bytes != null && bytes.isNotEmpty()) {
-                        writePage(pageDir, finalIndex, bytes)
-                        written++
+                if (!entry.isDirectory) {
+                    val isImage = entry.name.substringAfterLast(".", "").lowercase() in imageExts
+                    val byName  = indexByName[entry.name]
+                    if (byName != null) nameMatched++
+                    // 名前が一致すればそれを使う。ダメなら物理順のフォールバック。
+                    val finalIndex = byName ?: if (isImage) imagePos else null
+                    if (isImage) imagePos++
+                    if (finalIndex != null && finalIndex < info.entryNames.size) {
+                        val bytes = readBoundedBytes(zis, entry.size)
+                        if (bytes != null && bytes.isNotEmpty()) {
+                            writePage(pageDir, finalIndex, bytes)
+                            written++
+                        }
                     }
                 }
                 entry = zis.nextEntry
@@ -662,7 +687,10 @@ private fun extractZipStreaming(
         }
     }
 
-    logD("ストリーミング展開: ${written}ページ / 全${info.entryNames.size}ページ")
+    if (nameMatched == 0 && written > 0) {
+        logD("名前不一致のため物理順で${written}ページを復元: ${file.name}")
+    }
+    logD("ストリーミング展開: ${written}ページ / 全${info.entryNames.size}ページ (名前一致=$nameMatched)")
     File(pageDir, "complete").writeText(written.toString())
 }
 
