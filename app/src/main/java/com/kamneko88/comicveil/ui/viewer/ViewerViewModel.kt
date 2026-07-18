@@ -71,7 +71,9 @@ data class ViewerUiState(
     /** ストリーミング中のダウンロード進捗（0.0〜1.0）。通常の開き方のときは null */
     val downloadFraction: Float? = null,
     /** 画面に出すファイル名。リモートの本はキャッシュ名ではなく元の作品名を出す */
-    val displayName: String = ""
+    val displayName: String = "",
+    /** 横長（見開きの1枚絵）と判定済みのページ番号（0始まり）。見開き分割機能で使う */
+    val widePages: Set<Int> = emptySet()
 )
 
 enum class PageLimitEvent { FIRST, LAST }
@@ -193,6 +195,10 @@ class ViewerViewModel(
                         "pdf" -> {
                             logD("展開開始: ${file.name} (${file.length()} bytes)")
                             val pages = extractPdf(file)
+                            val wide = pages.withIndex()
+                                .filter { (_, bytes) -> isWideImageBytes(bytes) }
+                                .map { it.index }
+                                .toSet()
                             _uiState.update {
                                 it.copy(
                                     pages              = pages,
@@ -200,7 +206,8 @@ class ViewerViewModel(
                                     totalPageCount     = pages.size,
                                     isComplete         = true,
                                     isLoading          = false,
-                                    needsPassword      = false
+                                    needsPassword      = false,
+                                    widePages          = wide
                                 )
                             }
                         }
@@ -370,11 +377,22 @@ class ViewerViewModel(
         }
         var firstPageShownAt = 0L
         val start = System.currentTimeMillis()
+        // 見開き分割用：展開済みページの横長判定（ヘッダーだけ読むので軽い）。
+        // 新しく見えたページだけ判定し、一度判定した分は覚えておいて再判定しない。
+        val knownWide = mutableSetOf<Int>()
+        var checkedUpTo = 0
         while (true) {
             val files = pageDir.listFiles { f -> f.name.endsWith(".jpg") && !f.name.startsWith("incoming_") }
                 ?.sortedBy { it.name } ?: emptyList()
             val isComplete = File(pageDir, "complete").exists()
             val filePaths = files.map { it.absolutePath }
+
+            if (files.size > checkedUpTo) {
+                for (i in checkedUpTo until files.size) {
+                    if (isWideImageFile(files[i])) knownWide.add(i)
+                }
+                checkedUpTo = files.size
+            }
 
             if (firstPageShownAt == 0L && filePaths.isNotEmpty()) {
                 firstPageShownAt = System.currentTimeMillis()
@@ -388,7 +406,8 @@ class ViewerViewModel(
                     availablePageCount = filePaths.size,
                     isLoading          = filePaths.isEmpty(),
                     isComplete         = isComplete,
-                    totalPageCount     = knownTotal ?: it.totalPageCount
+                    totalPageCount     = knownTotal ?: it.totalPageCount,
+                    widePages          = knownWide.toSet()
                 )
             }
             if (isComplete) {
@@ -897,6 +916,33 @@ private fun extract7zProgressive(
         src.renameTo(dst)
     }
     File(pageDir, "complete").writeText(targetEntries.size.toString())
+}
+
+// ─── 見開き分割：横長ページ判定 ──────────────────────────────────────────────
+
+/**
+ * 画像ファイルが横長（幅＞高さ＝見開きの1枚絵）かどうかを判定する。
+ * inJustDecodeBounds でヘッダーだけ読むため、ページ全体をデコードするより大幅に軽い。
+ */
+private fun isWideImageFile(file: File): Boolean {
+    return try {
+        val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(file.absolutePath, opts)
+        opts.outWidth > 0 && opts.outHeight > 0 && opts.outWidth > opts.outHeight
+    } catch (e: Exception) {
+        false
+    }
+}
+
+/** バイト列版（PDFページなど、まだファイルに書き出していない画像用） */
+private fun isWideImageBytes(bytes: ByteArray): Boolean {
+    return try {
+        val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+        opts.outWidth > 0 && opts.outHeight > 0 && opts.outWidth > opts.outHeight
+    } catch (e: Exception) {
+        false
+    }
 }
 
 // ─── PDF ─────────────────────────────────────────────────────────────────────

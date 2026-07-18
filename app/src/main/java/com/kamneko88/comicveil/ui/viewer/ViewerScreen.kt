@@ -436,15 +436,26 @@ fun ViewerScreen(
                 else                            -> pages.size
             }.coerceAtLeast(1)
 
-            // 見開きの組（各要素は1ページ or 2ページ）。見開きがOFFなら全て単独ページになる。
-            val spreads = remember(pagerCount, spreadEnabled, spreadCoverSingle) {
-                buildSpreads(pagerCount, spreadEnabled, spreadCoverSingle)
+            // 見開きの組（各要素は1ページ or 2ページ）。見開きがOFFなら、
+            // 横長ページ（見開きの1枚絵）を検出して自動で仮想2分割する（見開き分割機能）。
+            // 見開き表示がONのときは見開き分割を行わない（見開き表示が優先）。
+            val widePages = uiState.widePages
+            val (spreads, pageHalves) = remember(pagerCount, spreadEnabled, spreadCoverSingle, widePages, isReverseLayout) {
+                if (spreadEnabled) {
+                    val grouped = buildSpreads(pagerCount, spreadEnabled, spreadCoverSingle)
+                    grouped to List(grouped.size) { PageHalf.FULL }
+                } else {
+                    buildSplitSpreads(pagerCount, widePages, rightFirst = isReverseLayout)
+                }
             }
-            // ページ番号 → そのページが入っている見開き番号
+            // ページ番号 → そのページが入っている仮想位置（先に現れる方を採用。見開き分割時は「1つ目の半分」になる）
             val spreadOfPage = remember(spreads, pagerCount) {
+                val seen = BooleanArray(pagerCount)
                 IntArray(pagerCount).also { arr ->
                     spreads.forEachIndexed { spreadIdx, pagesInSpread ->
-                        pagesInSpread.forEach { p -> if (p in 0 until pagerCount) arr[p] = spreadIdx }
+                        pagesInSpread.forEach { p ->
+                            if (p in 0 until pagerCount && !seen[p]) { arr[p] = spreadIdx; seen[p] = true }
+                        }
                     }
                 }
             }
@@ -562,6 +573,7 @@ fun ViewerScreen(
                                 trimKeepAspect = trimKeepAspect,
                                 spreadGutter   = spreadGutter,
                                 reverseLayout  = isReverseLayout,
+                                pageHalf       = pageHalves.getOrElse(spreadIndex) { PageHalf.FULL },
                                 onMenuToggle   = { menuVisible = !menuVisible },
                                 onPageLimit    = { viewModel.onPageLimitReached(it) },
                                 isFirst        = spreadIndex == 0,
@@ -1082,7 +1094,8 @@ private fun ZoomablePage(
     onPageLimit: (PageLimitEvent) -> Unit,
     isFirst: Boolean,
     isLast: Boolean,
-    onZoomChanged: (Boolean) -> Unit
+    onZoomChanged: (Boolean) -> Unit,
+    pageHalf: PageHalf = PageHalf.FULL
 ) {
     val scope     = rememberCoroutineScope()
     val context   = LocalContext.current
@@ -1235,23 +1248,22 @@ private fun ZoomablePage(
                 )
         ) {
             ordered.forEachIndexed { i, model ->
-                // 余白削除がONのときは、表示直前に白・黒のフチを切り落とす
-                val request = remember(model, trimMode, trimKeepAspect) {
+                // 余白削除がONのときは表示直前に白・黒のフチを切り落とす。
+                // 見開き分割中（pageHalf != FULL）は、そのあとさらに右半分・左半分だけを切り出す。
+                val request = remember(model, trimMode, trimKeepAspect, pageHalf) {
+                    val transforms = buildList {
+                        when (trimMode) {
+                            com.kamneko88.comicveil.data.AppPrefs.TrimMode.OFF -> {}
+                            com.kamneko88.comicveil.data.AppPrefs.TrimMode.ON ->
+                                add(TrimMarginsTransformation(whiteOnly = false, keepAspect = trimKeepAspect))
+                            com.kamneko88.comicveil.data.AppPrefs.TrimMode.WHITE_ONLY ->
+                                add(TrimMarginsTransformation(whiteOnly = true, keepAspect = trimKeepAspect))
+                        }
+                        if (pageHalf != PageHalf.FULL) add(HalfCropTransformation(pageHalf))
+                    }
                     ImageRequest.Builder(context)
                         .data(model)
-                        .let { builder ->
-                            when (trimMode) {
-                                com.kamneko88.comicveil.data.AppPrefs.TrimMode.OFF -> builder
-                                com.kamneko88.comicveil.data.AppPrefs.TrimMode.ON ->
-                                    builder.transformations(
-                                        TrimMarginsTransformation(whiteOnly = false, keepAspect = trimKeepAspect)
-                                    )
-                                com.kamneko88.comicveil.data.AppPrefs.TrimMode.WHITE_ONLY ->
-                                    builder.transformations(
-                                        TrimMarginsTransformation(whiteOnly = true, keepAspect = trimKeepAspect)
-                                    )
-                            }
-                        }
+                        .let { builder -> if (transforms.isNotEmpty()) builder.transformations(transforms) else builder }
                         .build()
                 }
 
@@ -1318,4 +1330,38 @@ private fun buildSpreads(
         }
     }
     return result
+}
+
+/**
+ * 見開き分割用の仮想ページ列を作る（見開き表示モードがOFFのときだけ使う）。
+ *
+ * 横長ページ（見開きの1枚絵）と判定されたページだけ、表示位置を2つに分ける
+ * （右綴じなら右半分→左半分、左綴じなら左半分→右半分の順）。
+ * 実データ・物理ページ数は一切変えない。栞・読書進捗・スライダー・サムネイルは
+ * これまで通りページ単位のまま扱われる（表示だけ2コマに分けて見せている）。
+ *
+ * @param widePages 横長と判定済みのページ番号の集合（未展開のページはまだ含まれないことがある）
+ * @param rightFirst true なら右半分を先に見せる（右綴じ／マンガ）。false なら左半分から
+ */
+private fun buildSplitSpreads(
+    pageCount: Int,
+    widePages: Set<Int>,
+    rightFirst: Boolean
+): Pair<List<List<Int>>, List<PageHalf>> {
+    val spreads = mutableListOf<List<Int>>()
+    val halves  = mutableListOf<PageHalf>()
+    val order   = if (rightFirst) listOf(PageHalf.RIGHT, PageHalf.LEFT) else listOf(PageHalf.LEFT, PageHalf.RIGHT)
+
+    for (p in 0 until pageCount) {
+        if (p in widePages) {
+            order.forEach { half ->
+                spreads.add(listOf(p))
+                halves.add(half)
+            }
+        } else {
+            spreads.add(listOf(p))
+            halves.add(PageHalf.FULL)
+        }
+    }
+    return spreads to halves
 }
