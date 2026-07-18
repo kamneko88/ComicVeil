@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.data.FileItem
+import com.kamneko88.comicveil.data.ZipStreamSupport
 import com.kamneko88.comicveil.service.TransferService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -109,7 +110,8 @@ object TransferManager {
             nasPath      = fileItem.nasPath,
             server       = server,
             destPath     = destFile.absolutePath,
-            safTargetUri = safTargetUri
+            safTargetUri = safTargetUri,
+            isStreaming  = isStreaming
         )
 
         _items.value = _items.value + item
@@ -163,6 +165,37 @@ object TransferManager {
                 )
             } else item
         }
+    }
+
+    /**
+     * ストリーミング再生用のダウンロードを中止する（本を閉じたときに呼ぶ）。
+     *
+     * ユーザーが意図的に保存しているDLモードの転送は対象外（isStreaming=falseは無視）。
+     * 中途半端なストリーミングキャッシュ（ZIP本体・サイドカー）は再利用できないので破棄する。
+     * 対象が無ければ何もしない（ローカル本を閉じたときなどは安全に素通り）。
+     *
+     * @param destPath ビューワーが読んでいたキャッシュZIPのパス（＝ストリーミングDLの保存先）
+     */
+    fun cancelStreamingByPath(destPath: String) {
+        val item = _items.value.firstOrNull {
+            it.isStreaming && it.destPath == destPath &&
+                (it.status == TransferStatus.TRANSFERRING || it.status == TransferStatus.WAITING)
+        }
+        if (item != null) {
+            if (item.status == TransferStatus.TRANSFERRING) {
+                // 実行中のDLを止める。CancellationExceptionハンドラが不完全ファイルを削除する
+                currentJob?.cancel()
+            } else {
+                // 待機中：キューから外して不完全ファイルを削除
+                updateItem(item.id) {
+                    it.copy(status = TransferStatus.CANCELLED, completedAt = System.currentTimeMillis())
+                }
+                runCatching { File(item.destPath).delete() }
+            }
+            Log.d(TAG, "ストリーミングDLを中止: ${item.fileName}")
+        }
+        // サイドカー(.stream)も破棄しておく（次に開いたとき確実に最初からやり直させる）
+        runCatching { ZipStreamSupport.deleteSidecar(File(destPath)) }
     }
 
     /** 履歴を全て削除（アクティブなアイテムは残す） */

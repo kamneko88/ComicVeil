@@ -25,6 +25,7 @@ enum class TransferStatus {
  * @param server      接続先NASサーバー
  * @param destPath    保存先のローカルパス（アプリキャッシュ内の作業用パス）
  * @param safTargetUri DL保存先がSAFフォルダの場合、コピー先のツリーURI（不要ならnull）
+ * @param isStreaming  ストリーミング再生用の一時DLか（true=本を閉じたら中止して破棄してよい）
  * @param totalBytes  ファイルサイズ（不明時は -1）
  * @param downloadedBytes ダウンロード済みバイト数
  * @param status      転送ステータス
@@ -39,6 +40,7 @@ data class TransferItem(
     val server: NasServer,
     val destPath: String,
     val safTargetUri: String? = null,
+    val isStreaming: Boolean = false,
     val totalBytes: Long = -1L,
     val downloadedBytes: Long = 0L,
     val status: TransferStatus = TransferStatus.WAITING,

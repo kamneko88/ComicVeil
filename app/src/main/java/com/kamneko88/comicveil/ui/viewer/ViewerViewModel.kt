@@ -20,6 +20,7 @@ import com.kamneko88.comicveil.data.db.ComicFileRepository
 import com.kamneko88.comicveil.data.db.ComicVeilDatabase
 import com.kamneko88.comicveil.data.db.ReadStatus
 import com.kamneko88.comicveil.data.db.ReadingProgressRepository
+import com.kamneko88.comicveil.data.nas.TransferManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -95,6 +96,20 @@ class ViewerViewModel(
 
     override fun onCleared() {
         super.onCleared()
+
+        // 本を閉じたら、その本のストリーミング用ダウンロードを中止して中途半端なキャッシュを破棄する。
+        // （「あのシーン何巻だっけ？」と1→2→3巻を開いて閉じるような使い方で、
+        //   読んでいない本のDLが裏で走り続け、次に開く本を順番待ちで待たせるのを防ぐ）
+        // DLモード（ユーザーが意図的に保存中の転送）は TransferManager 側で対象外にしている。
+        val markerIndex = filePath.indexOf(VOLUME_MARKER)
+        val archivePath = if (markerIndex >= 0) filePath.substring(0, markerIndex) else filePath
+        TransferManager.cancelStreamingByPath(archivePath)
+        // 展開途中のページキャッシュも破棄する（完了済みキャッシュには触れない）
+        if (_uiState.value.isProgressiveMode && !_uiState.value.isComplete) {
+            val volume = if (markerIndex >= 0) filePath.substring(markerIndex + VOLUME_MARKER.length) else null
+            runCatching { pageDirFor(File(archivePath), volume).deleteRecursively() }
+        }
+
         val total = maxOf(_uiState.value.pages.size, _uiState.value.totalPageCount)
         if (total == 0) return
         val status = when {
