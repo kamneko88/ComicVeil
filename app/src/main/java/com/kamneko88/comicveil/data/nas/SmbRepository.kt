@@ -6,6 +6,8 @@ import com.hierynomus.mssmb2.SMB2ShareAccess
 import com.hierynomus.smbj.SMBClient
 import com.hierynomus.smbj.auth.AuthenticationContext
 import com.hierynomus.smbj.share.DiskShare
+import com.rapid7.client.dcerpc.mssrvs.ServerService
+import com.rapid7.client.dcerpc.transport.SMBTransportFactories
 import com.kamneko88.comicveil.data.FileItem
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +18,34 @@ import java.io.File
 import java.io.FileOutputStream
 
 class SmbRepository {
+
+    /**
+     * サーバー上の共有フォルダ名の一覧を取得する（登録ダイアログの選択式用）。
+     *
+     * SMB2本体（smbj）だけでは共有一覧を列挙できないため、srvsvc（MSRPC）を使う。
+     * 隠し共有・管理共有（末尾が "$" ＝ IPC$ / C$ / ADMIN$ / print$ など）は除外する。
+     * サーバーがRPCを許可していない場合などは例外を投げる（呼び出し側で手入力にフォールバック）。
+     */
+    suspend fun listShares(host: String, username: String, password: String): List<String> =
+        withContext(Dispatchers.IO) {
+            val client = SMBClient()
+            try {
+                client.connect(host).use { connection ->
+                    val session = connection.authenticate(
+                        AuthenticationContext(username, password.toCharArray(), null)
+                    )
+                    val transport     = SMBTransportFactories.SRVSVC.getTransport(session)
+                    val serverService = ServerService(transport)
+                    serverService.getShares0()
+                        .mapNotNull { it.netName }
+                        .filter { it.isNotBlank() && !it.endsWith("$") }
+                        .distinct()
+                        .sortedBy { it.lowercase() }
+                }
+            } finally {
+                runCatching { client.close() }
+            }
+        }
 
     suspend fun listDirectory(server: NasServer, nasPath: String): List<FileItem> =
         withContext(Dispatchers.IO) {

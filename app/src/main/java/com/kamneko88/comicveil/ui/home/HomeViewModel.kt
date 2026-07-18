@@ -373,6 +373,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         refreshBookmarks()
     }
 
+    /**
+     * サーバーに接続して共有フォルダ名の一覧を取得する（登録ダイアログの選択式用）。
+     * 成功＝接続確認も兼ねる。失敗（未対応・認証エラー等）は Result.failure で返し、呼び出し側で手入力に誘導する。
+     */
+    suspend fun listShares(host: String, username: String, password: String): Result<List<String>> =
+        withContext(Dispatchers.IO) {
+            runCatching { smbRepository.listShares(host.trim(), username.trim(), password) }
+        }
+
     fun addNasServer(server: NasServer) {
         nasServerPrefs.saveServer(server)
         refreshNasServers()

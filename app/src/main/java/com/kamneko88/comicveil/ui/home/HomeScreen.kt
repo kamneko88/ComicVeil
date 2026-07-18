@@ -253,6 +253,7 @@ fun HomeScreen(
                 showAddNasDialog = false
                 editingServer = null
             },
+            onListShares = { host, user, pass -> viewModel.listShares(host, user, pass) },
             editServer = editingServer
         )
     }

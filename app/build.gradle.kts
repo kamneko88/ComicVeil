@@ -12,8 +12,8 @@ android {
         applicationId = "com.kamneko88.comicveil"
         minSdk = 26
         targetSdk = 36
-        versionCode = 48
-        versionName = "0.29.2"
+        versionCode = 49
+        versionName = "0.30.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -89,6 +89,9 @@ dependencies {
 
     // SMB接続（NASアクセス）
     implementation("com.hierynomus:smbj:0.13.0")
+
+    // SMBの共有フォルダ一覧取得（srvsvc/MSRPC）。smbjは上の明示指定(0.13.0)が優先される
+    implementation("com.rapid7.client:dcerpc:0.12.13")
 
     // SAF（Storage Access Framework）でのフォルダ操作用
     implementation("androidx.documentfile:documentfile:1.0.1")
