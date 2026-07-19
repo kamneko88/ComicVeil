@@ -60,7 +60,8 @@ import com.composables.icons.lucide.BookOpen
 import com.composables.icons.lucide.Bookmark
 import com.composables.icons.lucide.GalleryHorizontal
 import com.composables.icons.lucide.Lock
-import com.composables.icons.lucide.LockOpen
+import com.composables.icons.lucide.RotateCcw
+import com.composables.icons.lucide.Smartphone
 import com.composables.icons.lucide.Settings
 import com.composables.icons.lucide.Sun
 import com.composables.icons.lucide.SunDim
@@ -911,11 +912,29 @@ fun ViewerScreen(
                                             if (orientationLocked) ActivityInfo.SCREEN_ORIENTATION_LOCKED
                                             else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                                     }) {
-                                        Icon(
-                                            imageVector = if (orientationLocked) Lucide.Lock else Lucide.LockOpen,
-                                            contentDescription = "画面の向きをロック",
-                                            tint = if (orientationLocked) Color.Yellow else Color.White
-                                        )
+                                        // スマホ本体アイコン＋右下に小さく回転矢印（解除中）／鍵（ロック中）のバッジを重ねる
+                                        Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector        = Lucide.Smartphone,
+                                                contentDescription = "画面の向きをロック",
+                                                tint               = if (orientationLocked) Color.Yellow else Color.White,
+                                                modifier           = Modifier.fillMaxSize()
+                                            )
+                                            Box(
+                                                modifier = Modifier
+                                                    .align(Alignment.BottomEnd)
+                                                    .size(14.dp)
+                                                    .background(Color.Black.copy(alpha = 0.85f), CircleShape),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector        = if (orientationLocked) Lucide.Lock else Lucide.RotateCcw,
+                                                    contentDescription = null,
+                                                    tint               = if (orientationLocked) Color.Yellow else Color.White,
+                                                    modifier           = Modifier.size(9.dp)
+                                                )
+                                            }
+                                        }
                                     }
                                     IconButton(onClick = onOpenSettings) {
                                         Icon(Lucide.Settings, contentDescription = "設定", tint = Color.White)

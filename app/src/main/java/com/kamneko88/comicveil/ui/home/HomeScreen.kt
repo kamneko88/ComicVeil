@@ -49,6 +49,8 @@ import com.composables.icons.lucide.Star
 import com.composables.icons.lucide.ArrowUpDown
 import com.composables.icons.lucide.Wifi
 import com.composables.icons.lucide.SquarePen
+import com.composables.icons.lucide.ArrowUp
+import com.composables.icons.lucide.ArrowDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.BottomSheetDefaults
@@ -499,13 +501,17 @@ fun HomeScreen(
                             Icon(Lucide.Search, contentDescription = "検索")
                         }
                         // ソートボタン：現在のキーと昇降順を表示
-                        val sortLabel = sortKey.label + if (ascending) " ▲" else " ▼"
                         val hasFilter = viewModel.hasActiveFilter
                         TextButton(onClick = { showSortSheet = true }) {
-                            Text(
-                                text  = sortLabel,
-                                color = if (hasFilter) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.onSurface
+                            val sortColor = if (hasFilter) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurface
+                            Text(text = sortKey.label, color = sortColor)
+                            Spacer(Modifier.width(2.dp))
+                            Icon(
+                                imageVector        = if (ascending) Lucide.ArrowUp else Lucide.ArrowDown,
+                                contentDescription = if (ascending) "昇順" else "降順",
+                                tint               = sortColor,
+                                modifier           = Modifier.size(16.dp)
                             )
                         }
                         IconButton(onClick = {
@@ -1910,12 +1916,16 @@ fun SortFilterSheet(
                 FilterChip(
                     selected = isSelected,
                     onClick  = { onSortKey(key) },
-                    label    = {
-                        Text(
-                            text = key.label +
-                                if (isSelected) (if (ascending) " ▲" else " ▼") else ""
-                        )
-                    }
+                    label    = { Text(key.label) },
+                    trailingIcon = if (isSelected) {
+                        {
+                            Icon(
+                                imageVector        = if (ascending) Lucide.ArrowUp else Lucide.ArrowDown,
+                                contentDescription = if (ascending) "昇順" else "降順",
+                                modifier           = Modifier.size(16.dp)
+                            )
+                        }
+                    } else null
                 )
             }
         }

@@ -43,11 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import com.kamneko88.comicveil.BuildConfig
 import com.kamneko88.comicveil.data.AppPrefs
-import com.kamneko88.comicveil.data.LibarchivePoc
 import com.kamneko88.comicveil.ui.home.HomeViewModel
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -118,42 +114,6 @@ fun SettingsScreen(
     var showClearNasDialog       by remember { mutableStateOf(false) }
     var showClearThumbnailDialog by remember { mutableStateOf(false) }
 
-    // ── libarchive PoC（検証用・後で削除） ─────────────────────────────
-    val coroutineScope = rememberCoroutineScope()
-    var libarchivePocRunning by remember { mutableStateOf(false) }
-    var libarchivePocResult  by remember { mutableStateOf<String?>(null) }
-    val libarchivePocLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            libarchivePocRunning = true
-            coroutineScope.launch {
-                val result = withContext(Dispatchers.IO) {
-                    LibarchivePoc.testArchive(context, uri)
-                }
-                libarchivePocRunning = false
-                libarchivePocResult  = result
-            }
-        }
-    }
-
-    libarchivePocResult?.let { result ->
-        AlertDialog(
-            onDismissRequest = { libarchivePocResult = null },
-            title = { Text("libarchive PoC 結果") },
-            text  = {
-                Text(
-                    text = result,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.verticalScroll(rememberScrollState())
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { libarchivePocResult = null }) { Text("閉じる") }
-            }
-        )
-    }
-
     if (showClearNasDialog) {
         AlertDialog(
             onDismissRequest = { showClearNasDialog = false },
@@ -215,9 +175,9 @@ fun SettingsScreen(
             Spacer(Modifier.height(16.dp))
 
             // ════════════════════════════════════════════════════
-            // 📖 読む
+            // 読む
             // ════════════════════════════════════════════════════
-            SettingsSectionHeader("📖  読む")
+            SettingsSectionHeader("読む")
 
             // ── ページ送り方向 ─────────────────────────────────
             SettingsItemHeader(
@@ -433,9 +393,9 @@ fun SettingsScreen(
             Spacer(Modifier.height(24.dp))
 
             // ════════════════════════════════════════════════════
-            // 🗂️ ファイル・フォルダ
+            // ファイル・フォルダ
             // ════════════════════════════════════════════════════
-            SettingsSectionHeader("🗂️  ファイル・フォルダ")
+            SettingsSectionHeader("ファイル・フォルダ")
 
             // ── Homeフォルダ ───────────────────────────────────
             SettingsItemHeader(
@@ -490,9 +450,9 @@ fun SettingsScreen(
             Spacer(Modifier.height(24.dp))
 
             // ════════════════════════════════════════════════════
-            // 🗄️ キャッシュ管理
+            // キャッシュ管理
             // ════════════════════════════════════════════════════
-            SettingsSectionHeader("🗄️  キャッシュ管理")
+            SettingsSectionHeader("キャッシュ管理")
 
             SettingsCacheItem(
                 title    = "STRキャッシュ",
@@ -507,30 +467,6 @@ fun SettingsScreen(
                 size     = thumbnailCacheSize,
                 onClear  = { showClearThumbnailDialog = true }
             )
-
-            // ════════════════════════════════════════════════════
-            // 🧪 libarchive PoC（検証用・後で削除）
-            // ════════════════════════════════════════════════════
-            Spacer(Modifier.height(24.dp))
-            SettingsSectionHeader("🧪  libarchive PoC（RAR5検証用）")
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-                    Text("RAR5ファイルを選んでlibarchiveで読む", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        text  = if (libarchivePocRunning) "実行中..." else "タップしてファイルを選択",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                OutlinedButton(
-                    onClick  = { libarchivePocLauncher.launch(arrayOf("*/*")) },
-                    enabled  = !libarchivePocRunning
-                ) { Text("選択") }
-            }
 
             // ════════════════════════════════════════════════════
             // ℹ️ バージョン情報
