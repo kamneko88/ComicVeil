@@ -12,8 +12,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.ArrowLeft
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -196,7 +196,7 @@ fun SettingsScreen(
                 title = { Text("設定") },
                 navigationIcon = {
                     IconButton(onClick = onClose) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "閉じる")
+                        Icon(Lucide.ArrowLeft, contentDescription = "閉じる")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

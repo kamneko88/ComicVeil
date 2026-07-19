@@ -54,21 +54,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.MenuBook
-import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.filled.BookmarkBorder
-import androidx.compose.material.icons.filled.Brightness4
-import androidx.compose.material.icons.filled.Brightness7
-import androidx.compose.material.icons.filled.BrightnessHigh
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.ScreenLockRotation
-import androidx.compose.material.icons.filled.ScreenRotation
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.ViewCarousel
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.BookOpen
+import com.composables.icons.lucide.Bookmark
+import com.composables.icons.lucide.GalleryHorizontal
+import com.composables.icons.lucide.Lock
+import com.composables.icons.lucide.LockOpen
+import com.composables.icons.lucide.Settings
+import com.composables.icons.lucide.Sun
+import com.composables.icons.lucide.SunDim
+import com.composables.icons.lucide.SunMedium
+import com.composables.icons.lucide.Trash2
+import com.composables.icons.lucide.Eye
+import com.composables.icons.lucide.EyeOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -376,8 +375,8 @@ fun ViewerScreen(
                             trailingIcon  = {
                                 IconButton(onClick = { showPassword = !showPassword }) {
                                     Icon(
-                                        imageVector = if (showPassword) Icons.Default.VisibilityOff
-                                                      else Icons.Default.Visibility,
+                                        imageVector = if (showPassword) Lucide.EyeOff
+                                                      else Lucide.Eye,
                                         contentDescription = if (showPassword) "隠す" else "表示"
                                     )
                                 }
@@ -660,7 +659,7 @@ fun ViewerScreen(
                                                 Spacer(modifier = Modifier.width(12.dp))
                                                 Text(text = "${bookmark.page + 1}ページ", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                                                 IconButton(onClick = { viewModel.deleteBookmark(bookmark.page) }) {
-                                                    Icon(Icons.Default.Delete, contentDescription = "削除", tint = MaterialTheme.colorScheme.error)
+                                                    Icon(Lucide.Trash2, contentDescription = "削除", tint = MaterialTheme.colorScheme.error)
                                                 }
                                             }
                                             HorizontalDivider()
@@ -692,7 +691,7 @@ fun ViewerScreen(
                                 .fillMaxWidth(0.85f)
                                 .height(52.dp)
                         ) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                            Icon(Lucide.ArrowLeft, contentDescription = null)
                             Text(text = "  本を閉じる", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         }
                     }
@@ -736,7 +735,7 @@ fun ViewerScreen(
                                         .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(24.dp))
                                         .padding(horizontal = 16.dp, vertical = 4.dp)
                                 ) {
-                                    Icon(Icons.Default.Brightness4, contentDescription = null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                                    Icon(Lucide.SunDim, contentDescription = null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
                                     Slider(
                                         value = brightness,
                                         onValueChange = {
@@ -747,7 +746,7 @@ fun ViewerScreen(
                                         valueRange = 0.01f..1f,
                                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                                     )
-                                    Icon(Icons.Default.BrightnessHigh, contentDescription = null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                                    Icon(Lucide.Sun, contentDescription = null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
                                 }
                             }
 
@@ -862,14 +861,14 @@ fun ViewerScreen(
                                 ) {
                                     IconButton(onClick = { showBookmarkList = true }) {
                                         Icon(
-                                            Icons.AutoMirrored.Filled.MenuBook,
+                                            Lucide.BookOpen,
                                             contentDescription = "ブックマーク一覧",
                                             tint = if (uiState.bookmarks.isNotEmpty()) Color(0xFFFFD700) else Color.White
                                         )
                                     }
                                     IconButton(onClick = { viewModel.toggleBookmark(currentPageIndex) }) {
                                         Icon(
-                                            if (uiState.isCurrentPageBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                            Lucide.Bookmark,
                                             contentDescription = "このページをブックマーク",
                                             tint = if (uiState.isCurrentPageBookmarked) Color(0xFFFFD700) else Color.White
                                         )
@@ -879,7 +878,7 @@ fun ViewerScreen(
                                         if (showPageStrip) showBrightnessSlider = false
                                     }) {
                                         Icon(
-                                            Icons.Default.ViewCarousel,
+                                            Lucide.GalleryHorizontal,
                                             contentDescription = "ページ移動",
                                             tint = if (showPageStrip) Color.Yellow else Color.White
                                         )
@@ -898,9 +897,9 @@ fun ViewerScreen(
                                     }) {
                                         Icon(
                                             imageVector = when {
-                                                brightness < 0.33f -> Icons.Default.Brightness4
-                                                brightness < 0.66f -> Icons.Default.Brightness7
-                                                else               -> Icons.Default.BrightnessHigh
+                                                brightness < 0.33f -> Lucide.SunDim
+                                                brightness < 0.66f -> Lucide.SunMedium
+                                                else               -> Lucide.Sun
                                             },
                                             contentDescription = "明るさ",
                                             tint = if (showBrightnessSlider) Color.Yellow else Color.White
@@ -913,13 +912,13 @@ fun ViewerScreen(
                                             else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                                     }) {
                                         Icon(
-                                            imageVector = if (orientationLocked) Icons.Default.ScreenLockRotation else Icons.Default.ScreenRotation,
+                                            imageVector = if (orientationLocked) Lucide.Lock else Lucide.LockOpen,
                                             contentDescription = "画面の向きをロック",
                                             tint = if (orientationLocked) Color.Yellow else Color.White
                                         )
                                     }
                                     IconButton(onClick = onOpenSettings) {
-                                        Icon(Icons.Default.Settings, contentDescription = "設定", tint = Color.White)
+                                        Icon(Lucide.Settings, contentDescription = "設定", tint = Color.White)
                                     }
                                 }
                             }

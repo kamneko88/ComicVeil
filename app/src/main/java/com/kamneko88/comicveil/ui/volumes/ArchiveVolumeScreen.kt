@@ -15,12 +15,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SortByAlpha
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.Folder
+import com.composables.icons.lucide.EllipsisVertical
+import com.composables.icons.lucide.Settings
+import com.composables.icons.lucide.ArrowDownAZ
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
@@ -122,7 +122,7 @@ fun ArchiveVolumeScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onClose) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "閉じる")
+                        Icon(Lucide.ArrowLeft, contentDescription = "閉じる")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -141,7 +141,7 @@ fun ArchiveVolumeScreen(
                     Box {
                         var showMoreMenu by remember { mutableStateOf(false) }
                         IconButton(onClick = { showMoreMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "その他")
+                            Icon(Lucide.EllipsisVertical, contentDescription = "その他")
                         }
                         DropdownMenu(
                             expanded         = showMoreMenu,
@@ -168,13 +168,13 @@ fun ArchiveVolumeScreen(
                     // （SwapVertはHOMEの「転送状況」で使っているので、別のアイコンにする）
                     IconButton(onClick = { viewModel.toggleSortOrder() }) {
                         Icon(
-                            imageVector        = Icons.Default.SortByAlpha,
+                            imageVector        = Lucide.ArrowDownAZ,
                             contentDescription = "並び順を入れ替え"
                         )
                     }
 
                     IconButton(onClick = { navController.navigate("settings") }) {
-                        Icon(Icons.Default.Settings, contentDescription = "設定")
+                        Icon(Lucide.Settings, contentDescription = "設定")
                     }
                 }
             }
@@ -197,7 +197,7 @@ fun ArchiveVolumeScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                imageVector        = Icons.Default.Folder,
+                                imageVector        = Lucide.Folder,
                                 contentDescription = null,
                                 modifier           = Modifier.size(32.dp),
                                 tint               = MaterialTheme.colorScheme.primary

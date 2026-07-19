@@ -27,29 +27,28 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.filled.BookmarkBorder
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CheckBox
-import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.MenuBook
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
-import androidx.compose.material.icons.filled.SwapVert
-import androidx.compose.material.icons.filled.Wifi
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.List
+import com.composables.icons.lucide.Bookmark
+import com.composables.icons.lucide.Check
+import com.composables.icons.lucide.SquareCheck
+import com.composables.icons.lucide.Square
+import com.composables.icons.lucide.Trash2
+import com.composables.icons.lucide.Server
+import com.composables.icons.lucide.Download
+import com.composables.icons.lucide.Folder
+import com.composables.icons.lucide.LayoutGrid
+import com.composables.icons.lucide.Info
+import com.composables.icons.lucide.File
+import com.composables.icons.lucide.BookOpen
+import com.composables.icons.lucide.EllipsisVertical
+import com.composables.icons.lucide.Search
+import com.composables.icons.lucide.Settings
+import com.composables.icons.lucide.Star
+import com.composables.icons.lucide.ArrowUpDown
+import com.composables.icons.lucide.Wifi
+import com.composables.icons.lucide.SquarePen
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.BottomSheetDefaults
@@ -326,8 +325,7 @@ fun HomeScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(
-                                imageVector        = if (alreadyBookmarked) Icons.Default.Bookmark
-                                                     else Icons.Default.BookmarkBorder,
+                                imageVector        = Lucide.Bookmark,
                                 contentDescription = null,
                                 modifier           = Modifier.size(18.dp)
                             )
@@ -346,7 +344,7 @@ fun HomeScreen(
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.Info, null, Modifier.size(18.dp))
+                            Icon(Lucide.Info, null, Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
                             Text(text = "情報を見る", modifier = Modifier.weight(1f))
                         }
@@ -440,7 +438,7 @@ fun HomeScreen(
                                     ),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
+                                Icon(Lucide.ArrowLeft, contentDescription = "戻る")
                             }
                             DropdownMenu(
                                 expanded         = showNavMenu,
@@ -498,7 +496,7 @@ fun HomeScreen(
                         }) { Text("完了") }
                     } else {
                         IconButton(onClick = { }) {
-                            Icon(Icons.Default.Search, contentDescription = "検索")
+                            Icon(Lucide.Search, contentDescription = "検索")
                         }
                         // ソートボタン：現在のキーと昇降順を表示
                         val sortLabel = sortKey.label + if (ascending) " ▲" else " ▼"
@@ -525,19 +523,21 @@ fun HomeScreen(
                             Icon(
                                 imageVector = when (displayMode) {
                                     com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.DETAIL  ->
-                                        Icons.AutoMirrored.Filled.List
+                                        Lucide.List
                                     com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.COMPACT ->
-                                        Icons.Default.GridView
+                                        Lucide.LayoutGrid
                                     com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.SHELF   ->
-                                        Icons.Default.MenuBook
+                                        Lucide.BookOpen
                                 },
                                 contentDescription = "表示切替"
                             )
                         }
-                        TextButton(onClick = {
+                        IconButton(onClick = {
                             isEditMode    = true
                             selectedPaths = emptySet()
-                        }) { Text("編集") }
+                        }) {
+                            Icon(Lucide.SquarePen, contentDescription = "編集")
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -560,7 +560,7 @@ fun HomeScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(
-                                imageVector        = Icons.Default.Download,
+                                imageVector        = Lucide.Download,
                                 contentDescription = null,
                                 modifier           = Modifier.size(18.dp)
                             )
@@ -583,7 +583,7 @@ fun HomeScreen(
                                 enabled = hasSelection
                             ) {
                                 Icon(
-                                    Icons.Default.Delete,
+                                    Lucide.Trash2,
                                     contentDescription = "削除",
                                     tint = if (hasSelection) MaterialTheme.colorScheme.error
                                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
@@ -599,7 +599,7 @@ fun HomeScreen(
                             Box {
                                 var showMoreMenu by remember { mutableStateOf(false) }
                                 IconButton(onClick = { showMoreMenu = true }) {
-                                    Icon(Icons.Default.MoreVert, contentDescription = "その他")
+                                    Icon(Lucide.EllipsisVertical, contentDescription = "その他")
                                 }
                                 DropdownMenu(
                                     expanded         = showMoreMenu,
@@ -621,14 +621,16 @@ fun HomeScreen(
                                     )
                                 }
                             }
-                            TextButton(onClick = { showAddNasDialog = true }) { Text("リモート") }
+                            IconButton(onClick = { showAddNasDialog = true }) {
+                                Icon(Lucide.Server, contentDescription = "リモート")
+                            }
 
                             if (isNas) {
                                 IconButton(onClick = { viewModel.toggleMode() }) {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                         Icon(
-                                            imageVector        = if (isStreamingMode) Icons.Default.Wifi
-                                            else Icons.Default.Download,
+                                            imageVector        = if (isStreamingMode) Lucide.Wifi
+                                            else Lucide.Download,
                                             contentDescription = null,
                                             modifier           = Modifier.size(18.dp),
                                             tint               = if (isStreamingMode) MaterialTheme.colorScheme.primary
@@ -646,10 +648,10 @@ fun HomeScreen(
                             }
 
                             IconButton(onClick = { viewModel.openTransferScreen() }) {
-                                Icon(Icons.Default.SwapVert, contentDescription = "転送状況")
+                                Icon(Lucide.ArrowUpDown, contentDescription = "転送状況")
                             }
                             IconButton(onClick = { navController.navigate("settings") }) {
-                                Icon(Icons.Default.Settings, contentDescription = "設定")
+                                Icon(Lucide.Settings, contentDescription = "設定")
                             }
                         }
                     }
@@ -1127,10 +1129,7 @@ fun FileInfoDialog(
                             modifier = Modifier.size(32.dp)
                         ) {
                             Icon(
-                                imageVector = if (star <= info.rating)
-                                    androidx.compose.material.icons.Icons.Default.Star
-                                else
-                                    androidx.compose.material.icons.Icons.Default.StarBorder,
+                                imageVector = Lucide.Star,
                                 contentDescription = "star$star",
                                 tint = if (star <= info.rating)
                                     Color(0xFFFFD700)
@@ -1172,7 +1171,7 @@ fun FileInfoDialog(
                         ) {
                             if (isSelected) {
                                 Icon(
-                                    imageVector        = androidx.compose.material.icons.Icons.Default.Check,
+                                    imageVector        = Lucide.Check,
                                     contentDescription = label.label,
                                     tint               = if (label == ColorLabel.NONE)
                                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -1288,7 +1287,7 @@ fun BookmarkBadge() {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                imageVector        = Icons.Default.Bookmark,
+                imageVector        = Lucide.Bookmark,
                 contentDescription = null,
                 modifier           = Modifier.size(10.dp),
                 tint               = MaterialTheme.colorScheme.onSecondaryContainer
@@ -1350,8 +1349,8 @@ fun NasServerListItem(
         // 編集モード時はチェックボックスを表示
         if (isEditMode) {
             Icon(
-                imageVector        = if (isSelected) Icons.Default.CheckBox
-                                     else Icons.Default.CheckBoxOutlineBlank,
+                imageVector        = if (isSelected) Lucide.SquareCheck
+                                     else Lucide.Square,
                 contentDescription = null,
                 modifier           = Modifier.size(24.dp).padding(end = 4.dp),
                 tint               = if (isSelected) MaterialTheme.colorScheme.primary
@@ -1359,7 +1358,7 @@ fun NasServerListItem(
             )
         }
         Icon(
-            imageVector        = Icons.Default.Dns,
+            imageVector        = Lucide.Server,
             contentDescription = null,
             modifier           = Modifier.size(40.dp),
             tint               = MaterialTheme.colorScheme.primary
@@ -1380,7 +1379,7 @@ fun NasServerListItem(
         Box {
             IconButton(onClick = { showMenu = true }) {
                 Icon(
-                    Icons.Default.MoreVert,
+                    Lucide.EllipsisVertical,
                     contentDescription = "メニュー",
                     tint               = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1460,8 +1459,8 @@ fun FileListItem(
         // 編集モード時：チェックボックス
         if (isEditMode) {
             Icon(
-                imageVector        = if (isSelected) Icons.Default.CheckBox
-                                     else Icons.Default.CheckBoxOutlineBlank,
+                imageVector        = if (isSelected) Lucide.SquareCheck
+                                     else Lucide.Square,
                 contentDescription = null,
                 modifier           = Modifier
                     .padding(start = 4.dp)
@@ -1491,8 +1490,8 @@ fun FileListItem(
             } else {
                 Icon(
                     imageVector        = when (fileItem.type) {
-                        FileItemType.FOLDER -> Icons.Default.Folder
-                        else                -> Icons.Default.InsertDriveFile
+                        FileItemType.FOLDER -> Lucide.Folder
+                        else                -> Lucide.File
                     },
                     contentDescription = null,
                     modifier           = Modifier.size(32.dp),
@@ -1568,7 +1567,7 @@ fun FileListItem(
             ) {
                 (1..rating).forEach { _ ->
                     Icon(
-                        imageVector        = Icons.Default.Star,
+                        imageVector        = Lucide.Star,
                         contentDescription = null,
                         tint               = Color(0xFFFFD700),
                         modifier           = Modifier.size(10.dp)
@@ -1581,7 +1580,7 @@ fun FileListItem(
         if (fileItem.isComic) {
             IconButton(onClick = onInfoClick) {
                 Icon(
-                    imageVector        = Icons.Default.Info,
+                    imageVector        = Lucide.Info,
                     contentDescription = "ファイル情報",
                     modifier           = Modifier.size(20.dp),
                     tint               = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1662,8 +1661,8 @@ fun CompactFileListItem(
         // 編集モード：チェックボックス
         if (isEditMode) {
             Icon(
-                imageVector        = if (isSelected) Icons.Default.CheckBox
-                                     else Icons.Default.CheckBoxOutlineBlank,
+                imageVector        = if (isSelected) Lucide.SquareCheck
+                                     else Lucide.Square,
                 contentDescription = null,
                 modifier           = Modifier.size(20.dp).padding(end = 4.dp),
                 tint               = if (isSelected) MaterialTheme.colorScheme.primary
@@ -1689,8 +1688,8 @@ fun CompactFileListItem(
             } else {
                 Icon(
                     imageVector        = when (fileItem.type) {
-                        FileItemType.FOLDER -> Icons.Default.Folder
-                        else                -> Icons.Default.InsertDriveFile
+                        FileItemType.FOLDER -> Lucide.Folder
+                        else                -> Lucide.File
                     },
                     contentDescription = null,
                     modifier           = Modifier.size(24.dp),
@@ -1730,7 +1729,7 @@ fun CompactFileListItem(
         if (fileItem.isComic) {
             IconButton(onClick = onInfoClick, modifier = Modifier.size(32.dp)) {
                 Icon(
-                    imageVector        = Icons.Default.Info,
+                    imageVector        = Lucide.Info,
                     contentDescription = "ファイル情報",
                     modifier           = Modifier.size(16.dp),
                     tint               = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1793,7 +1792,7 @@ fun ShelfFileItem(
                 // フォルダは表紙がないのでアイコンを中央に
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector        = Icons.Default.Folder,
+                        imageVector        = Lucide.Folder,
                         contentDescription = null,
                         modifier           = Modifier.size(48.dp),
                         tint               = MaterialTheme.colorScheme.primary
@@ -1809,7 +1808,7 @@ fun ShelfFileItem(
             } else {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector        = Icons.Default.InsertDriveFile,
+                        imageVector        = Lucide.File,
                         contentDescription = null,
                         modifier           = Modifier.size(36.dp),
                         tint               = MaterialTheme.colorScheme.secondary
@@ -1851,8 +1850,8 @@ fun ShelfFileItem(
             // 編集モード：チェック（右下）
             if (isEditMode) {
                 Icon(
-                    imageVector        = if (isSelected) Icons.Default.CheckBox
-                                         else Icons.Default.CheckBoxOutlineBlank,
+                    imageVector        = if (isSelected) Lucide.SquareCheck
+                                         else Lucide.Square,
                     contentDescription = null,
                     modifier           = Modifier
                         .align(Alignment.BottomEnd)
@@ -2012,7 +2011,7 @@ fun SortFilterSheet(
                         ) {
                             if (isSelected) {
                                 Icon(
-                                    imageVector        = Icons.Default.Check,
+                                    imageVector        = Lucide.Check,
                                     contentDescription = label.label,
                                     tint               = Color.White,
                                     modifier           = Modifier.size(20.dp)

@@ -12,8 +12,8 @@ android {
         applicationId = "com.kamneko88.comicveil"
         minSdk = 26
         targetSdk = 36
-        versionCode = 51
-        versionName = "0.32.0"
+        versionCode = 52
+        versionName = "0.33.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -49,7 +49,8 @@ android {
 
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
-    implementation("androidx.compose.material:material-icons-extended:1.6.7")
+    // アイコンセット：Material Icons から Lucide（スタイリッシュな線画アイコン）へ全面移行
+    implementation("com.composables:icons-lucide-cmp:2.2.1")
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui)

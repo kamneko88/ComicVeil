@@ -15,11 +15,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.MenuBook
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.X
+import com.composables.icons.lucide.Trash2
+import com.composables.icons.lucide.BookOpen
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -97,14 +97,14 @@ fun HistoryScreen(
                 title = { Text("閲覧履歴") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
+                        Icon(Lucide.ArrowLeft, contentDescription = "戻る")
                     }
                 },
                 actions = {
                     if (history.isNotEmpty()) {
                         IconButton(onClick = { showClearConfirm = true }) {
                             Icon(
-                                imageVector        = Icons.Default.DeleteSweep,
+                                imageVector        = Lucide.Trash2,
                                 contentDescription = "履歴をすべて削除"
                             )
                         }
@@ -121,7 +121,7 @@ fun HistoryScreen(
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            imageVector        = Icons.Default.MenuBook,
+                            imageVector        = Lucide.BookOpen,
                             contentDescription = null,
                             modifier           = Modifier.size(48.dp),
                             tint               = MaterialTheme.colorScheme.onSurfaceVariant
@@ -226,7 +226,7 @@ private fun HistoryRow(
 
         IconButton(onClick = onDelete) {
             Icon(
-                imageVector        = Icons.Default.Close,
+                imageVector        = Lucide.X,
                 contentDescription = "この履歴を削除",
                 modifier           = Modifier.size(18.dp),
                 tint               = MaterialTheme.colorScheme.onSurfaceVariant

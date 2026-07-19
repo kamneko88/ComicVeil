@@ -14,13 +14,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Cancel
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.HourglassEmpty
-import androidx.compose.material.icons.filled.Refresh
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.CircleX
+import com.composables.icons.lucide.CircleCheck
+import com.composables.icons.lucide.CircleAlert
+import com.composables.icons.lucide.Hourglass
+import com.composables.icons.lucide.RefreshCw
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -88,7 +88,7 @@ fun TransferScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    imageVector        = Icons.AutoMirrored.Filled.ArrowBack,
+                                    imageVector        = Lucide.ArrowLeft,
                                     contentDescription = "戻る",
                                     tint               = MaterialTheme.colorScheme.primary
                                 )
@@ -279,7 +279,7 @@ private fun WaitingRow(item: TransferItem, onCancel: () -> Unit) {
             modifier          = Modifier.weight(1f)
         ) {
             Icon(
-                imageVector        = Icons.Default.HourglassEmpty,
+                imageVector        = Lucide.Hourglass,
                 contentDescription = "待機中",
                 modifier           = Modifier.size(18.dp),
                 tint               = MaterialTheme.colorScheme.onSurfaceVariant
@@ -362,7 +362,7 @@ private fun HistoryRow(item: TransferItem, onRetry: () -> Unit) {
         if (item.canRetry) {
             Spacer(Modifier.width(8.dp))
             Icon(
-                imageVector        = Icons.Default.Refresh,
+                imageVector        = Lucide.RefreshCw,
                 contentDescription = "再転送",
                 modifier           = Modifier.size(20.dp),
                 tint               = MaterialTheme.colorScheme.primary
@@ -375,10 +375,10 @@ private fun HistoryRow(item: TransferItem, onRetry: () -> Unit) {
 @Composable
 private fun StatusIcon(status: TransferStatus) {
     val (icon, tint) = when (status) {
-        TransferStatus.COMPLETED  -> Icons.Default.CheckCircle to Color(0xFF4CAF50)
-        TransferStatus.CANCELLED  -> Icons.Default.Cancel to MaterialTheme.colorScheme.onSurfaceVariant
-        TransferStatus.ERROR      -> Icons.Default.Error to MaterialTheme.colorScheme.error
-        else                      -> Icons.Default.HourglassEmpty to MaterialTheme.colorScheme.onSurfaceVariant
+        TransferStatus.COMPLETED  -> Lucide.CircleCheck to Color(0xFF4CAF50)
+        TransferStatus.CANCELLED  -> Lucide.CircleX to MaterialTheme.colorScheme.onSurfaceVariant
+        TransferStatus.ERROR      -> Lucide.CircleAlert to MaterialTheme.colorScheme.error
+        else                      -> Lucide.Hourglass to MaterialTheme.colorScheme.onSurfaceVariant
     }
     Icon(
         imageVector        = icon,
