@@ -82,10 +82,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.foundation.Canvas
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -719,7 +725,8 @@ fun HomeScreen(
                     }
                 }
             } else if (displayMode == com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.SHELF) {
-                // ── 本棚モード（表紙をタイル状に並べる） ───────────────
+                // ── 本棚モード（表紙をタイル状に並べる。木目背景で本棚らしさを演出） ───────────────
+                WoodShelfBackground(modifier = Modifier.fillMaxSize())
                 LazyVerticalGrid(
                     state    = gridState,
                     columns  = GridCells.Adaptive(minSize = 110.dp),
@@ -1788,6 +1795,74 @@ fun CompactFileListItem(
     }
 }
 
+// ─── 本棚モードの背景（木目調） ────────────────────────────────────
+
+/**
+ * 本棚モードの背景に敷く、木目調のテクスチャ。
+ * 画像アセットは使わず、Canvasでベースのグラデーション・木目の縦筋・
+ * 棚板の継ぎ目（うっすらした横線）を描画して「本棚感」を演出する。
+ * シード固定の擬似乱数を使うので、毎回同じ見た目になる（再描画のたびに模様が変わらない）。
+ */
+@Composable
+private fun WoodShelfBackground(modifier: Modifier = Modifier) {
+    val baseTop    = Color(0xFF9C6B3E)
+    val baseBottom = Color(0xFF6E4426)
+    val grainColor = Color(0xFF4A2C15)
+
+    Canvas(modifier = modifier) {
+        // ベースの木の色（上からやや明るく、下にいくほど落ち着いた色に）
+        drawRect(
+            brush = Brush.verticalGradient(listOf(baseTop, baseBottom))
+        )
+
+        // 木目の縦筋（波打つ曲線を等間隔に並べる。見た目は毎回同じになるよう固定シード）
+        val random    = kotlin.random.Random(42)
+        val lineWidth = 20.dp.toPx()
+        val lineCount = (size.width / lineWidth).toInt().coerceAtLeast(6)
+        repeat(lineCount) { i ->
+            val x         = i * (size.width / lineCount) + random.nextFloat() * (lineWidth * 0.5f)
+            val amplitude = random.nextFloat() * 8f + 3f
+            val alpha     = random.nextFloat() * 0.12f + 0.06f
+            val path = Path().apply {
+                moveTo(x, 0f)
+                var y = 0f
+                var curX = x
+                while (y < size.height) {
+                    val nextY = (y + 48f).coerceAtMost(size.height)
+                    val nextX = x + (random.nextFloat() - 0.5f) * amplitude * 2f
+                    quadraticTo((curX + nextX) / 2f, (y + nextY) / 2f, nextX, nextY)
+                    curX = nextX
+                    y = nextY
+                }
+            }
+            drawPath(
+                path  = path,
+                color = grainColor.copy(alpha = alpha),
+                style = Stroke(width = random.nextFloat() * 1.2f + 0.6f)
+            )
+        }
+
+        // 棚板の継ぎ目（一定間隔でうっすら横線を入れ、板が積み重なっている雰囲気を出す）
+        val shelfHeight = 150.dp.toPx()
+        var y = shelfHeight
+        while (y < size.height) {
+            drawLine(
+                color       = grainColor.copy(alpha = 0.28f),
+                start       = Offset(0f, y),
+                end         = Offset(size.width, y),
+                strokeWidth = 2.5f
+            )
+            drawLine(
+                color       = Color.White.copy(alpha = 0.07f),
+                start       = Offset(0f, y + 2.5f),
+                end         = Offset(size.width, y + 2.5f),
+                strokeWidth = 1f
+            )
+            y += shelfHeight
+        }
+    }
+}
+
 // ─── 本棚タイル ────────────────────────────────────
 
 /**
@@ -1913,9 +1988,13 @@ fun ShelfFileItem(
         }
 
         if (showTitle) {
+            // 木目背景の上に乗るため、視認性重視で白文字＋影を付ける
             Text(
                 text      = if (fileItem.isFolder) fileItem.name else title,
-                style     = MaterialTheme.typography.labelSmall,
+                style     = MaterialTheme.typography.labelSmall.copy(
+                    color  = Color.White,
+                    shadow = Shadow(color = Color.Black.copy(alpha = 0.7f), blurRadius = 4f)
+                ),
                 maxLines  = 2,
                 overflow  = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
