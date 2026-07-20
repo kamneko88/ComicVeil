@@ -8,9 +8,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,13 +19,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.ArrowLeft
@@ -82,16 +81,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.foundation.Canvas
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -178,7 +173,6 @@ fun HomeScreen(
     // ビューワーへ移動するとこの画面は破棄されるため、戻ってくると一覧が先頭に戻ってしまう。
     // ViewModel（画面遷移をまたいで生き残る）に位置を預けて、戻ったときに復元する。
     val listState   = rememberLazyListState()
-    val gridState   = rememberLazyGridState()
     val locationKey = currentLocation.key
 
     // 復元すべき位置は、保存処理が上書きする前に押さえておく
@@ -195,17 +189,14 @@ fun HomeScreen(
         if (files.isNotEmpty() && restoredKey != locationKey) {
             pendingRestore?.let { (index, offset) ->
                 listState.scrollToItem(index, offset)
-                gridState.scrollToItem(index, offset)
             }
             restoredKey = locationKey
         }
     }
 
     LaunchedEffect(locationKey, displayMode) {
-        val isShelf = displayMode == com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.SHELF
         snapshotFlow {
-            if (isShelf) gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
-            else         listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
         }.collect { (index, offset) ->
             viewModel.saveScrollPosition(locationKey, index, offset)
         }
@@ -725,126 +716,138 @@ fun HomeScreen(
                     }
                 }
             } else if (displayMode == com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.SHELF) {
-                // ── 本棚モード（表紙をタイル状に並べる。木目背景で本棚らしさを演出） ───────────────
-                WoodShelfBackground(modifier = Modifier.fillMaxSize())
-                LazyVerticalGrid(
-                    state    = gridState,
-                    columns  = GridCells.Adaptive(minSize = 110.dp),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(8.dp)
-                ) {
-                    // ブックマーク（HOMEに登録したリモートのフォルダ・本）
-                    if (isRoot && bookmarks.isNotEmpty()) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            Text(
-                                text     = "ブックマーク",
-                                style    = MaterialTheme.typography.labelMedium,
-                                color    = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
-                            )
-                        }
-                        items(count = bookmarks.size) { index ->
-                            val bm = bookmarks[index]
-                            ShelfFileItem(
-                                fileItem            = bm,
-                                thumbnailRepository = thumbnailRepository,
-                                showTitle           = true,
-                                generateThumbnail   = false,
-                                onClick     = {
-                                    if (bm.isFolder) viewModel.navigateToNas(bm.nasServer!!, bm.nasPath)
-                                    else             viewModel.onComicTapped(bm)
-                                },
-                                onLongClick = { contextTarget = bm }
-                            )
-                        }
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            HorizontalDivider(
-                                thickness = 4.dp,
-                                color     = MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        }
-                    }
+                // ── 本棚モード（段ごとに独立した棚板を描き、本を棚に置いているように見せる） ───────────────
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    val minTileWidth = 100.dp
+                    val spacing      = 8.dp
+                    val sidePadding  = 8.dp
+                    val available    = maxWidth - sidePadding * 2
+                    val columns      = ((available + spacing) / (minTileWidth + spacing)).toInt().coerceAtLeast(2)
+                    val tileWidth    = (available - spacing * (columns - 1)) / columns
 
-                    // リモートサーバーはタイルにしても意味がないので、横幅いっぱいのリストで表示
-                    if (isRoot && nasServers.isNotEmpty()) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            Text(
-                                text     = "リモートサーバー",
-                                style    = MaterialTheme.typography.labelMedium,
-                                color    = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
-                            )
-                        }
-                        items(
-                            count = nasServers.size,
-                            span  = { GridItemSpan(maxLineSpan) }
-                        ) { index ->
-                            val server = nasServers[index]
-                            val isServerSelected = server.id in selectedPaths
-                            NasServerListItem(
-                                server         = server,
-                                isEditMode     = isEditMode,
-                                isSelected     = isServerSelected,
-                                onToggleSelect = {
-                                    selectedPaths = if (isServerSelected)
-                                        selectedPaths - server.id
-                                    else
-                                        selectedPaths + server.id
-                                },
-                                onClick  = {
-                                    isEditMode    = false
-                                    selectedPaths = emptySet()
-                                    viewModel.navigateToNas(server)
-                                },
-                                onEdit   = { editingServer = it; showAddNasDialog = true },
-                                onDelete = { viewModel.deleteNasServer(it.id) }
-                            )
-                        }
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            HorizontalDivider(
-                                thickness = 4.dp,
-                                color     = MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        }
-                    }
-
-                    if (files.isEmpty()) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            Box(
-                                modifier         = Modifier.fillMaxWidth().padding(32.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
+                    LazyColumn(
+                        state    = listState,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        // ブックマーク（HOMEに登録したリモートのフォルダ・本）
+                        if (isRoot && bookmarks.isNotEmpty()) {
+                            item {
                                 Text(
-                                    text  = "ファイルが見つかりません",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    text     = "ブックマーク",
+                                    style    = MaterialTheme.typography.labelMedium,
+                                    color    = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                                )
+                            }
+                            itemsIndexed(bookmarks.chunked(columns)) { rowIndex, rowItems ->
+                                ShelfRow(
+                                    rowItems    = rowItems,
+                                    columns     = columns,
+                                    tileWidth   = tileWidth,
+                                    rowIndex    = rowIndex,
+                                    sidePadding = sidePadding,
+                                    spacing     = spacing
+                                ) { bm ->
+                                    ShelfFileItem(
+                                        fileItem            = bm,
+                                        thumbnailRepository = thumbnailRepository,
+                                        showTitle           = true,
+                                        generateThumbnail   = false,
+                                        onClick     = {
+                                            if (bm.isFolder) viewModel.navigateToNas(bm.nasServer!!, bm.nasPath)
+                                            else             viewModel.onComicTapped(bm)
+                                        },
+                                        onLongClick = { contextTarget = bm }
+                                    )
+                                }
+                            }
+                        }
+
+                        // リモートサーバーはタイルにしても意味がないので、横幅いっぱいのリストで表示
+                        if (isRoot && nasServers.isNotEmpty()) {
+                            item {
+                                Text(
+                                    text     = "リモートサーバー",
+                                    style    = MaterialTheme.typography.labelMedium,
+                                    color    = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                                )
+                            }
+                            items(nasServers) { server ->
+                                val isServerSelected = server.id in selectedPaths
+                                NasServerListItem(
+                                    server         = server,
+                                    isEditMode     = isEditMode,
+                                    isSelected     = isServerSelected,
+                                    onToggleSelect = {
+                                        selectedPaths = if (isServerSelected)
+                                            selectedPaths - server.id
+                                        else
+                                            selectedPaths + server.id
+                                    },
+                                    onClick  = {
+                                        isEditMode    = false
+                                        selectedPaths = emptySet()
+                                        viewModel.navigateToNas(server)
+                                    },
+                                    onEdit   = { editingServer = it; showAddNasDialog = true },
+                                    onDelete = { viewModel.deleteNasServer(it.id) }
+                                )
+                            }
+                            item {
+                                HorizontalDivider(
+                                    thickness = 4.dp,
+                                    color     = MaterialTheme.colorScheme.surfaceVariant
                                 )
                             }
                         }
-                    } else {
-                        items(count = files.size) { index ->
-                            val fileItem     = files[index]
-                            val itemStatus   = fileStatuses[fileItem.path] ?: ReadStatus.UNREAD
-                            val isSelected   = fileItem.path in selectedPaths
-                            val isCached     = fileItem.isNas && viewModel.isNasCached(fileItem)
-                            val isDlSelected = !isStreamingMode && !fileItem.isFolder &&
-                                               fileItem.path in dlSelectedPaths
-                            ShelfFileItem(
-                                fileItem            = fileItem,
-                                thumbnailRepository = thumbnailRepository,
-                                showTitle           = shelfShowTitle,
-                                status              = itemStatus,
-                                isEditMode          = isEditMode && !isNas,
-                                isSelected          = isSelected,
-                                isDlSelected        = isDlSelected,
-                                isCached            = isCached,
-                                onClick     = { handleFileClick(fileItem, isEditMode, isNas, isStreamingMode, isSelected, selectedPaths, viewModel, onSelectChange = { selectedPaths = it }) },
-                                onLongClick = {
-                                    if (!isEditMode) {
-                                        if (fileItem.isNas) contextTarget = fileItem
-                                        else if (fileItem.isComic) viewModel.openFileInfo(fileItem)
-                                    }
+
+                        if (files.isEmpty()) {
+                            item {
+                                Box(
+                                    modifier         = Modifier.fillMaxWidth().padding(32.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text  = "ファイルが見つかりません",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
-                            )
+                            }
+                        } else {
+                            itemsIndexed(files.chunked(columns)) { rowIndex, rowItems ->
+                                ShelfRow(
+                                    rowItems    = rowItems,
+                                    columns     = columns,
+                                    tileWidth   = tileWidth,
+                                    rowIndex    = rowIndex,
+                                    sidePadding = sidePadding,
+                                    spacing     = spacing
+                                ) { fileItem ->
+                                    val itemStatus   = fileStatuses[fileItem.path] ?: ReadStatus.UNREAD
+                                    val isSelected   = fileItem.path in selectedPaths
+                                    val isCached     = fileItem.isNas && viewModel.isNasCached(fileItem)
+                                    val isDlSelected = !isStreamingMode && !fileItem.isFolder &&
+                                                       fileItem.path in dlSelectedPaths
+                                    ShelfFileItem(
+                                        fileItem            = fileItem,
+                                        thumbnailRepository = thumbnailRepository,
+                                        showTitle           = shelfShowTitle,
+                                        status              = itemStatus,
+                                        isEditMode          = isEditMode && !isNas,
+                                        isSelected          = isSelected,
+                                        isDlSelected        = isDlSelected,
+                                        isCached            = isCached,
+                                        onClick     = { handleFileClick(fileItem, isEditMode, isNas, isStreamingMode, isSelected, selectedPaths, viewModel, onSelectChange = { selectedPaths = it }) },
+                                        onLongClick = {
+                                            if (!isEditMode) {
+                                                if (fileItem.isNas) contextTarget = fileItem
+                                                else if (fileItem.isComic) viewModel.openFileInfo(fileItem)
+                                            }
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1795,71 +1798,86 @@ fun CompactFileListItem(
     }
 }
 
-// ─── 本棚モードの背景（木目調） ────────────────────────────────────
+// ─── 本棚モードの「段」（壁面＋棚板） ────────────────────────────────────
 
 /**
- * 本棚モードの背景に敷く、木目調のテクスチャ。
- * 画像アセットは使わず、Canvasでベースのグラデーション・木目の縦筋・
- * 棚板の継ぎ目（うっすらした横線）を描画して「本棚感」を演出する。
- * シード固定の擬似乱数を使うので、毎回同じ見た目になる（再描画のたびに模様が変わらない）。
+ * 本棚モードの1段分。
+ *
+ * 「壁面（本を立てる背景）」＋「棚板（前面の縁。ハイライトと影で厚みを表現）」の
+ * 2層構造で1段を組み立てる。LazyColumnのitemとして段を積み重ねることで、
+ * 実際の本棚のように棚同士が隙間なく連続する。
+ * アダプティブグリッドと違い列数・タイル幅を呼び出し側で確定させているので、
+ * 棚板が必ず本の行の真下に揃う。
+ *
+ * 段ごとに壁面の色味をわずかに変えて単調さを避けている（rowIndexで交互に切り替え）。
  */
 @Composable
-private fun WoodShelfBackground(modifier: Modifier = Modifier) {
-    val baseTop    = Color(0xFF9C6B3E)
-    val baseBottom = Color(0xFF6E4426)
-    val grainColor = Color(0xFF4A2C15)
+private fun <T> ShelfRow(
+    rowItems: List<T>,
+    columns: Int,
+    tileWidth: Dp,
+    rowIndex: Int,
+    sidePadding: Dp,
+    spacing: Dp,
+    itemContent: @Composable (T) -> Unit
+) {
+    val wallColors = if (rowIndex % 2 == 0) {
+        listOf(Color(0xFF8A5A34), Color(0xFF6B4327))
+    } else {
+        listOf(Color(0xFF7E5230), Color(0xFF603D22))
+    }
 
-    Canvas(modifier = modifier) {
-        // ベースの木の色（上からやや明るく、下にいくほど落ち着いた色に）
-        drawRect(
-            brush = Brush.verticalGradient(listOf(baseTop, baseBottom))
-        )
-
-        // 木目の縦筋（波打つ曲線を等間隔に並べる。見た目は毎回同じになるよう固定シード）
-        val random    = kotlin.random.Random(42)
-        val lineWidth = 20.dp.toPx()
-        val lineCount = (size.width / lineWidth).toInt().coerceAtLeast(6)
-        repeat(lineCount) { i ->
-            val x         = i * (size.width / lineCount) + random.nextFloat() * (lineWidth * 0.5f)
-            val amplitude = random.nextFloat() * 8f + 3f
-            val alpha     = random.nextFloat() * 0.12f + 0.06f
-            val path = Path().apply {
-                moveTo(x, 0f)
-                var y = 0f
-                var curX = x
-                while (y < size.height) {
-                    val nextY = (y + 48f).coerceAtMost(size.height)
-                    val nextX = x + (random.nextFloat() - 0.5f) * amplitude * 2f
-                    quadraticTo((curX + nextX) / 2f, (y + nextY) / 2f, nextX, nextY)
-                    curX = nextX
-                    y = nextY
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // 壁面（本を立てるスペース）
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Brush.verticalGradient(wallColors))
+                .padding(horizontal = sidePadding, vertical = 10.dp),
+            verticalAlignment       = Alignment.Bottom,
+            horizontalArrangement   = Arrangement.spacedBy(spacing)
+        ) {
+            rowItems.forEach { item ->
+                Box(modifier = Modifier.width(tileWidth)) {
+                    itemContent(item)
                 }
             }
-            drawPath(
-                path  = path,
-                color = grainColor.copy(alpha = alpha),
-                style = Stroke(width = random.nextFloat() * 1.2f + 0.6f)
-            )
+            repeat(columns - rowItems.size) {
+                Spacer(modifier = Modifier.width(tileWidth))
+            }
         }
+        // 棚板（前面の縁。上端ハイライト＋下に落ちる影で厚みを表現）
+        ShelfBoard()
+    }
+}
 
-        // 棚板の継ぎ目（一定間隔でうっすら横線を入れ、板が積み重なっている雰囲気を出す）
-        val shelfHeight = 150.dp.toPx()
-        var y = shelfHeight
-        while (y < size.height) {
-            drawLine(
-                color       = grainColor.copy(alpha = 0.28f),
-                start       = Offset(0f, y),
-                end         = Offset(size.width, y),
-                strokeWidth = 2.5f
+@Composable
+private fun ShelfBoard() {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(14.dp)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(Color(0xFFC9986A), Color(0xFFA06F42), Color(0xFF7A4F2C))
+                    )
+                )
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.5.dp)
+                    .align(Alignment.TopCenter)
+                    .background(Color.White.copy(alpha = 0.5f))
             )
-            drawLine(
-                color       = Color.White.copy(alpha = 0.07f),
-                start       = Offset(0f, y + 2.5f),
-                end         = Offset(size.width, y + 2.5f),
-                strokeWidth = 1f
-            )
-            y += shelfHeight
         }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.45f), Color.Transparent)))
+        )
     }
 }
 
@@ -1909,6 +1927,7 @@ fun ShelfFileItem(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.71f)   // 本の形
+                .shadow(elevation = 5.dp, shape = RoundedCornerShape(6.dp), clip = false)  // 棚に置かれている落ち影
                 .clip(RoundedCornerShape(6.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
