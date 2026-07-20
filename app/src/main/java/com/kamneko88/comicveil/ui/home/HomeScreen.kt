@@ -763,7 +763,7 @@ fun HomeScreen(
                             }
                         }
 
-                        // リモートサーバーはタイルにしても意味がないので、横幅いっぱいのリストで表示
+                        // リモートサーバーも本棚モードでは他の本と同じく棚に並べる
                         if (isRoot && nasServers.isNotEmpty()) {
                             item {
                                 Text(
@@ -773,26 +773,35 @@ fun HomeScreen(
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
                                 )
                             }
-                            items(nasServers) { server ->
-                                val isServerSelected = server.id in selectedPaths
-                                NasServerListItem(
-                                    server         = server,
-                                    isEditMode     = isEditMode,
-                                    isSelected     = isServerSelected,
-                                    onToggleSelect = {
-                                        selectedPaths = if (isServerSelected)
-                                            selectedPaths - server.id
-                                        else
-                                            selectedPaths + server.id
-                                    },
-                                    onClick  = {
-                                        isEditMode    = false
-                                        selectedPaths = emptySet()
-                                        viewModel.navigateToNas(server)
-                                    },
-                                    onEdit   = { editingServer = it; showAddNasDialog = true },
-                                    onDelete = { viewModel.deleteNasServer(it.id) }
-                                )
+                            itemsIndexed(nasServers.chunked(columns)) { rowIndex, rowItems ->
+                                ShelfRow(
+                                    rowItems    = rowItems,
+                                    columns     = columns,
+                                    tileWidth   = tileWidth,
+                                    rowIndex    = rowIndex,
+                                    sidePadding = sidePadding,
+                                    spacing     = spacing
+                                ) { server ->
+                                    val isServerSelected = server.id in selectedPaths
+                                    ShelfServerItem(
+                                        server         = server,
+                                        isEditMode     = isEditMode,
+                                        isSelected     = isServerSelected,
+                                        onToggleSelect = {
+                                            selectedPaths = if (isServerSelected)
+                                                selectedPaths - server.id
+                                            else
+                                                selectedPaths + server.id
+                                        },
+                                        onClick  = {
+                                            isEditMode    = false
+                                            selectedPaths = emptySet()
+                                            viewModel.navigateToNas(server)
+                                        },
+                                        onEdit   = { editingServer = server; showAddNasDialog = true },
+                                        onDelete = { viewModel.deleteNasServer(server.id) }
+                                    )
+                                }
                             }
                             item {
                                 HorizontalDivider(
@@ -2020,6 +2029,113 @@ fun ShelfFileItem(
                 modifier  = Modifier.padding(top = 4.dp)
             )
         }
+    }
+}
+
+/**
+ * 本棚モードでのリモートサーバータイル。
+ * ShelfFileItemと見た目を揃え（本の形のタイル＋落ち影）、サーバーアイコンを中央に表示する。
+ * 編集・削除は長押しメニューから（一覧表示のNasServerListItemの「編集」「削除」と同じ操作先）。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ShelfServerItem(
+    server: NasServer,
+    onClick: () -> Unit,
+    onEdit: (NasServer) -> Unit,
+    onDelete: (NasServer) -> Unit,
+    isEditMode: Boolean = false,
+    isSelected: Boolean = false,
+    onToggleSelect: () -> Unit = {}
+) {
+    var showMenu           by remember { mutableStateOf(false) }
+    var showDeleteConfirm  by remember { mutableStateOf(false) }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("サーバーを削除") },
+            text  = { Text("「${server.displayName}」を削除しますか？") },
+            confirmButton = {
+                TextButton(onClick = { showDeleteConfirm = false; onDelete(server) }) {
+                    Text("削除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("キャンセル") }
+            }
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .padding(4.dp)
+            .combinedClickable(
+                onClick     = { if (isEditMode) onToggleSelect() else onClick() },
+                onLongClick = { if (!isEditMode) showMenu = true }
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.71f)
+                .shadow(elevation = 5.dp, shape = RoundedCornerShape(6.dp), clip = false)
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.primaryContainer)
+        ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector        = Lucide.Server,
+                    contentDescription = null,
+                    modifier           = Modifier.size(40.dp),
+                    tint               = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+
+            // 選択状態の色重ね（編集モード）
+            if (isSelected) {
+                Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)))
+            }
+
+            if (isEditMode) {
+                Icon(
+                    imageVector        = if (isSelected) Lucide.SquareCheck else Lucide.Square,
+                    contentDescription = null,
+                    modifier           = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(4.dp)
+                        .size(22.dp),
+                    tint               = if (isSelected) MaterialTheme.colorScheme.primary else Color.White
+                )
+            }
+
+            DropdownMenu(
+                expanded         = showMenu,
+                onDismissRequest = { showMenu = false }
+            ) {
+                DropdownMenuItem(
+                    text    = { Text("編集") },
+                    onClick = { showMenu = false; onEdit(server) }
+                )
+                DropdownMenuItem(
+                    text    = { Text("削除", color = MaterialTheme.colorScheme.error) },
+                    onClick = { showMenu = false; showDeleteConfirm = true }
+                )
+            }
+        }
+
+        Text(
+            text      = server.displayName,
+            style     = MaterialTheme.typography.labelSmall.copy(
+                color  = Color.White,
+                shadow = Shadow(color = Color.Black.copy(alpha = 0.7f), blurRadius = 4f)
+            ),
+            maxLines  = 1,
+            overflow  = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier  = Modifier.padding(top = 4.dp)
+        )
     }
 }
 
