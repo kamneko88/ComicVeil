@@ -130,6 +130,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     val hasActiveFilter: Boolean
         get() = _statusFilter.value.isNotEmpty() || _colorLabelFilter.value.isNotEmpty()
 
+    // ── 検索（今見ているフォルダ／HOME内のみが対象。サブフォルダやNAS横断はしない） ──
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    fun setSearchQuery(query: String) {
+        _searchQuery.value = query
+    }
+
     private val _nasServers = MutableStateFlow<List<NasServer>>(emptyList())
     val nasServers: StateFlow<List<NasServer>> = _nasServers.asStateFlow()
 
@@ -187,7 +195,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             kotlinx.coroutines.flow.combine(
                 _files, _sortKey, _ascending, _folderOrder,
-                _statusFilter, _colorLabelFilter, _fileStatuses, _fileMetaMap
+                _statusFilter, _colorLabelFilter, _fileStatuses, _fileMetaMap, _searchQuery
             ) { arr ->
                 @Suppress("UNCHECKED_CAST")
                 val rawFiles     = arr[0] as List<FileItem>
@@ -198,7 +206,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val colorF       = arr[5] as Set<String>
                 val statuses     = arr[6] as Map<String, com.kamneko88.comicveil.data.db.ReadStatus>
                 val metas        = arr[7] as Map<String, com.kamneko88.comicveil.data.db.ComicFile>
-                applySort(rawFiles, key, asc, order, statusF, colorF, statuses, metas)
+                val query        = arr[8] as String
+                applySort(rawFiles, key, asc, order, statusF, colorF, statuses, metas, query)
             }.collect { sorted ->
                 _displayFiles.value = sorted
             }
@@ -268,12 +277,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         statusFilter: Set<String>,
         colorLabelFilter: Set<String>,
         statuses: Map<String, com.kamneko88.comicveil.data.db.ReadStatus>,
-        metas: Map<String, com.kamneko88.comicveil.data.db.ComicFile>
+        metas: Map<String, com.kamneko88.comicveil.data.db.ComicFile>,
+        searchQuery: String = ""
     ): List<FileItem> {
-        val filtered = if (statusFilter.isEmpty() && colorLabelFilter.isEmpty()) {
+        val searched = if (searchQuery.isBlank()) {
             raw
         } else {
-            raw.filter { item ->
+            raw.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        }
+
+        val filtered = if (statusFilter.isEmpty() && colorLabelFilter.isEmpty()) {
+            searched
+        } else {
+            searched.filter { item ->
                 if (!item.isComic) return@filter true
                 val statusOk = statusFilter.isEmpty() ||
                     statuses[item.path]?.name in statusFilter

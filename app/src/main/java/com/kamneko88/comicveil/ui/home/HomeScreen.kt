@@ -51,11 +51,16 @@ import com.composables.icons.lucide.Wifi
 import com.composables.icons.lucide.SquarePen
 import com.composables.icons.lucide.ArrowUp
 import com.composables.icons.lucide.ArrowDown
+import com.composables.icons.lucide.X
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -134,6 +139,7 @@ fun HomeScreen(
     val folderOrder       by viewModel.folderOrder.collectAsState()
     val dlSelectedPaths   by viewModel.dlSelectedPaths.collectAsState()
     val bookmarks         by viewModel.bookmarks.collectAsState()
+    val searchQuery       by viewModel.searchQuery.collectAsState()
 
     viewModel.transferViewModel = transferViewModel
 
@@ -149,6 +155,9 @@ fun HomeScreen(
     var showDeleteConfirm  by remember { mutableStateOf(false) }
     var showSortSheet      by remember { mutableStateOf(false) }
     var showAboutDialog    by remember { mutableStateOf(false) }
+    // 検索（今見ているフォルダ／HOME内のみが対象）
+    var isSearchMode by remember { mutableStateOf(false) }
+    val searchFocusRequester = remember { FocusRequester() }
     // リモート項目の長押しメニュー対象（HOME登録/解除・情報）
     var contextTarget      by remember { mutableStateOf<FileItem?>(null) }
 
@@ -169,6 +178,12 @@ fun HomeScreen(
     // 復元すべき位置は、保存処理が上書きする前に押さえておく
     val pendingRestore = remember(locationKey) { viewModel.getScrollPosition(locationKey) }
     var restoredKey    by remember { mutableStateOf<String?>(null) }
+
+    // フォルダを移動したら検索状態はリセットする（検索対象は「今見ている場所」のみのため）
+    LaunchedEffect(locationKey) {
+        isSearchMode = false
+        viewModel.setSearchQuery("")
+    }
 
     LaunchedEffect(locationKey, files.isNotEmpty()) {
         if (files.isNotEmpty() && restoredKey != locationKey) {
@@ -229,8 +244,11 @@ fun HomeScreen(
         viewModel.loadInitialFolder()
     }
 
-    BackHandler(enabled = !isRoot || isEditMode) {
-        if (isEditMode) {
+    BackHandler(enabled = isSearchMode || !isRoot || isEditMode) {
+        if (isSearchMode) {
+            isSearchMode = false
+            viewModel.setSearchQuery("")
+        } else if (isEditMode) {
             isEditMode    = false
             selectedPaths = emptySet()
         } else {
@@ -414,6 +432,22 @@ fun HomeScreen(
         topBar = {
             TopAppBar(
                 title = {
+                    if (isSearchMode) {
+                        OutlinedTextField(
+                            value           = searchQuery,
+                            onValueChange   = { viewModel.setSearchQuery(it) },
+                            placeholder     = { Text("$screenTitle 内を検索") },
+                            singleLine      = true,
+                            modifier        = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(searchFocusRequester),
+                            colors          = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = Color.Transparent,
+                                focusedBorderColor    = Color.Transparent
+                            )
+                        )
+                        LaunchedEffect(Unit) { searchFocusRequester.requestFocus() }
+                    } else {
                     Text(
                         text     = screenTitle,
                         style    = if (isRoot) MaterialTheme.typography.titleLarge
@@ -421,6 +455,7 @@ fun HomeScreen(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    }
                 },
                 navigationIcon = {
                     if (!isRoot) {
@@ -496,8 +531,16 @@ fun HomeScreen(
                             isEditMode    = false
                             selectedPaths = emptySet()
                         }) { Text("完了") }
+                    } else if (isSearchMode) {
+                        // 検索中はソート・表示切替・編集を隠し、閉じるボタンだけ出す（誤操作防止・すっきり表示）
+                        IconButton(onClick = {
+                            isSearchMode = false
+                            viewModel.setSearchQuery("")
+                        }) {
+                            Icon(Lucide.X, contentDescription = "検索を閉じる")
+                        }
                     } else {
-                        IconButton(onClick = { }) {
+                        IconButton(onClick = { isSearchMode = true }) {
                             Icon(Lucide.Search, contentDescription = "検索")
                         }
                         // ソートボタン：現在のキーと昇降順を表示
