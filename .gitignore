@@ -15,6 +15,12 @@
 local.properties
 logcat.txt
 
+# 署名鍵・ビルド成果物（絶対にコミットしない）
+*.jks
+*.keystore
+app/release/
+**/build/
+
 # 開発メモ・進捗管理（Claudeとの引き継ぎ用・非公開ドキュメント）
 ComicVeil_Handoff.md
 ComicVeil_Project.md

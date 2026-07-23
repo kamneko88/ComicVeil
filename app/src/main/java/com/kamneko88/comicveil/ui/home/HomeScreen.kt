@@ -187,8 +187,14 @@ fun HomeScreen(
 
     LaunchedEffect(locationKey, files.isNotEmpty()) {
         if (files.isNotEmpty() && restoredKey != locationKey) {
-            pendingRestore?.let { (index, offset) ->
+            // listStateはフォルダ移動をまたいで使い回されるため、保存済み位置が無い
+            // （＝初めて開くフォルダ）場合は明示的に先頭へ戻す。何もしないと直前に見ていた
+            // 別フォルダのスクロール位置が残ったままになってしまう
+            if (pendingRestore != null) {
+                val (index, offset) = pendingRestore
                 listState.scrollToItem(index, offset)
+            } else {
+                listState.scrollToItem(0, 0)
             }
             restoredKey = locationKey
         }
