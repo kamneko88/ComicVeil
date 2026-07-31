@@ -14,6 +14,7 @@
 .cxx
 local.properties
 logcat.txt
+logcat*.txt
 
 # 署名鍵・ビルド成果物（絶対にコミットしない）
 *.jks
@@ -21,9 +22,8 @@ logcat.txt
 app/release/
 **/build/
 
-# 開発メモ・進捗管理（Claudeとの引き継ぎ用・非公開ドキュメント）
-ComicVeil_Handoff.md
-ComicVeil_Project.md
+# 開発メモ・進捗管理（Claudeとの引き継ぎ用・非公開ドキュメント。プロジェクト横断ルールにより_local/へ集約）
+_local/
 
 # 他社アプリ参考資料（著作権上の理由でリポジトリ管理外）
 参考データ/
