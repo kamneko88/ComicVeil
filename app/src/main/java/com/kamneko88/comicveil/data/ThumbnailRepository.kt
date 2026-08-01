@@ -14,6 +14,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStream
 
 class ThumbnailRepository(private val cacheDir: File, private val context: Context? = null) {
 
@@ -118,7 +119,7 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
 
         return try {
             val bytes = ctx.contentResolver.openInputStream(uri)?.use { input ->
-                input.readNBytes(2 * 1024 * 1024)
+                input.readUpTo(2 * 1024 * 1024)
             } ?: return null
             val imageBytes = extractFirstImageFromZipBytes(bytes) ?: return null
             generateCacheFromBytes(imageBytes, cacheFile)
@@ -140,6 +141,24 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
     }
 
     // ─── プライベート ─────────────────────────────────────────────────────
+
+    /**
+     * InputStream#readNBytes(int) はAPI 33以降でしか使えない（minSdk=26のため直接使用不可）。
+     * 同等の動作（最大maxBytesまで読み取る。ストリーム終端ならそこで打ち切る）を自前で実装。
+     */
+    private fun InputStream.readUpTo(maxBytes: Int): ByteArray {
+        val out   = ByteArrayOutputStream()
+        val chunk = ByteArray(8192)
+        var total = 0
+        while (total < maxBytes) {
+            val toRead = minOf(chunk.size, maxBytes - total)
+            val n = read(chunk, 0, toRead)
+            if (n == -1) break
+            out.write(chunk, 0, n)
+            total += n
+        }
+        return out.toByteArray()
+    }
 
     private fun generateAndCache(
         file: File,

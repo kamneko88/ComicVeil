@@ -3,7 +3,6 @@ package com.kamneko88.comicveil.data.nas
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.kamneko88.comicveil.data.AppPrefs
@@ -335,11 +334,8 @@ object TransferManager {
         if (!initialized) return
         val intent = Intent(appContext, TransferService::class.java)
         runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                appContext.startForegroundService(intent)
-            } else {
-                appContext.startService(intent)
-            }
+            // minSdk=26（Android 8.0=O）のため、startForegroundServiceは常に利用可能
+            appContext.startForegroundService(intent)
         }.onFailure {
             Log.w(TAG, "転送サービスの起動に失敗: ${it.message}")
         }

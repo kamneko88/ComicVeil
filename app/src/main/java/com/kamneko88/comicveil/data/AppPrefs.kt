@@ -142,6 +142,7 @@ class AppPrefs(context: Context) {
 
     /** 見開きの綴じ代（左右ページの中央に入れる余白。画像幅に対する割合） */
     enum class SpreadGutter(val percent: Int, val label: String) {
+        G0(0, "0%（なし）"),
         G1(1, "1%"),
         G3(3, "3%"),
         G5(5, "5%"),

@@ -115,6 +115,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -133,6 +134,7 @@ import com.kamneko88.comicveil.MainActivity
 import kotlin.math.abs
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@Suppress("UnusedMaterial3ScaffoldPaddingParameter") // 全画面没入表示のため、あえてinnerPaddingを適用しない設計
 @Composable
 fun ViewerScreen(
     filePath: String,
@@ -540,7 +542,9 @@ fun ViewerScreen(
                     }
                 },
                 containerColor = backgroundColor
-            ) { innerPadding ->
+            ) { _ ->
+                // 全画面没入表示のビューワーなので、あえてinnerPaddingは適用しない
+                // （適用すると画像が画面端から余白分縮んでしまい、没入モードの意図が崩れる）
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -976,11 +980,15 @@ private fun PageJumpStrip(
     onTargetChange: (Int) -> Unit,
     onSelect: (Int) -> Unit
 ) {
-    val listState     = rememberLazyListState()
-    val configuration = LocalConfiguration.current
+    val listState  = rememberLazyListState()
+    val windowInfo = LocalWindowInfo.current
+    val density    = LocalDensity.current
 
     // 先頭・末尾のページも中央に持ってこられるよう、左右に余白を確保する
-    val sidePadding = ((configuration.screenWidthDp.dp - THUMB_WIDTH) / 2).coerceAtLeast(0.dp)
+    // （Configuration.screenWidthDpはtargetSdkによって挙動が変わりうるため、
+    //   実際のウィンドウサイズを正確に反映するLocalWindowInfoを使用）
+    val screenWidthDp = with(density) { windowInfo.containerSize.width.toDp() }
+    val sidePadding   = ((screenWidthDp - THUMB_WIDTH) / 2).coerceAtLeast(0.dp)
 
     // 中央に来ているサムネイル＝現在の移動先
     val centeredIndex by remember {

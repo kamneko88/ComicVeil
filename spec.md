@@ -30,7 +30,7 @@
 | 開発言語 | Kotlin |
 | UIフレームワーク | Jetpack Compose + Material Design 3 |
 | 開発環境 | Android Studio |
-| プロジェクト保存先 | D:\Data\10_Projects\ComicVeil |
+| プロジェクト保存先 | D:\Data\10_Projects\dev\ComicVeil |
 | GitHubリポジトリ | kamneko88/ComicVeil（プライベート） |
 | 配信先 | Google Play Store（将来）、野良APK配布（初期） |
 | 最小SDKバージョン | API 26（Android 8.0） |

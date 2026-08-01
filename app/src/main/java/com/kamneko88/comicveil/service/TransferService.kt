@@ -99,7 +99,7 @@ class TransferService : Service() {
     // ─── 通知 ────────────────────────────────────────────────────────────
 
     private fun createChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        // minSdk=26（Android 8.0=O）のため、通知チャンネルAPIは常に利用可能
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return
 
