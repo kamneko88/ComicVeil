@@ -1,6 +1,13 @@
 package com.kamneko88.comicveil.ui.home
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.documentfile.provider.DocumentFile
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -19,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.lazy.LazyColumn
@@ -114,6 +122,20 @@ import java.util.Locale
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 
+/**
+ * システム標準のファイル選択画面を、可能であれば端末のDownloadフォルダを初期表示にして開く。
+ * EXTRA_INITIAL_URIは非公式仕様のため、対応しないランチャーではユーザーが手動で移動するのみ。
+ */
+private class OpenDocumentInDownloads : ActivityResultContracts.OpenDocument() {
+    override fun createIntent(context: Context, input: Array<String>): Intent {
+        val intent = super.createIntent(context, input)
+        val downloadsUri =
+            Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload")
+        intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, downloadsUri)
+        return intent
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
@@ -161,9 +183,27 @@ fun HomeScreen(
     val searchFocusRequester = remember { FocusRequester() }
     // リモート項目の長押しメニュー対象（HOME登録/解除・情報）
     var contextTarget      by remember { mutableStateOf<FileItem?>(null) }
+    // ダウンロードフォルダのファイル選択で非対応拡張子を選んだ場合のエラー表示
+    var unsupportedFileError by remember { mutableStateOf(false) }
 
     val thumbnailRepository = remember {
         ThumbnailRepository(File(context.cacheDir, "thumbnails"), context)
+    }
+
+    // ダウンロードフォルダの中身をシステム標準のファイル選択画面で選ばせる。
+    // MediaStore.Downloadsは他アプリ（ブラウザ等）が作成したファイルを列挙できないため、
+    // SAFのファイルピッカーを都度起動する方式を採る（追加権限は不要）。
+    val openDownloadsLauncher = rememberLauncherForActivityResult(
+        contract = OpenDocumentInDownloads()
+    ) { uri ->
+        if (uri != null) {
+            val fileItem = DocumentFile.fromSingleUri(context, uri)?.let { FileItem.fromDocumentFile(it) }
+            if (fileItem != null && fileItem.isComic) {
+                viewModel.onComicTapped(fileItem)
+            } else {
+                unsupportedFileError = true
+            }
+        }
     }
 
     val isRoot = currentLocation is ViewLocation.Home
@@ -427,6 +467,18 @@ fun HomeScreen(
             text  = { Text(errorMsg) },
             confirmButton = {
                 TextButton(onClick = { viewModel.clearNasError() }) { Text("閉じる") }
+            }
+        )
+    }
+
+    // ダウンロードフォルダで非対応拡張子を選んだ場合のエラーダイアログ
+    if (unsupportedFileError) {
+        AlertDialog(
+            onDismissRequest = { unsupportedFileError = false },
+            title = { Text("エラー") },
+            text  = { Text("対応していないファイル形式です") },
+            confirmButton = {
+                TextButton(onClick = { unsupportedFileError = false }) { Text("閉じる") }
             }
         )
     }
@@ -770,42 +822,59 @@ fun HomeScreen(
                         }
 
                         // リモートサーバーも本棚モードでは他の本と同じく棚に並べる
-                        if (isRoot && nasServers.isNotEmpty()) {
-                            item {
-                                Text(
-                                    text     = "リモートサーバー",
-                                    style    = MaterialTheme.typography.labelMedium,
-                                    color    = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
-                                )
+                        if (isRoot) {
+                            if (nasServers.isNotEmpty()) {
+                                item {
+                                    Text(
+                                        text     = "リモートサーバー",
+                                        style    = MaterialTheme.typography.labelMedium,
+                                        color    = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                                    )
+                                }
+                                itemsIndexed(nasServers.chunked(columns)) { rowIndex, rowItems ->
+                                    ShelfRow(
+                                        rowItems    = rowItems,
+                                        columns     = columns,
+                                        tileWidth   = tileWidth,
+                                        rowIndex    = rowIndex,
+                                        sidePadding = sidePadding,
+                                        spacing     = spacing
+                                    ) { server ->
+                                        val isServerSelected = server.id in selectedPaths
+                                        ShelfServerItem(
+                                            server         = server,
+                                            isEditMode     = isEditMode,
+                                            isSelected     = isServerSelected,
+                                            onToggleSelect = {
+                                                selectedPaths = if (isServerSelected)
+                                                    selectedPaths - server.id
+                                                else
+                                                    selectedPaths + server.id
+                                            },
+                                            onClick  = {
+                                                isEditMode    = false
+                                                selectedPaths = emptySet()
+                                                viewModel.navigateToNas(server)
+                                            },
+                                            onEdit   = { editingServer = server; showAddNasDialog = true },
+                                            onDelete = { viewModel.deleteNasServer(server.id) }
+                                        )
+                                    }
+                                }
                             }
-                            itemsIndexed(nasServers.chunked(columns)) { rowIndex, rowItems ->
+                            item {
                                 ShelfRow(
-                                    rowItems    = rowItems,
+                                    rowItems    = listOf(Unit),
                                     columns     = columns,
                                     tileWidth   = tileWidth,
-                                    rowIndex    = rowIndex,
+                                    rowIndex    = if (nasServers.isNotEmpty()) 1 else 0,
                                     sidePadding = sidePadding,
                                     spacing     = spacing
-                                ) { server ->
-                                    val isServerSelected = server.id in selectedPaths
-                                    ShelfServerItem(
-                                        server         = server,
-                                        isEditMode     = isEditMode,
-                                        isSelected     = isServerSelected,
-                                        onToggleSelect = {
-                                            selectedPaths = if (isServerSelected)
-                                                selectedPaths - server.id
-                                            else
-                                                selectedPaths + server.id
-                                        },
-                                        onClick  = {
-                                            isEditMode    = false
-                                            selectedPaths = emptySet()
-                                            viewModel.navigateToNas(server)
-                                        },
-                                        onEdit   = { editingServer = server; showAddNasDialog = true },
-                                        onDelete = { viewModel.deleteNasServer(server.id) }
+                                ) {
+                                    DownloadsFolderShelfItem(
+                                        enabled = !isEditMode,
+                                        onClick = { openDownloadsLauncher.launch(arrayOf("*/*")) }
                                     )
                                 }
                             }
@@ -913,34 +982,43 @@ fun HomeScreen(
                         }
                     }
 
-                    if (isRoot && nasServers.isNotEmpty()) {
-                        item {
-                            Text(
-                                text     = "リモートサーバー",
-                                style    = MaterialTheme.typography.labelMedium,
-                                color    = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                            )
+                    if (isRoot) {
+                        if (nasServers.isNotEmpty()) {
+                            item {
+                                Text(
+                                    text     = "リモートサーバー",
+                                    style    = MaterialTheme.typography.labelMedium,
+                                    color    = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                )
+                            }
+                            items(nasServers) { server ->
+                                val isServerSelected = server.id in selectedPaths
+                                NasServerListItem(
+                                    server          = server,
+                                    isEditMode      = isEditMode,
+                                    isSelected      = isServerSelected,
+                                    onToggleSelect  = {
+                                        selectedPaths = if (isServerSelected)
+                                            selectedPaths - server.id
+                                        else
+                                            selectedPaths + server.id
+                                    },
+                                    onClick  = {
+                                        isEditMode    = false
+                                        selectedPaths = emptySet()
+                                        viewModel.navigateToNas(server)
+                                    },
+                                    onEdit   = { editingServer = it; showAddNasDialog = true },
+                                    onDelete = { viewModel.deleteNasServer(it.id) }
+                                )
+                                HorizontalDivider()
+                            }
                         }
-                        items(nasServers) { server ->
-                            val isServerSelected = server.id in selectedPaths
-                            NasServerListItem(
-                                server          = server,
-                                isEditMode      = isEditMode,
-                                isSelected      = isServerSelected,
-                                onToggleSelect  = {
-                                    selectedPaths = if (isServerSelected)
-                                        selectedPaths - server.id
-                                    else
-                                        selectedPaths + server.id
-                                },
-                                onClick  = {
-                                    isEditMode    = false
-                                    selectedPaths = emptySet()
-                                    viewModel.navigateToNas(server)
-                                },
-                                onEdit   = { editingServer = it; showAddNasDialog = true },
-                                onDelete = { viewModel.deleteNasServer(it.id) }
+                        item {
+                            DownloadsFolderListItem(
+                                enabled = !isEditMode,
+                                onClick = { openDownloadsLauncher.launch(arrayOf("*/*")) }
                             )
                             HorizontalDivider()
                         }
@@ -1471,6 +1549,45 @@ fun NasServerListItem(
                     onClick = { showMenu = false; showDelete = true }
                 )
             }
+        }
+    }
+}
+
+/**
+ * ダウンロードフォルダを開く固定ショートカット（削除不可・編集メニューなし）。
+ * NasServerListItemと同じ見た目のRowだが、末尾のメニューは持たない。
+ */
+@Composable
+private fun DownloadsFolderListItem(
+    onClick: () -> Unit,
+    enabled: Boolean = true
+) {
+    Row(
+        modifier          = Modifier
+            .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.4f)
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector        = Lucide.Download,
+            contentDescription = null,
+            modifier           = Modifier.size(40.dp),
+            tint               = MaterialTheme.colorScheme.primary
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text       = "ダウンロードフォルダ",
+                style      = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text  = "端末のDownloadフォルダから開く",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -2133,6 +2250,52 @@ private fun ShelfServerItem(
 
         Text(
             text      = server.displayName,
+            style     = MaterialTheme.typography.labelSmall.copy(
+                color  = Color.White,
+                shadow = Shadow(color = Color.Black.copy(alpha = 0.7f), blurRadius = 4f)
+            ),
+            maxLines  = 1,
+            overflow  = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier  = Modifier.padding(top = 4.dp)
+        )
+    }
+}
+
+/**
+ * ダウンロードフォルダを開く固定ショートカット（本棚モード用）。
+ * ShelfServerItemと同じ見た目のタイルだが、長押しメニューは持たない。
+ */
+@Composable
+private fun DownloadsFolderShelfItem(
+    onClick: () -> Unit,
+    enabled: Boolean = true
+) {
+    Column(
+        modifier = Modifier
+            .padding(4.dp)
+            .alpha(if (enabled) 1f else 0.4f)
+            .clickable(enabled = enabled) { onClick() },
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.71f)
+                .shadow(elevation = 5.dp, shape = RoundedCornerShape(6.dp), clip = false)
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector        = Lucide.Download,
+                contentDescription = null,
+                modifier           = Modifier.size(40.dp),
+                tint               = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+        Text(
+            text      = "ダウンロード",
             style     = MaterialTheme.typography.labelSmall.copy(
                 color  = Color.White,
                 shadow = Shadow(color = Color.Black.copy(alpha = 0.7f), blurRadius = 4f)
