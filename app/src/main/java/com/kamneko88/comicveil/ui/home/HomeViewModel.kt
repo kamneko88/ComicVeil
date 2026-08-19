@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.data.ArchiveScanner
+import com.kamneko88.comicveil.data.isFullyCached
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.SafFileRepository
 import com.kamneko88.comicveil.data.SortPrefs
@@ -729,8 +730,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         rememberOriginalName(destFile.absolutePath, fileItem.name)
 
         // すでに全体が落ちているなら、そのまま開く
-        val isFullyCached = destFile.exists() && destFile.length() > 0 &&
-            (fileItem.size <= 0 || destFile.length() >= fileItem.size)
+        val isFullyCached = destFile.exists() &&
+            isFullyCached(destFile.length(), fileItem.size)
         if (isFullyCached) {
             viewModelScope.launch { openLocalOrVolumeComic(fileItem.copy(file = destFile)) }
             return
@@ -956,7 +957,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         if (!fileItem.isNas) return false
         val ext  = fileItem.name.substringAfterLast(".")
         val file = File(nasCacheDir(), "nas_${fileItem.nasPath.hashCode()}.$ext")
-        return file.exists() && file.length() >= 100 * 1024
+        return file.exists() && isFullyCached(file.length(), fileItem.size)
     }
 
     fun clearNasCache(): Long {
