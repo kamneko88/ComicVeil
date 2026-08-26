@@ -68,6 +68,7 @@ object TransferManager {
         appContext  = context.applicationContext
         appPrefs    = AppPrefs(appContext)
         initialized = true
+        File(appContext.cacheDir, "dl_work").deleteRecursively()
     }
 
     // ─── キュー操作 ──────────────────────────────────────────────────────

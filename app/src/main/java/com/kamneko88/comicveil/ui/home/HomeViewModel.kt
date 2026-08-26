@@ -978,4 +978,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
         return totalBytes
     }
+
+    fun clearPageCache(): Long {
+        val dir = File(getApplication<Application>().cacheDir, "archive_pages")
+        val totalBytes = dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        dir.deleteRecursively()
+        return totalBytes
+    }
 }

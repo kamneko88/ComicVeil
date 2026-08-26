@@ -29,11 +29,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +43,8 @@ import androidx.documentfile.provider.DocumentFile
 import com.kamneko88.comicveil.BuildConfig
 import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.ui.home.HomeViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -109,16 +110,30 @@ fun SettingsScreen(
     }
 
     // ── キャッシュ ────────────────────────────────────────────────────────
-    var nasCacheSize             by remember { mutableLongStateOf(calcDirSize(File(context.cacheDir, "nas_cache"))) }
-    var thumbnailCacheSize       by remember { mutableLongStateOf(calcDirSize(thumbnailCacheDir)) }
-    var showClearNasDialog       by remember { mutableStateOf(false) }
-    var showClearThumbnailDialog by remember { mutableStateOf(false) }
+    val nasCacheDir               = remember { File(context.cacheDir, "nas_cache") }
+    val pageCacheDir               = remember { File(context.cacheDir, "archive_pages") }
+    var nasCacheSize              by remember { mutableStateOf<Long?>(null) }
+    var thumbnailCacheSize        by remember { mutableStateOf<Long?>(null) }
+    var pageCacheSize             by remember { mutableStateOf<Long?>(null) }
+    var showClearNasDialog        by remember { mutableStateOf(false) }
+    var showClearThumbnailDialog  by remember { mutableStateOf(false) }
+    var showClearPageDialog       by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        nasCacheSize = withContext(Dispatchers.IO) { calcDirSize(nasCacheDir) }
+    }
+    LaunchedEffect(Unit) {
+        thumbnailCacheSize = withContext(Dispatchers.IO) { calcDirSize(thumbnailCacheDir) }
+    }
+    LaunchedEffect(Unit) {
+        pageCacheSize = withContext(Dispatchers.IO) { calcDirSize(pageCacheDir) }
+    }
 
     if (showClearNasDialog) {
         AlertDialog(
             onDismissRequest = { showClearNasDialog = false },
             title = { Text("STRキャッシュを削除") },
-            text  = { Text("ストリーミングでダウンロードしたキャッシュ（${formatBytes(nasCacheSize)}）を全て削除します。") },
+            text  = { Text("ストリーミングでダウンロードしたキャッシュ（${formatBytes(nasCacheSize ?: 0L)}）を全て削除します。") },
             confirmButton = {
                 TextButton(onClick = {
                     showClearNasDialog = false
@@ -136,7 +151,7 @@ fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { showClearThumbnailDialog = false },
             title = { Text("サムネイルキャッシュを削除") },
-            text  = { Text("サムネイル画像のキャッシュ（${formatBytes(thumbnailCacheSize)}）を全て削除します。\n次回表示時に再生成されます。") },
+            text  = { Text("サムネイル画像のキャッシュ（${formatBytes(thumbnailCacheSize ?: 0L)}）を全て削除します。\n次回表示時に再生成されます。") },
             confirmButton = {
                 TextButton(onClick = {
                     showClearThumbnailDialog = false
@@ -146,6 +161,24 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showClearThumbnailDialog = false }) { Text("キャンセル") }
+            }
+        )
+    }
+
+    if (showClearPageDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearPageDialog = false },
+            title = { Text("ページキャッシュを削除") },
+            text  = { Text("本を開いたときに展開したページ画像（${formatBytes(pageCacheSize ?: 0L)}）を全て削除します。\n次に同じ本を開いたときに再展開されます。本自体が失われることはありません。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showClearPageDialog = false
+                    viewModel.clearPageCache()
+                    pageCacheSize = 0L
+                }) { Text("削除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearPageDialog = false }) { Text("キャンセル") }
             }
         )
     }
@@ -467,6 +500,13 @@ fun SettingsScreen(
                 size     = thumbnailCacheSize,
                 onClear  = { showClearThumbnailDialog = true }
             )
+            HorizontalDivider()
+            SettingsCacheItem(
+                title    = "ページキャッシュ",
+                subtitle = "本を開いたときに展開したページ画像",
+                size     = pageCacheSize,
+                onClear  = { showClearPageDialog = true }
+            )
 
             // ════════════════════════════════════════════════════
             // ℹ️ バージョン情報
@@ -589,7 +629,7 @@ private fun SettingsSwitchItem(
 private fun SettingsCacheItem(
     title: String,
     subtitle: String,
-    size: Long,
+    size: Long?,
     onClear: () -> Unit
 ) {
     Row(
@@ -607,15 +647,19 @@ private fun SettingsCacheItem(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                text  = if (size > 0) formatBytes(size) else "0 B（空）",
+                text  = when {
+                    size == null -> "計算中…"
+                    size > 0     -> formatBytes(size)
+                    else         -> "0 B（空）"
+                },
                 style = MaterialTheme.typography.labelSmall,
-                color = if (size > 0) MaterialTheme.colorScheme.onSurface
+                color = if (size != null && size > 0) MaterialTheme.colorScheme.onSurface
                         else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         OutlinedButton(
             onClick  = onClear,
-            enabled  = size > 0,
+            enabled  = size != null && size > 0,
             modifier = Modifier.padding(start = 8.dp)
         ) {
             Text("削除")
@@ -624,7 +668,7 @@ private fun SettingsCacheItem(
 }
 
 private fun calcDirSize(dir: File): Long =
-    dir.listFiles()?.sumOf { it.length() } ?: 0L
+    dir.listFiles()?.sumOf { if (it.isDirectory) calcDirSize(it) else it.length() } ?: 0L
 
 private fun formatBytes(bytes: Long): String = when {
     bytes >= 1_000_000_000L -> "%.1f GB".format(bytes / 1_000_000_000.0)
