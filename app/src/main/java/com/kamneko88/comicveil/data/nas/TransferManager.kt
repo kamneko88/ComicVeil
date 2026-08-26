@@ -8,6 +8,7 @@ import androidx.documentfile.provider.DocumentFile
 import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.ZipStreamSupport
+import com.kamneko88.comicveil.data.isFullyCached
 import com.kamneko88.comicveil.service.TransferService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -110,7 +111,8 @@ object TransferManager {
             server       = server,
             destPath     = destFile.absolutePath,
             safTargetUri = safTargetUri,
-            isStreaming  = isStreaming
+            isStreaming  = isStreaming,
+            totalBytes   = fileItem.size
         )
 
         _items.value = _items.value + item
@@ -129,7 +131,8 @@ object TransferManager {
             nasPath      = item.nasPath,
             server       = item.server,
             destPath     = item.destPath,
-            safTargetUri = item.safTargetUri
+            safTargetUri = item.safTargetUri,
+            totalBytes   = item.totalBytes
         )
         _items.value = _items.value + newItem
         ensureServiceRunning()
@@ -223,7 +226,7 @@ object TransferManager {
                 val destFile = File(next.destPath)
 
                 // すでにファイルが存在する場合はスキップ（キャッシュ済み）
-                if (destFile.exists() && destFile.length() > 0 && next.safTargetUri == null) {
+                if (destFile.exists() && isFullyCached(destFile.length(), next.totalBytes) && next.safTargetUri == null) {
                     updateItem(next.id) {
                         it.copy(
                             status          = TransferStatus.COMPLETED,
@@ -234,7 +237,7 @@ object TransferManager {
                     return@launch
                 }
 
-                if (!(destFile.exists() && destFile.length() > 0)) {
+                if (!(destFile.exists() && isFullyCached(destFile.length(), next.totalBytes))) {
                     // 進捗更新の間引き：％が変わった時だけUIへ反映する。
                     // （毎チャンク更新するとリスト全体の再構築・再描画が頻発し、
                     //   非力な端末で描画が詰まって進捗バーが固まる原因になる）
