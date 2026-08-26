@@ -1,6 +1,7 @@
 package com.kamneko88.comicveil.ui.viewer
 
 import android.graphics.Bitmap
+import androidx.core.graphics.get
 import coil3.size.Size
 import coil3.transform.Transformation
 
@@ -34,10 +35,10 @@ class TrimMarginsTransformation(
 
         // 四隅の明るさから背景色（白系 or 黒系）を判断する
         val corners = intArrayOf(
-            input.getPixel(0, 0),
-            input.getPixel(width - 1, 0),
-            input.getPixel(0, height - 1),
-            input.getPixel(width - 1, height - 1)
+            input[0, 0],
+            input[width - 1, 0],
+            input[0, height - 1],
+            input[width - 1, height - 1]
         )
         val isLightEdge = corners.map { luminance(it) }.average() > 128
 
@@ -51,7 +52,7 @@ class TrimMarginsTransformation(
         fun isBackgroundRow(y: Int): Boolean {
             var x = 0
             while (x < width) {
-                if (!isBackground(input.getPixel(x, y), isLightEdge)) return false
+                if (!isBackground(input[x, y], isLightEdge)) return false
                 x += stepX
             }
             return true
@@ -60,7 +61,7 @@ class TrimMarginsTransformation(
         fun isBackgroundColumn(x: Int): Boolean {
             var y = 0
             while (y < height) {
-                if (!isBackground(input.getPixel(x, y), isLightEdge)) return false
+                if (!isBackground(input[x, y], isLightEdge)) return false
                 y += stepY
             }
             return true

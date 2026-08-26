@@ -1,6 +1,7 @@
 package com.kamneko88.comicveil.data.nas
 
 import android.content.Context
+import androidx.core.content.edit
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -72,6 +73,6 @@ class RemoteBookmarkPrefs(context: Context) {
                 put("isFolder", b.isFolder)
             })
         }
-        prefs.edit().putString("bookmarks", array.toString()).apply()
+        prefs.edit { putString("bookmarks", array.toString()) }
     }
 }

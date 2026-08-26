@@ -1,6 +1,7 @@
 package com.kamneko88.comicveil.data.nas
 
 import android.content.Context
+import androidx.core.content.edit
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -55,6 +56,6 @@ class NasServerPrefs(context: Context) {
                 put("password",    s.password)
             })
         }
-        prefs.edit().putString("servers", array.toString()).apply()
+        prefs.edit { putString("servers", array.toString()) }
     }
 }

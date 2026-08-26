@@ -3,6 +3,7 @@ package com.kamneko88.comicveil.data
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.core.graphics.scale
 import com.github.junrar.Archive
 import com.kamneko88.comicveil.data.nas.NasServer
 import com.kamneko88.comicveil.data.nas.SmbRepository
@@ -200,7 +201,7 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
         val ratio       = minOf(targetWidth.toFloat() / original.width, targetHeight.toFloat() / original.height)
         val scaledWidth = (original.width  * ratio).toInt().coerceAtLeast(1)
         val scaledHeight= (original.height * ratio).toInt().coerceAtLeast(1)
-        return Bitmap.createScaledBitmap(original, scaledWidth, scaledHeight, true)
+        return original.scale(scaledWidth, scaledHeight)
     }
 
     private fun getCacheFile(filePath: String): File {

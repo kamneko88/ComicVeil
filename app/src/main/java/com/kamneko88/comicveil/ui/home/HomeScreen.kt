@@ -2,11 +2,11 @@ package com.kamneko88.comicveil.ui.home
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -130,7 +130,7 @@ private class OpenDocumentInDownloads : ActivityResultContracts.OpenDocument() {
     override fun createIntent(context: Context, input: Array<String>): Intent {
         val intent = super.createIntent(context, input)
         val downloadsUri =
-            Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload")
+            "content://com.android.externalstorage.documents/document/primary%3ADownload".toUri()
         intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, downloadsUri)
         return intent
     }

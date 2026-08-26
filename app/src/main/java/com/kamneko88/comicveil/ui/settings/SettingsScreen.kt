@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import com.kamneko88.comicveil.BuildConfig
 import com.kamneko88.comicveil.data.AppPrefs
@@ -528,7 +529,7 @@ fun SettingsScreen(
 
 private fun getSafFolderDisplayName(context: android.content.Context, uriString: String): String? {
     return try {
-        DocumentFile.fromTreeUri(context, android.net.Uri.parse(uriString))?.name
+        DocumentFile.fromTreeUri(context, uriString.toUri())?.name
     } catch (e: Exception) {
         null
     }

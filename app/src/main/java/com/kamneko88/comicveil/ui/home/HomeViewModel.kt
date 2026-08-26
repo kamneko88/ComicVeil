@@ -2,6 +2,7 @@ package com.kamneko88.comicveil.ui.home
 
 import android.app.Application
 import android.net.Uri
+import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -425,7 +426,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             AppPrefs.HomeFolderType.SAF_FOLDER -> {
                 val uriString = appPrefs.homeFolderSafUri
                 _files.value = if (uriString != null) {
-                    safFileRepository.getFiles(getApplication(), Uri.parse(uriString))
+                    safFileRepository.getFiles(getApplication(), uriString.toUri())
                 } else {
                     emptyList()
                 }

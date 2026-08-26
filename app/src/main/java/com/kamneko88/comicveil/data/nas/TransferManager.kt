@@ -2,8 +2,8 @@ package com.kamneko88.comicveil.data.nas
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.util.Log
+import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.data.FileItem
@@ -310,7 +310,7 @@ object TransferManager {
 
     /** ダウンロード済みファイルを、SAFで許可されたフォルダへコピーする */
     private fun copyToSafFolder(sourceFile: File, targetUriString: String, fileName: String) {
-        val treeDoc = DocumentFile.fromTreeUri(appContext, Uri.parse(targetUriString))
+        val treeDoc = DocumentFile.fromTreeUri(appContext, targetUriString.toUri())
             ?: error("保存先フォルダにアクセスできません")
 
         // 同名ファイルがあれば削除してから作成（上書き）

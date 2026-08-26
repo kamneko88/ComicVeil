@@ -2,6 +2,7 @@ package com.kamneko88.comicveil.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.core.content.edit
 
 /**
  * ソート・フィルター設定の永続化
@@ -22,13 +23,13 @@ class SortPrefs(context: Context) {
 
     var sortKey: SortKey
         get() = SortKey.valueOf(prefs.getString("sort_key", SortKey.NAME.name) ?: SortKey.NAME.name)
-        set(v) = prefs.edit().putString("sort_key", v.name).apply()
+        set(v) = prefs.edit { putString("sort_key", v.name) }
 
     // ── 昇順/降順 ────────────────────────────────────────────────────────
 
     var ascending: Boolean
         get() = prefs.getBoolean("ascending", true)
-        set(v) = prefs.edit().putBoolean("ascending", v).apply()
+        set(v) = prefs.edit { putBoolean("ascending", v) }
 
     // ── フォルダ表示順 ───────────────────────────────────────────────────
 
@@ -43,7 +44,7 @@ class SortPrefs(context: Context) {
             prefs.getString("folder_order", FolderOrder.FOLDER_FIRST.name)
                 ?: FolderOrder.FOLDER_FIRST.name
         )
-        set(v) = prefs.edit().putString("folder_order", v.name).apply()
+        set(v) = prefs.edit { putString("folder_order", v.name) }
 
     // ── フィルター：読書状態 ─────────────────────────────────────────────
     // null = フィルターなし、値あり = 指定状態のみ表示
@@ -51,21 +52,21 @@ class SortPrefs(context: Context) {
     /** アクティブな読書状態フィルター（カンマ区切りで複数保存） */
     var statusFilter: Set<String>
         get() = prefs.getStringSet("status_filter", emptySet()) ?: emptySet()
-        set(v) = prefs.edit().putStringSet("status_filter", v).apply()
+        set(v) = prefs.edit { putStringSet("status_filter", v) }
 
     // ── フィルター：カラーラベル ─────────────────────────────────────────
     // 空 = フィルターなし、値あり = 指定ラベルのみ表示
 
     var colorLabelFilter: Set<String>
         get() = prefs.getStringSet("color_label_filter", emptySet()) ?: emptySet()
-        set(v) = prefs.edit().putStringSet("color_label_filter", v).apply()
+        set(v) = prefs.edit { putStringSet("color_label_filter", v) }
 
     /** すべてのフィルターをリセット */
     fun clearFilters() {
-        prefs.edit()
-            .remove("status_filter")
-            .remove("color_label_filter")
-            .apply()
+        prefs.edit {
+            remove("status_filter")
+            remove("color_label_filter")
+        }
     }
 
     /** フィルターが1つでもアクティブか */

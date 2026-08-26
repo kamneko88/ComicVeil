@@ -1,6 +1,7 @@
 package com.kamneko88.comicveil.data
 
 import android.content.Context
+import androidx.core.content.edit
 import java.io.File
 
 /**
@@ -25,12 +26,12 @@ class AppPrefs(context: Context) {
                     ?: HomeFolderType.APP_FOLDER.name
             )
         }.getOrDefault(HomeFolderType.APP_FOLDER) // 旧バージョンのDOWNLOADS等、未知の値が保存されていた場合の保険
-        set(value) = prefs.edit().putString(KEY_HOME_FOLDER, value.name).apply()
+        set(value) = prefs.edit { putString(KEY_HOME_FOLDER, value.name) }
 
     /** SAFで選択したホームフォルダのツリーURI（未選択ならnull） */
     var homeFolderSafUri: String?
         get() = prefs.getString(KEY_HOME_FOLDER_SAF_URI, null)
-        set(value) = prefs.edit().putString(KEY_HOME_FOLDER_SAF_URI, value).apply()
+        set(value) = prefs.edit { putString(KEY_HOME_FOLDER_SAF_URI, value) }
 
     // ─── DL保存先 ─────────────────────────────────────────────────────────
 
@@ -46,12 +47,12 @@ class AppPrefs(context: Context) {
                     ?: DownloadFolderType.APP_FOLDER.name
             )
         }.getOrDefault(DownloadFolderType.APP_FOLDER) // 旧バージョンのDOWNLOADS等、未知の値が保存されていた場合の保険
-        set(value) = prefs.edit().putString(KEY_DOWNLOAD_FOLDER, value.name).apply()
+        set(value) = prefs.edit { putString(KEY_DOWNLOAD_FOLDER, value.name) }
 
     /** SAFで選択したDL保存先のツリーURI（未選択ならnull） */
     var downloadFolderSafUri: String?
         get() = prefs.getString(KEY_DOWNLOAD_FOLDER_SAF_URI, null)
-        set(value) = prefs.edit().putString(KEY_DOWNLOAD_FOLDER_SAF_URI, value).apply()
+        set(value) = prefs.edit { putString(KEY_DOWNLOAD_FOLDER_SAF_URI, value) }
 
     // ─── フォルダパス解決（アプリ専用フォルダのみ。SAF側は呼び出し元で分岐） ──────
 
@@ -71,30 +72,30 @@ class AppPrefs(context: Context) {
             prefs.getString(KEY_PAGE_DIRECTION, PageDirection.RIGHT_TO_LEFT.name)
                 ?: PageDirection.RIGHT_TO_LEFT.name
         )
-        set(value) = prefs.edit().putString(KEY_PAGE_DIRECTION, value.name).apply()
+        set(value) = prefs.edit { putString(KEY_PAGE_DIRECTION, value.name) }
 
     // ─── ページ送りアニメーション ─────────────────────────────────────────
 
     var pageAnimation: Boolean
         get() = prefs.getBoolean(KEY_PAGE_ANIMATION, true)
-        set(value) = prefs.edit().putBoolean(KEY_PAGE_ANIMATION, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_PAGE_ANIMATION, value) }
 
     /** ページ送りのアニメーション自体の有無（OFFで即座に切り替わる・非力な端末向け） */
     var pageTurnAnimation: Boolean
         get() = prefs.getBoolean(KEY_PAGE_TURN_ANIMATION, true)
-        set(value) = prefs.edit().putBoolean(KEY_PAGE_TURN_ANIMATION, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_PAGE_TURN_ANIMATION, value) }
 
     // ─── 音量ボタンでページ送り ───────────────────────────────────────────
 
     var volumeKeyPageTurn: Boolean
         get() = prefs.getBoolean(KEY_VOLUME_KEY_PAGE_TURN, false)
-        set(value) = prefs.edit().putBoolean(KEY_VOLUME_KEY_PAGE_TURN, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_VOLUME_KEY_PAGE_TURN, value) }
 
     // ─── ズームバウンス ───────────────────────────────────────────────────
 
     var zoomBounce: Boolean
         get() = prefs.getBoolean(KEY_ZOOM_BOUNCE, true)
-        set(value) = prefs.edit().putBoolean(KEY_ZOOM_BOUNCE, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_ZOOM_BOUNCE, value) }
 
     // ─── ダブルタップズーム率 ─────────────────────────────────────────────
 
@@ -109,7 +110,7 @@ class AppPrefs(context: Context) {
             prefs.getString(KEY_DOUBLE_TAP_ZOOM, DoubleTapZoom.ZOOM_120.name)
                 ?: DoubleTapZoom.ZOOM_120.name
         )
-        set(value) = prefs.edit().putString(KEY_DOUBLE_TAP_ZOOM, value.name).apply()
+        set(value) = prefs.edit { putString(KEY_DOUBLE_TAP_ZOOM, value.name) }
 
     // ─── 見開き表示 ──────────────────────────────────────
 
@@ -125,12 +126,12 @@ class AppPrefs(context: Context) {
                 prefs.getString(KEY_SPREAD_MODE, SpreadMode.OFF.name) ?: SpreadMode.OFF.name
             )
         }.getOrDefault(SpreadMode.OFF)
-        set(value) = prefs.edit().putString(KEY_SPREAD_MODE, value.name).apply()
+        set(value) = prefs.edit { putString(KEY_SPREAD_MODE, value.name) }
 
     /** 見開き時に1ページ目（表紙）を単独で表示するか。マンガは通常ON。 */
     var spreadCoverSingle: Boolean
         get() = prefs.getBoolean(KEY_SPREAD_COVER_SINGLE, true)
-        set(value) = prefs.edit().putBoolean(KEY_SPREAD_COVER_SINGLE, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_SPREAD_COVER_SINGLE, value) }
 
     /**
      * 見開き分割：見開き表示がOFFのとき、横長ページ（見開きの1枚絵）を検出して
@@ -138,7 +139,7 @@ class AppPrefs(context: Context) {
      */
     var splitWidePages: Boolean
         get() = prefs.getBoolean(KEY_SPLIT_WIDE_PAGES, true)
-        set(value) = prefs.edit().putBoolean(KEY_SPLIT_WIDE_PAGES, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_SPLIT_WIDE_PAGES, value) }
 
     /** 見開きの綴じ代（左右ページの中央に入れる余白。画像幅に対する割合） */
     enum class SpreadGutter(val percent: Int, val label: String) {
@@ -155,7 +156,7 @@ class AppPrefs(context: Context) {
                 prefs.getString(KEY_SPREAD_GUTTER, SpreadGutter.G1.name) ?: SpreadGutter.G1.name
             )
         }.getOrDefault(SpreadGutter.G1)
-        set(value) = prefs.edit().putString(KEY_SPREAD_GUTTER, value.name).apply()
+        set(value) = prefs.edit { putString(KEY_SPREAD_GUTTER, value.name) }
 
     // 背景色
 
@@ -172,7 +173,7 @@ class AppPrefs(context: Context) {
                     ?: BackgroundColor.BLACK.name
             )
         }.getOrDefault(BackgroundColor.BLACK)
-        set(value) = prefs.edit().putString(KEY_BACKGROUND_COLOR, value.name).apply()
+        set(value) = prefs.edit { putString(KEY_BACKGROUND_COLOR, value.name) }
 
     // ─── 余白削除 ───────────────────────────────────────
 
@@ -187,12 +188,12 @@ class AppPrefs(context: Context) {
         get() = runCatching {
             TrimMode.valueOf(prefs.getString(KEY_TRIM_MODE, TrimMode.OFF.name) ?: TrimMode.OFF.name)
         }.getOrDefault(TrimMode.OFF)
-        set(value) = prefs.edit().putString(KEY_TRIM_MODE, value.name).apply()
+        set(value) = prefs.edit { putString(KEY_TRIM_MODE, value.name) }
 
     /** 余白削除後も元の縦横比を保つ（ページごとに大きさが変わるのを防ぐ） */
     var trimKeepAspect: Boolean
         get() = prefs.getBoolean(KEY_TRIM_KEEP_ASPECT, true)
-        set(value) = prefs.edit().putBoolean(KEY_TRIM_KEEP_ASPECT, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_TRIM_KEEP_ASPECT, value) }
 
     // ─── ファイル一覧表示モード ───────────────────────────────────────────
 
@@ -203,12 +204,12 @@ class AppPrefs(context: Context) {
             prefs.getString(KEY_LIST_DISPLAY_MODE, ListDisplayMode.DETAIL.name)
                 ?: ListDisplayMode.DETAIL.name
         )
-        set(value) = prefs.edit().putString(KEY_LIST_DISPLAY_MODE, value.name).apply()
+        set(value) = prefs.edit { putString(KEY_LIST_DISPLAY_MODE, value.name) }
 
     /** 本棚モードで表紙の下にタイトルを表示するか（初期値は表紙のみ） */
     var shelfShowTitle: Boolean
         get() = prefs.getBoolean(KEY_SHELF_SHOW_TITLE, false)
-        set(value) = prefs.edit().putBoolean(KEY_SHELF_SHOW_TITLE, value).apply()
+        set(value) = prefs.edit { putBoolean(KEY_SHELF_SHOW_TITLE, value) }
 
     /**
      * ビューワーの明るさ（0.0〜1.0）。
@@ -217,7 +218,7 @@ class AppPrefs(context: Context) {
      */
     var viewerBrightness: Float
         get() = prefs.getFloat(KEY_VIEWER_BRIGHTNESS, -1f)
-        set(value) = prefs.edit().putFloat(KEY_VIEWER_BRIGHTNESS, value).apply()
+        set(value) = prefs.edit { putFloat(KEY_VIEWER_BRIGHTNESS, value) }
 
     companion object {
         private const val KEY_HOME_FOLDER            = "home_folder_type"
