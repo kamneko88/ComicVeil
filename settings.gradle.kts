@@ -22,6 +22,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Comic Veil"
+rootProject.name = "ComicVeil"
 include(":app")
  

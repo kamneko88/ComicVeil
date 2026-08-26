@@ -475,7 +475,7 @@ fun SettingsScreen(
             HorizontalDivider()
             Spacer(Modifier.height(16.dp))
             Text(
-                text      = "Comic Veil  v${BuildConfig.VERSION_NAME}",
+                text      = "ComicVeil  v${BuildConfig.VERSION_NAME}",
                 style     = MaterialTheme.typography.bodySmall,
                 color     = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,

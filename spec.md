@@ -1,4 +1,4 @@
-# Comic Veil — アプリ仕様書
+# ComicVeil — アプリ仕様書
 
 最終更新日：2026年6月23日
 
@@ -23,7 +23,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| アプリ名 | **Comic Veil** |
+| アプリ名 | **ComicVeil** |
 | パッケージ名 | com.kamneko88.comicveil |
 | ジャンル | マンガ・コミックビューワー |
 | 対象プラットフォーム | Android（メイン）、将来的にWindows |
@@ -346,7 +346,7 @@ UIは完全に非表示
 - RARは従来通り全DL後に表示（将来的にProgressive対応予定）
 
 #### Intent対応（他アプリからの受け取り）
-- ファイルマネージャー等から「Comic Veilで開く」でZIP/RARを直接起動
+- ファイルマネージャー等から「ComicVeilで開く」でZIP/RARを直接起動
 - content URI → キャッシュにコピー、file URI → そのまま参照
 
 ---
@@ -401,7 +401,7 @@ UIは完全に非表示
 | 方法 | 状態 | 説明 |
 |---|---|---|
 | USB転送（PC→スマホ） | ✅ 対応 | アプリ側対応不要 |
-| 他アプリからの共有（Intent） | ✅ 実装済み | 「Comic Veilで開く」で受け取り |
+| 他アプリからの共有（Intent） | ✅ 実装済み | 「ComicVeilで開く」で受け取り |
 | NASから直接ストリーミング | ✅ 実装済み | Progressive Loading対応 |
 | NASからダウンロード | ✅ 実装済み | ファイル選択式・複数選択可 |
 | Wi-Fi経由転送UI | ⬜ Phase 2 | アプリ内Webサーバー機能 |
