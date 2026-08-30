@@ -31,10 +31,10 @@
 | UIフレームワーク | Jetpack Compose + Material Design 3 |
 | 開発環境 | Android Studio |
 | プロジェクト保存先 | D:\Data\10_Projects\dev\ComicVeil |
-| GitHubリポジトリ | kamneko88/ComicVeil（プライベート） |
-| 配信先 | Google Play Store（将来）、野良APK配布（初期） |
+| GitHubリポジトリ | kamneko88/ComicVeil（**Public**） |
+| 配信先 | **Google Play Store（クローズドテスト実施中・2026年8月開始）** |
 | 最小SDKバージョン | API 26（Android 8.0） |
-| 現在バージョン | v0.16.0（2026年6月23日時点） |
+| 現在バージョン | **v0.40.0（2026年8月30日時点）** |
 
 ### コンセプト
 
@@ -81,9 +81,10 @@ UIの設計思想・操作概念を参考にしており、アプリ説明欄に
 |---|---|---|
 | 画像表示 | **Coil 3** | Kotlin製・メモリ管理優秀・キャッシュ機能◎ |
 | ZIP/CBZ展開 | **Apache Commons Compress** | Shift-JIS対応・Progressive Loading対応 |
-| RAR/CBR展開 | **junrar** | OSSで扱いやすい |
-| 7z展開 | **Apache Commons Compress** | 未実装・Phase 1予定 |
-| PDF表示 | **Android標準 PdfRenderer** | 未実装・Phase 1予定 |
+| RAR/CBR展開 | **junrar（RAR4）／libarchive-android（RAR5）** | ファイルの中身からRARのバージョンを判定して振り分ける。junrarはRAR5非対応、libarchiveはAndroidで日本語ファイル名の取得が不安定なため（詳細は開発ノート） |
+| 7z展開 | **Apache Commons Compress ＋ tukaani xz** | 実装済み（v0.18.0）。LZMA/XZ の展開に xz の明示追加が必要 |
+| PDF表示 | **Android標準 PdfRenderer** | 実装済み（v0.18.0） |
+| パスワード付きZIP | **zip4j** | **現在は暗号化の検知のみに使用。**パスワード付きファイルは対象外のため展開には使っていない（正式リリース後に対応予定） |
 | SMB接続（NAS） | **SMBJ 0.13.0** | Android実績あり |
 | データベース | **Room 2.7.0（SQLite）** | Android公式ORM |
 | アニメーション | **Compose spring()** | HorizontalPagerのflingBehaviorで実装 |
@@ -588,11 +589,11 @@ colorLabelFilter：Set<String>
 
 | 形式 | 拡張子 | ライブラリ | 状態 |
 |---|---|---|---|
-| ZIP | .zip / .cbz | Apache Commons Compress | ✅ 実装済み（Progressive Loading対応） |
-| RAR | .rar / .cbr | junrar | ✅ 実装済み |
-| 7-Zip | .7z | Apache Commons Compress | ⬜ 未実装（Phase 1予定） |
-| PDF | .pdf | Android標準 PdfRenderer | ⬜ 未実装（Phase 1予定） |
-| パスワード付きZIP | .zip | - | ⬜ 未実装（Phase 1予定） |
+| ZIP | .zip / .cbz | Apache Commons Compress | ✅ 実装済み（Progressive Loading対応）。**.cbz は実機で動作確認済み** |
+| RAR | .rar / .cbr | junrar（RAR4）／libarchive-android（RAR5） | ✅ 実装済み |
+| 7-Zip | .7z | Apache Commons Compress ＋ tukaani xz | ✅ 実装済み（v0.18.0） |
+| PDF | .pdf | Android標準 PdfRenderer | ✅ 実装済み（v0.18.0） |
+| **パスワード付きファイル** | すべて | zip4j（検知のみ） | ❌ **対象外**（2026-08-30 方針決定）。開こうとすると未対応である旨を表示して閉じる。**正式リリース後のアップデートで対応予定** |
 
 ---
 
@@ -605,8 +606,8 @@ colorLabelFilter：Set<String>
 ✅ 基本的なファイルブラウザ（ローカル・NAS）
 ✅ ZIP/CBZ・RAR/CBR対応
 ✅ ZIP Progressive Loading（STRモード・1ページ目から即表示）
-⬜ 7z・PDF対応
-⬜ パスワード付きZIP対応
+✅ 7z・PDF対応（v0.18.0）
+❌ パスワード付きファイル対応 → **対象外に変更**（2026-08-30。正式リリース後のアップデートで対応予定）
 ✅ 快適なページ送り（スプリングアニメーション）
 ✅ ズーム機能（ダブルタップ・ピンチ・パン）
 ✅ 読書位置の自動保存
@@ -629,8 +630,8 @@ colorLabelFilter：Set<String>
 ⬜ プリセット機能
 ⬜ 設定画面の完成（ページ送り方向・見開き・物理キー操作等）
 ⬜ タグ機能
-⬜ SAF権限（MANAGE_EXTERNAL_STORAGEからの移行）
-⬜ Google Play クローズドテスト準備
+✅ SAF権限（MANAGE_EXTERNAL_STORAGEからの移行。v0.19.0で完了）
+✅ Google Play クローズドテスト準備 → **2026年8月19日に開始・実施中**
 ⬜ Phase 1 最終調整・実機テスト
 ```
 
@@ -669,12 +670,12 @@ colorLabelFilter：Set<String>
 
 ## 10. 未決事項
 
-- [ ] アプリアイコンデザイン
+- [x] アプリアイコンデザイン → **アダプティブアイコンで実装済み**（v0.26.0）
 - [x] カラーテーマ → **ダークテーマ固定**に決定
 - [ ] プリセット数の上限（A〜E＝5つで仮決定）
 - [x] 収益モデル → **無料＋アドオン（統計＋クラウド連携）**に決定
 - [ ] 対応言語（日本語先行／英語同時対応）
-- [x] DLモード時のファイル保存先 → **Downloads/ComicVeil/** に決定
+- [x] DLモード時のファイル保存先 → **2択に変更**（2026-08 現在）。①アプリ専用領域（`Android/data/com.kamneko88.comicveil/files/Comics`・既定・推奨） ②ユーザーがSAFで選んだ任意のフォルダ。**当初の「Downloads/ComicVeil/」はSAF移行（v0.19.0）に伴い廃止**
 - [ ] WebDAV対応（SMBのみで当面進める）
 - [ ] タブレット横向きレイアウトの詳細
 - [x] iOS・Mac版 → **リリース対象外**に決定
@@ -688,3 +689,5 @@ colorLabelFilter：Set<String>
 ---
 
 *このドキュメントは開発進行に伴い随時更新される。*
+
+最終更新日：2026年8月30日

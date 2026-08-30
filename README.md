@@ -7,13 +7,13 @@ NAS（自宅サーバー）上のファイルをストリーミングで直接�
 iOS用ビューワーアプリ **Comic Glass** の操作性・設計思想に強くインスパイアされています。
 本アプリはその世界観をAndroidでも実現することを目指した個人開発プロジェクトです。
 
-> 🚧 開発中（Phase 1）：Google Play未公開。現在は野良APKでの個人利用に加え、Google Play申請に向けた準備を進めている段階です。
+> 🚧 開発中（Phase 1）：**Google Play でクローズドテストを実施中**です（2026年8月開始）。一般公開はまだ行っていません。
 
 ---
 
 ## スクリーンショット
 
-準備中（実機での撮影後に追加予定）
+実機で撮影済み（Google Play のストア掲載ページに掲載中）。README への掲載は準備中です。
 
 ---
 
@@ -43,11 +43,17 @@ iOS用ビューワーアプリ **Comic Glass** の操作性・設計思想に強
 
 | 形式 | 拡張子 | 状態 |
 |---|---|---|
-| ZIP / CBZ | `.zip` `.cbz` | ✅ 対応（Shift-JIS・Progressive Loading対応） |
-| RAR / CBR | `.rar` `.cbr` | ✅ 対応 |
+| ZIP / CBZ | `.zip` `.cbz` | ✅ 対応（Shift-JIS・Progressive Loading対応）**※実機で動作確認済み** |
+| RAR / CBR | `.rar` `.cbr` | ✅ 対応（RAR4・RAR5とも）**※実機で動作確認済み** |
 | 7-Zip | `.7z` | ✅ 対応 |
 | PDF | `.pdf` | ✅ 対応 |
-| パスワード付きZIP | `.zip` | ⚠️ ローカルファイルのみ対応（NAS経由は現状未対応） |
+| パスワード付きファイル | すべて | ❌ **対象外**（正式リリース後のアップデートで対応予定） |
+
+パスワードで保護されたファイルを開こうとすると、**その旨を明示して閉じます。**
+形式を問わず対応していません（2026年8月に方針決定）。
+
+**★形式の判定は拡張子で行います。** 中身と拡張子が食い違うファイル
+（RARなのに `.cbz` など）は正しく開けません。
 
 ---
 
@@ -59,8 +65,7 @@ iOS用ビューワーアプリ **Comic Glass** の操作性・設計思想に強
 | UI | Jetpack Compose + Material Design 3 |
 | 画像表示 | Coil 3 |
 | ZIP / 7z 展開 | Apache Commons Compress |
-| RAR展開 | junrar |
-| パスワード付きZIP | zip4j |
+| RAR展開 | junrar（RAR4・日本語ファイル名対応） / libarchive-android（RAR5） |
 | SMB接続（NAS） | SMBJ |
 | データベース | Room（SQLite） |
 | 最小SDK | Android 8.0（API 26） |
@@ -109,7 +114,7 @@ git clone https://github.com/kamneko88/ComicVeil.git
 - プリセット機能（設定の一括切り替え）
 - 縦送り（webコミック風のページ送り方向）
 - 白系カラーテーマ（現在はダーク系のみ）
-- パスワード付きZIPのNAS経由ストリーミング非対応（要再検証）
+- パスワード付きファイルへの対応（形式を問わず対象外。正式リリース後に対応予定）
 - アプリロック（PIN／生体認証）
 
 より詳細な仕様は [`spec.md`](./spec.md) を参照してください。
@@ -125,6 +130,7 @@ git clone https://github.com/kamneko88/ComicVeil.git
 [Coil](https://github.com/coil-kt/coil) ·
 [Apache Commons Compress](https://commons.apache.org/proper/commons-compress/) ·
 [junrar](https://github.com/junrar/junrar) ·
+[libarchive-android](https://github.com/zhanghai/libarchive-android) ·
 [zip4j](https://github.com/srikanth-lingala/zip4j) ·
 [SMBJ](https://github.com/hierynomus/smbj)
 
@@ -137,4 +143,4 @@ git clone https://github.com/kamneko88/ComicVeil.git
 
 ---
 
-最終更新日：2026年7月20日
+最終更新日：2026年8月30日
