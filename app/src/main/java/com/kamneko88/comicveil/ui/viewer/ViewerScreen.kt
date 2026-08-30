@@ -133,6 +133,15 @@ import kotlinx.coroutines.launch
 import com.kamneko88.comicveil.MainActivity
 import kotlin.math.abs
 
+/**
+ * パスワード付きファイルへの対応を有効にするか。
+ *
+ * 2026-08-30：正式リリースまでは未対応とする方針になったため false。
+ * 検知・入力ダイアログ・展開の実装はすべて残してあるので、
+ * リリース後に対応を再開するときは、この値を true に戻すだけでよい。
+ */
+private val PASSWORD_SUPPORT_ENABLED = false
+
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Suppress("UnusedMaterial3ScaffoldPaddingParameter") // 全画面没入表示のため、あえてinnerPaddingを適用しない設計
 @Composable
@@ -353,55 +362,21 @@ fun ViewerScreen(
 
         // ── パスワード入力が必要 ────────────────────────────────────────────
         uiState.needsPassword -> {
-            var password by remember { mutableStateOf("") }
-            var showPassword by remember { mutableStateOf(false) }
-
-            AlertDialog(
-                onDismissRequest = onClose,
-                title = { Text("パスワードを入力") },
-                text  = {
-                    Column {
+            if (PASSWORD_SUPPORT_ENABLED) {
+                PasswordInputDialog(viewModel = viewModel, onClose = onClose)
+            } else {
+                AlertDialog(
+                    onDismissRequest = onClose,
+                    title = { Text("パスワード付きファイル") },
+                    text  = {
                         Text(
-                            text  = "このZIPファイルはパスワードで保護されています。",
-                            style = MaterialTheme.typography.bodyMedium
+                            "このファイルはパスワードで保護されています。\n\n" +
+                            "ComicVeilは現在、パスワード付きファイルに対応していません。"
                         )
-                        Spacer(Modifier.height(12.dp))
-                        OutlinedTextField(
-                            value         = password,
-                            onValueChange = { password = it },
-                            label         = { Text("パスワード") },
-                            singleLine    = true,
-                            visualTransformation = if (showPassword)
-                                VisualTransformation.None
-                            else
-                                PasswordVisualTransformation(),
-                            trailingIcon  = {
-                                IconButton(onClick = { showPassword = !showPassword }) {
-                                    Icon(
-                                        imageVector = if (showPassword) Lucide.EyeOff
-                                                      else Lucide.Eye,
-                                        contentDescription = if (showPassword) "隠す" else "表示"
-                                    )
-                                }
-                            },
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                            keyboardActions = KeyboardActions(
-                                onDone = { if (password.isNotEmpty()) viewModel.retryWithPassword(password) }
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick  = { if (password.isNotEmpty()) viewModel.retryWithPassword(password) },
-                        enabled  = password.isNotEmpty()
-                    ) { Text("開く") }
-                },
-                dismissButton = {
-                    TextButton(onClick = onClose) { Text("キャンセル") }
-                }
-            )
+                    },
+                    confirmButton = { TextButton(onClick = onClose) { Text("閉じる") } }
+                )
+            }
         }
 
         uiState.error != null -> {
@@ -951,6 +926,64 @@ fun ViewerScreen(
             }
         }
     }
+}
+
+// ─── パスワード入力ダイアログ（PASSWORD_SUPPORT_ENABLED = true のときのみ使用） ──
+
+@Composable
+private fun PasswordInputDialog(
+    viewModel: ViewerViewModel,
+    onClose: () -> Unit
+) {
+    var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("パスワードを入力") },
+        text  = {
+            Column {
+                Text(
+                    text  = "このZIPファイルはパスワードで保護されています。",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value         = password,
+                    onValueChange = { password = it },
+                    label         = { Text("パスワード") },
+                    singleLine    = true,
+                    visualTransformation = if (showPassword)
+                        VisualTransformation.None
+                    else
+                        PasswordVisualTransformation(),
+                    trailingIcon  = {
+                        IconButton(onClick = { showPassword = !showPassword }) {
+                            Icon(
+                                imageVector = if (showPassword) Lucide.EyeOff
+                                              else Lucide.Eye,
+                                contentDescription = if (showPassword) "隠す" else "表示"
+                            )
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = { if (password.isNotEmpty()) viewModel.retryWithPassword(password) }
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick  = { if (password.isNotEmpty()) viewModel.retryWithPassword(password) },
+                enabled  = password.isNotEmpty()
+            ) { Text("開く") }
+        },
+        dismissButton = {
+            TextButton(onClick = onClose) { Text("キャンセル") }
+        }
+    )
 }
 
 // ─── ページ移動ストリップ（サムネイルを見ながら細かく移動） ──────────
