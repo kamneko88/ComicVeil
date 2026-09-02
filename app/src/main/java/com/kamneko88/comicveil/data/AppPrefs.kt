@@ -220,6 +220,26 @@ class AppPrefs(context: Context) {
         get() = prefs.getFloat(KEY_VIEWER_BRIGHTNESS, -1f)
         set(value) = prefs.edit { putFloat(KEY_VIEWER_BRIGHTNESS, value) }
 
+    // ─── ページキャッシュの上限 ───────────────────────────────────────────
+
+    /** archive_pages の合計サイズがこれを超えたら、古い順にディレクトリごと削除する */
+    enum class PageCacheLimit(val bytes: Long, val label: String) {
+        MB500(500_000_000L, "500MB"),
+        GB1(1_000_000_000L, "1GB"),
+        GB2(2_000_000_000L, "2GB"),
+        GB5(5_000_000_000L, "5GB"),
+        UNLIMITED(0L, "無制限")
+    }
+
+    var pageCacheLimit: PageCacheLimit
+        get() = runCatching {
+            PageCacheLimit.valueOf(
+                prefs.getString(KEY_PAGE_CACHE_LIMIT, PageCacheLimit.GB1.name)
+                    ?: PageCacheLimit.GB1.name
+            )
+        }.getOrDefault(PageCacheLimit.GB1)
+        set(value) = prefs.edit { putString(KEY_PAGE_CACHE_LIMIT, value.name) }
+
     companion object {
         private const val KEY_HOME_FOLDER            = "home_folder_type"
         private const val KEY_HOME_FOLDER_SAF_URI    = "home_folder_saf_uri"
@@ -241,6 +261,7 @@ class AppPrefs(context: Context) {
         private const val KEY_LIST_DISPLAY_MODE      = "list_display_mode"
         private const val KEY_SHELF_SHOW_TITLE       = "shelf_show_title"
         private const val KEY_VIEWER_BRIGHTNESS      = "viewer_brightness"
+        private const val KEY_PAGE_CACHE_LIMIT       = "page_cache_limit"
 
         fun getAppFolder(context: Context): File {
             val dir = File(context.getExternalFilesDir(null), "Comics")

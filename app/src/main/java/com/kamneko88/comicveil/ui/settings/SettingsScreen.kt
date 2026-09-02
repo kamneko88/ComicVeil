@@ -43,6 +43,7 @@ import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import com.kamneko88.comicveil.BuildConfig
 import com.kamneko88.comicveil.data.AppPrefs
+import com.kamneko88.comicveil.data.calcDirSize
 import com.kamneko88.comicveil.ui.home.HomeViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -119,6 +120,7 @@ fun SettingsScreen(
     var showClearNasDialog        by remember { mutableStateOf(false) }
     var showClearThumbnailDialog  by remember { mutableStateOf(false) }
     var showClearPageDialog       by remember { mutableStateOf(false) }
+    var pageCacheLimit            by remember { mutableStateOf(appPrefs.pageCacheLimit) }
 
     LaunchedEffect(Unit) {
         nasCacheSize = withContext(Dispatchers.IO) { calcDirSize(nasCacheDir) }
@@ -509,6 +511,27 @@ fun SettingsScreen(
                 onClear  = { showClearPageDialog = true }
             )
 
+            HorizontalDivider()
+            Spacer(Modifier.height(12.dp))
+
+            // ── ページキャッシュの上限 ─────────────────────────
+            SettingsItemHeader(
+                title       = "ページキャッシュの上限",
+                description = "上限を超えると、しばらく開いていない本から順に削除されます"
+            )
+            AppPrefs.PageCacheLimit.entries.forEach { limit ->
+                SettingsRadioItem(
+                    label       = limit.label,
+                    description = "",
+                    selected    = pageCacheLimit == limit,
+                    onSelect    = {
+                        pageCacheLimit          = limit
+                        appPrefs.pageCacheLimit = limit
+                        viewModel.evictPageCacheIfNeeded()
+                    }
+                )
+            }
+
             // ════════════════════════════════════════════════════
             // ℹ️ バージョン情報
             // ════════════════════════════════════════════════════
@@ -667,9 +690,6 @@ private fun SettingsCacheItem(
         }
     }
 }
-
-private fun calcDirSize(dir: File): Long =
-    dir.listFiles()?.sumOf { if (it.isDirectory) calcDirSize(it) else it.length() } ?: 0L
 
 private fun formatBytes(bytes: Long): String = when {
     bytes >= 1_000_000_000L -> "%.1f GB".format(bytes / 1_000_000_000.0)

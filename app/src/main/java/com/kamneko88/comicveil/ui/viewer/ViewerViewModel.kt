@@ -12,6 +12,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.kamneko88.comicveil.BuildConfig
+import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.data.ArchiveScanner
 import com.kamneko88.comicveil.data.GrowingFileInputStream
 import com.kamneko88.comicveil.data.ZipStreamSupport
@@ -22,7 +23,10 @@ import com.kamneko88.comicveil.data.db.ComicVeilDatabase
 import com.kamneko88.comicveil.data.db.ReadStatus
 import com.kamneko88.comicveil.data.db.ReadingProgressRepository
 import com.kamneko88.comicveil.data.nas.TransferManager
+import com.kamneko88.comicveil.ui.home.HomeViewModel
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -97,8 +101,15 @@ class ViewerViewModel(
 
     private var lastSavedPage = 0
 
+    @OptIn(DelicateCoroutinesApi::class)
     override fun onCleared() {
         super.onCleared()
+
+        // 本を閉じるたびにページキャッシュの上限チェックを行う（読み進めるほど1セッション中に膨らむため）。
+        // viewModelScopeはこの時点で破棄済みのため、GlobalScopeで独立して走らせる（メインスレッドは塞がない）。
+        GlobalScope.launch(Dispatchers.IO) {
+            HomeViewModel.evictPageCache(getApplication(), AppPrefs(getApplication()).pageCacheLimit.bytes)
+        }
 
         // 本を閉じたら、その本のストリーミング用ダウンロードを中止して中途半端なキャッシュを破棄する。
         // （「あのシーン何巻だっけ？」と1→2→3巻を開いて閉じるような使い方で、
@@ -262,6 +273,14 @@ class ViewerViewModel(
             }?.size ?: 0
             if (existingPageCount > 0) {
                 logD("キャッシュから即表示: ${pageDir.name} (${existingPageCount}ページ)")
+                // 「最後に読んだ日時」を記録する（古い順の自動削除がこれを見て判定する）。
+                // setLastModifiedがfalseを返す端末があるため、失敗時は書き直して更新日時を進める。
+                val completeMarker = File(pageDir, "complete")
+                val touched = runCatching { completeMarker.setLastModified(System.currentTimeMillis()) }
+                    .getOrDefault(false)
+                if (!touched) {
+                    runCatching { completeMarker.writeText("0") }
+                }
                 loadFromPageDirectory(pageDir)
                 return
             }

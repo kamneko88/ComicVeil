@@ -8,7 +8,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.data.ArchiveScanner
+import com.kamneko88.comicveil.data.CacheDirInfo
+import com.kamneko88.comicveil.data.calcDirSize
 import com.kamneko88.comicveil.data.isFullyCached
+import com.kamneko88.comicveil.data.selectDirsToEvict
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.SafFileRepository
 import com.kamneko88.comicveil.data.SortPrefs
@@ -34,6 +37,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.content.Context
 import java.io.File
 
 sealed class ViewLocation {
@@ -193,6 +197,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         comicFileRepository = ComicFileRepository(db.comicFileDao())
         fileTitleDao        = db.fileTitleDao()
         refreshNasServers()
+        evictPageCacheIfNeeded()
 
         viewModelScope.launch {
             kotlinx.coroutines.flow.combine(
@@ -985,5 +990,37 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val totalBytes = dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
         dir.deleteRecursively()
         return totalBytes
+    }
+
+    /** ページキャッシュが上限を超えていれば、古い順に削除する（起動時・設定変更時） */
+    fun evictPageCacheIfNeeded() {
+        viewModelScope.launch {
+            evictPageCache(getApplication(), appPrefs.pageCacheLimit.bytes)
+        }
+    }
+
+    companion object {
+        /**
+         * archive_pages 配下を古い順に見て、合計サイズが limitBytes を超えたぶんを
+         * ディレクトリごと削除する。ViewerViewModel.onCleared() からも直接呼ばれる。
+         *
+         * 「古い」の判定は各ディレクトリの complete マーカーの更新日時を使う
+         * （ディレクトリ自体の更新日時は「展開した日」のままで、
+         *   最後に読んだ日には更新されないため）。
+         */
+        suspend fun evictPageCache(context: Context, limitBytes: Long) {
+            withContext(Dispatchers.IO) {
+                val cacheDir = File(context.cacheDir, "archive_pages")
+                val entries = cacheDir.listFiles { f -> f.isDirectory }?.map { dir ->
+                    val marker = File(dir, "complete")
+                    val lastModified = if (marker.exists()) marker.lastModified() else dir.lastModified()
+                    CacheDirInfo(dir.name, calcDirSize(dir), lastModified)
+                } ?: emptyList()
+
+                selectDirsToEvict(entries, limitBytes).forEach { name ->
+                    File(cacheDir, name).deleteRecursively()
+                }
+            }
+        }
     }
 }
