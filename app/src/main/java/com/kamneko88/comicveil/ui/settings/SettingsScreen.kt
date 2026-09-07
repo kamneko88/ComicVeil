@@ -43,7 +43,9 @@ import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import com.kamneko88.comicveil.BuildConfig
 import com.kamneko88.comicveil.data.AppPrefs
+import com.kamneko88.comicveil.data.ThumbnailCacheStats
 import com.kamneko88.comicveil.data.calcDirSize
+import com.kamneko88.comicveil.data.calcThumbnailCacheStats
 import com.kamneko88.comicveil.ui.home.HomeViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -115,7 +117,7 @@ fun SettingsScreen(
     val nasCacheDir               = remember { File(context.cacheDir, "nas_cache") }
     val pageCacheDir               = remember { File(context.cacheDir, "archive_pages") }
     var nasCacheSize              by remember { mutableStateOf<Long?>(null) }
-    var thumbnailCacheSize        by remember { mutableStateOf<Long?>(null) }
+    var thumbnailCacheStats       by remember { mutableStateOf<ThumbnailCacheStats?>(null) }
     var pageCacheSize             by remember { mutableStateOf<Long?>(null) }
     var showClearNasDialog        by remember { mutableStateOf(false) }
     var showClearThumbnailDialog  by remember { mutableStateOf(false) }
@@ -126,7 +128,7 @@ fun SettingsScreen(
         nasCacheSize = withContext(Dispatchers.IO) { calcDirSize(nasCacheDir) }
     }
     LaunchedEffect(Unit) {
-        thumbnailCacheSize = withContext(Dispatchers.IO) { calcDirSize(thumbnailCacheDir) }
+        thumbnailCacheStats = withContext(Dispatchers.IO) { calcThumbnailCacheStats(thumbnailCacheDir) }
     }
     LaunchedEffect(Unit) {
         pageCacheSize = withContext(Dispatchers.IO) { calcDirSize(pageCacheDir) }
@@ -154,12 +156,18 @@ fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { showClearThumbnailDialog = false },
             title = { Text("サムネイルキャッシュを削除") },
-            text  = { Text("サムネイル画像のキャッシュ（${formatBytes(thumbnailCacheSize ?: 0L)}）を全て削除します。\n次回表示時に再生成されます。") },
+            text  = {
+                Text(
+                    "サムネイル画像のキャッシュ（${formatBytes(thumbnailCacheStats?.totalBytes ?: 0L)}" +
+                        "・${thumbnailCacheStats?.totalCount ?: 0}枚）を全て削除します。\n" +
+                        "次回表示時に再生成されます。"
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     showClearThumbnailDialog = false
                     viewModel.clearThumbnailCache(thumbnailCacheDir)
-                    thumbnailCacheSize = 0L
+                    thumbnailCacheStats = ThumbnailCacheStats(0L, 0, 0, 0)
                 }) { Text("削除", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
@@ -499,8 +507,12 @@ fun SettingsScreen(
             HorizontalDivider()
             SettingsCacheItem(
                 title    = "サムネイルキャッシュ",
-                subtitle = "ファイル一覧の表紙画像キャッシュ。削除後はアプリ再起動で再生成されます。",
-                size     = thumbnailCacheSize,
+                subtitle = thumbnailCacheStats?.let { stats ->
+                    "ファイル一覧の表紙画像。${stats.totalCount}枚" +
+                        "（NAS ${stats.nasCount}・端末内 ${stats.localCount}・外部フォルダ ${stats.safCount}）。" +
+                        "削除後はアプリ再起動で再生成されます。"
+                } ?: "ファイル一覧の表紙画像キャッシュ。削除後はアプリ再起動で再生成されます。",
+                size     = thumbnailCacheStats?.totalBytes,
                 onClear  = { showClearThumbnailDialog = true }
             )
             HorizontalDivider()
