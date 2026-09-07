@@ -8,6 +8,8 @@ import com.github.junrar.Archive
 import com.kamneko88.comicveil.data.nas.NasServer
 import com.kamneko88.comicveil.data.nas.SmbRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import java.io.ByteArrayInputStream
@@ -55,7 +57,9 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
                 metaFile.delete()
             }
 
-            generateAndCache(file, fileItem.lastModified, cacheFile, metaFile)
+            generationSemaphore.withPermit {
+                generateAndCache(file, fileItem.lastModified, cacheFile, metaFile)
+            }
         }
 
     /**
@@ -75,22 +79,24 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
         // キャッシュがあればそのまま返す
         if (cacheFile.exists()) return cacheFile
 
-        // 1. STRキャッシュがあればそこから生成
-        val strCacheFile = File(
-            File(cacheDir.parentFile, "nas_cache"),
-            "nas_${nasPath.hashCode()}.$ext"
-        )
-        if (strCacheFile.exists() && strCacheFile.length() > 0) {
-            return generateAndCache(strCacheFile, 0L, cacheFile, metaFile)
+        return generationSemaphore.withPermit {
+            // 1. STRキャッシュがあればそこから生成
+            val strCacheFile = File(
+                File(cacheDir.parentFile, "nas_cache"),
+                "nas_${nasPath.hashCode()}.$ext"
+            )
+            if (strCacheFile.exists() && strCacheFile.length() > 0) {
+                return@withPermit generateAndCache(strCacheFile, 0L, cacheFile, metaFile)
+            }
+
+            // 2. NASから先頭部分だけ取得して生成
+            if (ext !in setOf("zip", "cbz")) return@withPermit null  // ZIPのみ対応（RARは全体必要なためスキップ）
+
+            val partialBytes = smbRepository.fetchPartialBytes(server, nasPath) ?: return@withPermit null
+            val imageBytes   = extractFirstImageFromZipBytes(partialBytes) ?: return@withPermit null
+
+            generateCacheFromBytes(imageBytes, cacheFile)
         }
-
-        // 2. NASから先頭部分だけ取得して生成
-        if (ext !in setOf("zip", "cbz")) return null  // ZIPのみ対応（RARは全体必要なためスキップ）
-
-        val partialBytes = smbRepository.fetchPartialBytes(server, nasPath) ?: return null
-        val imageBytes   = extractFirstImageFromZipBytes(partialBytes) ?: return null
-
-        return generateCacheFromBytes(imageBytes, cacheFile)
     }
 
     /**
@@ -98,7 +104,7 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
      * 1. すでに閲覧済み（app_cacheにコピー済み）ならそこから生成
      * 2. 未コピーならSAF経由で先頭2MBだけ読み取って生成（ZIPのみ対応）
      */
-    private fun getOrGenerateSafThumbnail(fileItem: FileItem): File? {
+    private suspend fun getOrGenerateSafThumbnail(fileItem: FileItem): File? {
         val uri = fileItem.uri ?: return null
         val ctx = context ?: return null
         val ext = fileItem.name.substringAfterLast(".").lowercase()
@@ -106,26 +112,28 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
         val cacheFile = File(cacheDir, "saf_${uri.toString().hashCode()}.jpg")
         if (cacheFile.exists()) return cacheFile
 
-        // 1. すでに閲覧用にキャッシュ済みならそこから生成（他形式も含めて対応可能）
-        val readCacheFile = File(
-            File(cacheDir.parentFile, "saf_cache"),
-            "saf_${uri.toString().hashCode()}.$ext"
-        )
-        if (readCacheFile.exists() && readCacheFile.length() > 0) {
-            return generateAndCache(readCacheFile, 0L, cacheFile, File(cacheDir, "saf_${uri.toString().hashCode()}.meta"))
-        }
+        return generationSemaphore.withPermit {
+            // 1. すでに閲覧用にキャッシュ済みならそこから生成（他形式も含めて対応可能）
+            val readCacheFile = File(
+                File(cacheDir.parentFile, "saf_cache"),
+                "saf_${uri.toString().hashCode()}.$ext"
+            )
+            if (readCacheFile.exists() && readCacheFile.length() > 0) {
+                return@withPermit generateAndCache(readCacheFile, 0L, cacheFile, File(cacheDir, "saf_${uri.toString().hashCode()}.meta"))
+            }
 
-        // 2. 未キャッシュならSAF経由で先頭2MBだけ読み取る（ZIPのみ対応）
-        if (ext !in setOf("zip", "cbz")) return null
+            // 2. 未キャッシュならSAF経由で先頭2MBだけ読み取る（ZIPのみ対応）
+            if (ext !in setOf("zip", "cbz")) return@withPermit null
 
-        return try {
-            val bytes = ctx.contentResolver.openInputStream(uri)?.use { input ->
-                input.readUpTo(2 * 1024 * 1024)
-            } ?: return null
-            val imageBytes = extractFirstImageFromZipBytes(bytes) ?: return null
-            generateCacheFromBytes(imageBytes, cacheFile)
-        } catch (e: Exception) {
-            null
+            try {
+                val bytes = ctx.contentResolver.openInputStream(uri)?.use { input ->
+                    input.readUpTo(2 * 1024 * 1024)
+                } ?: return@withPermit null
+                val imageBytes = extractFirstImageFromZipBytes(bytes) ?: return@withPermit null
+                generateCacheFromBytes(imageBytes, cacheFile)
+            } catch (e: Exception) {
+                null
+            }
         }
     }
 
@@ -184,7 +192,17 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
 
     private fun generateCacheFromBytes(imageBytes: ByteArray, cacheFile: File): File? {
         return try {
-            val original  = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size) ?: return null
+            // 1回目：inJustDecodeBoundsで寸法だけ取得し、原寸展開を避ける
+            val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, boundsOptions)
+
+            val sampleSize = calculateInSampleSize(
+                boundsOptions.outWidth, boundsOptions.outHeight, TARGET_WIDTH, TARGET_HEIGHT
+            )
+
+            // 2回目：inSampleSizeで縮小しながら実際にデコード
+            val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+            val original  = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, decodeOptions) ?: return null
             val thumbnail = createScaledBitmap(original, TARGET_WIDTH, TARGET_HEIGHT)
             original.recycle()
             FileOutputStream(cacheFile).use { out ->
@@ -219,7 +237,32 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
     companion object {
         private const val TARGET_WIDTH  = 240
         private const val TARGET_HEIGHT = 340
+
+        // サムネイル「生成」の同時実行数を制限する（全インスタンス共有）。
+        // キャッシュヒット時はこのセマフォを取らない。
+        private val generationSemaphore = Semaphore(3)
     }
+}
+
+/**
+ * デコード時の縮小率（2のべき乗）を計算する。BitmapFactoryは2のべき乗にしか切り下げないため、
+ * reqWidth/reqHeightを下回らない最大の値を返す（下回ると後で拡大することになり画質が落ちる）。
+ * srcWidth/srcHeightが0以下（デコード失敗でoutWidth/outHeightが-1になるケース）は1を返す。
+ */
+internal fun calculateInSampleSize(
+    srcWidth: Int, srcHeight: Int, reqWidth: Int, reqHeight: Int
+): Int {
+    if (srcWidth <= 0 || srcHeight <= 0) return 1
+
+    var inSampleSize = 1
+    if (srcHeight > reqHeight || srcWidth > reqWidth) {
+        val halfHeight = srcHeight / 2
+        val halfWidth  = srcWidth / 2
+        while ((halfHeight / inSampleSize) >= reqHeight && (halfWidth / inSampleSize) >= reqWidth) {
+            inSampleSize *= 2
+        }
+    }
+    return inSampleSize
 }
 
 private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
