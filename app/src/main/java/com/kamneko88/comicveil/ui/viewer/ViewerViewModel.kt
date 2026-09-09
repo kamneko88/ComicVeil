@@ -42,6 +42,7 @@ import me.zhanghai.android.libarchive.ArchiveEntry
 import me.zhanghai.android.libarchive.ArchiveException
 import net.lingala.zip4j.ZipFile as Zip4jFile
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
+import org.apache.commons.compress.archivers.zip.UnsupportedZipFeatureException
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import org.apache.commons.compress.archivers.zip.ZipFile as CommonsZipFile
 import java.io.ByteArrayOutputStream
@@ -101,6 +102,14 @@ class ViewerViewModel(
     val pageLimitEvent: SharedFlow<PageLimitEvent> = _pageLimitEvent.asSharedFlow()
 
     private var lastSavedPage = 0
+
+    /**
+     * 直近の展開失敗の例外（現状はZIPストリーミング展開のみ記録）。
+     * 0ページで完了したときに、パスワード付きダイアログを出すべきか判定するために使う。
+     * 新しいファイルを開くたび（loadFile呼び出しのたび）に必ずクリアする。
+     */
+    @Volatile
+    private var lastExtractionException: Throwable? = null
 
     @OptIn(DelicateCoroutinesApi::class)
     override fun onCleared() {
@@ -171,6 +180,7 @@ class ViewerViewModel(
     }
 
     private fun loadFile(password: String? = null) {
+        lastExtractionException = null
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
@@ -380,6 +390,7 @@ class ViewerViewModel(
                 ZipStreamSupport.deleteSidecar(file)
             } catch (e: Exception) {
                 Log.e("ComicVeil", "ストリーミング展開エラー: ${e.message}", e)
+                lastExtractionException = e
                 runCatching { File(pageDir, "complete").writeText("0") }
             }
         }
@@ -436,11 +447,46 @@ class ViewerViewModel(
                     File(pageDir, "complete").readText().toInt()
                 }.getOrDefault(filePaths.size)
                 _uiState.update { it.copy(totalPageCount = maxOf(total, filePaths.size)) }
+                // 0ページで完了した場合、原因を問わず必ずローディングを終わらせる。
+                // 直前のupdateでisLoading=filePaths.isEmpty()=trueになっているため、ここで明示的に戻す。
+                if (filePaths.isEmpty()) {
+                    if (isEncryptionFailure(lastExtractionException)) {
+                        _uiState.update { it.copy(isLoading = false, needsPassword = true) }
+                    } else {
+                        _uiState.update {
+                            it.copy(
+                                isLoading = false,
+                                error = "ファイルを開けませんでした。ファイルが壊れているか、対応していない形式の可能性があります。"
+                            )
+                        }
+                    }
+                }
                 break
             }
             // 展開中は短い間隔で見に行く（以前は300msで、その分だけ初回表示が遅れていた）
             kotlinx.coroutines.delay(100)
         }
+    }
+
+    /**
+     * 展開失敗の原因が暗号化（パスワード付き）によるものか判定する。
+     * commons-compressは暗号化エントリを読もうとするとUnsupportedZipFeatureException
+     * （feature=ENCRYPTION）を投げる。例外が別の例外に包まれている場合があるため、
+     * causeチェーンを辿って探す。
+     */
+    private fun isEncryptionFailure(e: Throwable?): Boolean {
+        var current = e
+        var depth = 0
+        while (current != null && depth < 10) {
+            if (current is UnsupportedZipFeatureException &&
+                current.feature == UnsupportedZipFeatureException.Feature.ENCRYPTION
+            ) {
+                return true
+            }
+            current = current.cause
+            depth++
+        }
+        return false
     }
 
     fun savePage(currentPage: Int) {
