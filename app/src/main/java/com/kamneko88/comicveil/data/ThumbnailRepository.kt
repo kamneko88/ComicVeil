@@ -176,7 +176,7 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
         metaFile: File
     ): File? {
         return try {
-            val imageBytes = when (file.extension.lowercase()) {
+            val imageBytes = when (FormatDetector.effectiveExtension(file)) {
                 "zip", "cbz" -> extractFirstImageFromZip(file)
                 "rar", "cbr" -> extractFirstImageFromRar(file)
                 else -> null

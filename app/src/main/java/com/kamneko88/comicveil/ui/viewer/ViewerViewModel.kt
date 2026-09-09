@@ -14,6 +14,7 @@ import androidx.lifecycle.viewModelScope
 import com.kamneko88.comicveil.BuildConfig
 import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.data.ArchiveScanner
+import com.kamneko88.comicveil.data.FormatDetector
 import com.kamneko88.comicveil.data.GrowingFileInputStream
 import com.kamneko88.comicveil.data.ZipStreamSupport
 import com.kamneko88.comicveil.data.db.Bookmark
@@ -184,7 +185,7 @@ class ViewerViewModel(
                         return@withContext
                     }
 
-                    val ext = file.extension.lowercase()
+                    val ext = FormatDetector.effectiveExtension(file)
 
                     // ZIPの場合：展開前にzip4jでパスワード付きか確認する
                     if (ext in setOf("zip", "cbz") && password == null) {

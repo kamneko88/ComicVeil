@@ -13,6 +13,7 @@ import com.kamneko88.comicveil.data.calcDirSize
 import com.kamneko88.comicveil.data.isFullyCached
 import com.kamneko88.comicveil.data.selectDirsToEvict
 import com.kamneko88.comicveil.data.FileItem
+import com.kamneko88.comicveil.data.FormatDetector
 import com.kamneko88.comicveil.data.SafFileRepository
 import com.kamneko88.comicveil.data.SortPrefs
 import com.kamneko88.comicveil.data.LocalFileRepository
@@ -612,7 +613,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val effectivePath = file?.absolutePath ?: item.path
 
         if (file != null) {
-            val ext = file.extension.lowercase()
+            val ext = FormatDetector.effectiveExtension(file)
             if (ext in setOf("zip", "cbz", "rar", "cbr", "7z")) {
                 val scan = withContext(Dispatchers.IO) { ArchiveScanner.scan(file) }
                 if (scan.volumes != null) {

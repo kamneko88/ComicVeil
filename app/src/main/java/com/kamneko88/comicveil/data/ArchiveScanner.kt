@@ -38,7 +38,7 @@ object ArchiveScanner {
     /** 拡張子からアーカイブ形式を判定してスキャンする。失敗しても空リストを返す（クラッシュしない） */
     fun scan(file: File): ArchiveScanResult {
         return try {
-            when (file.extension.lowercase()) {
+            when (FormatDetector.effectiveExtension(file)) {
                 "zip", "cbz" -> {
                     val (names, charsetName) = scanZip(file)
                     buildResult(names).copy(zipCharset = charsetName)
