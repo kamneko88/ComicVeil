@@ -136,6 +136,7 @@ class TransferService : Service() {
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(item?.fileName ?: "ファイルを転送中")
+            .setSubText(item?.sourceLabel)
             .setOngoing(true)
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)

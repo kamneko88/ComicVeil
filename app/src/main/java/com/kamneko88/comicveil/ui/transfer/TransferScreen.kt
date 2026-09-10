@@ -230,6 +230,12 @@ private fun TransferringRow(item: TransferItem, onCancel: () -> Unit) {
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
+        // 転送元（NAS由来か外部取り込みか）
+        Text(
+            text  = item.activityLabel,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Spacer(Modifier.height(6.dp))
 
         // プログレスバー
@@ -293,7 +299,7 @@ private fun WaitingRow(item: TransferItem, onCancel: () -> Unit) {
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text  = "待機中",
+                    text  = item.waitingLabel,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -388,12 +394,15 @@ private fun StatusIcon(status: TransferStatus) {
     )
 }
 
-/** ステータスラベルテキスト */
-private fun statusLabel(item: TransferItem): String = when (item.status) {
-    TransferStatus.COMPLETED -> "転送完了"
-    TransferStatus.CANCELLED -> "キャンセル済み　タップで再転送"
-    TransferStatus.ERROR     -> "エラー：${item.errorMessage ?: "不明"}　タップで再転送"
-    else                     -> ""
+/** ステータスラベルテキスト（末尾に転送元＝NAS由来か外部取り込みかを付記する） */
+private fun statusLabel(item: TransferItem): String {
+    val base = when (item.status) {
+        TransferStatus.COMPLETED -> "転送完了"
+        TransferStatus.CANCELLED -> "キャンセル済み　タップで再転送"
+        TransferStatus.ERROR     -> "エラー：${item.errorMessage ?: "不明"}　タップで再転送"
+        else                     -> ""
+    }
+    return if (base.isEmpty()) base else "$base（${item.sourceLabel}）"
 }
 
 /** ステータスに応じた文字色 */
