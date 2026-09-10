@@ -240,6 +240,27 @@ class AppPrefs(context: Context) {
         }.getOrDefault(PageCacheLimit.GB1)
         set(value) = prefs.edit { putString(KEY_PAGE_CACHE_LIMIT, value.name) }
 
+    // ─── NASストリーミングキャッシュの上限 ─────────────────────────────────
+
+    /** nas_stream_cache の合計サイズがこれを超えたら、古い順に本のディレクトリごと削除する */
+    enum class NasStreamCacheLimit(val bytes: Long, val label: String) {
+        MB500(500_000_000L, "500MB"),
+        GB1(1_000_000_000L, "1GB"),
+        GB2(2_000_000_000L, "2GB"),
+        GB3(3_000_000_000L, "3GB"),
+        GB5(5_000_000_000L, "5GB"),
+        UNLIMITED(0L, "無制限")
+    }
+
+    var nasStreamCacheLimit: NasStreamCacheLimit
+        get() = runCatching {
+            NasStreamCacheLimit.valueOf(
+                prefs.getString(KEY_NAS_STREAM_CACHE_LIMIT, NasStreamCacheLimit.GB3.name)
+                    ?: NasStreamCacheLimit.GB3.name
+            )
+        }.getOrDefault(NasStreamCacheLimit.GB3)
+        set(value) = prefs.edit { putString(KEY_NAS_STREAM_CACHE_LIMIT, value.name) }
+
     companion object {
         private const val KEY_HOME_FOLDER            = "home_folder_type"
         private const val KEY_HOME_FOLDER_SAF_URI    = "home_folder_saf_uri"
@@ -262,6 +283,7 @@ class AppPrefs(context: Context) {
         private const val KEY_SHELF_SHOW_TITLE       = "shelf_show_title"
         private const val KEY_VIEWER_BRIGHTNESS      = "viewer_brightness"
         private const val KEY_PAGE_CACHE_LIMIT       = "page_cache_limit"
+        private const val KEY_NAS_STREAM_CACHE_LIMIT = "nas_stream_cache_limit"
 
         fun getAppFolder(context: Context): File {
             val dir = File(context.getExternalFilesDir(null), "Comics")

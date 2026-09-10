@@ -46,6 +46,7 @@ import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.data.ThumbnailCacheStats
 import com.kamneko88.comicveil.data.calcDirSize
 import com.kamneko88.comicveil.data.calcThumbnailCacheStats
+import com.kamneko88.comicveil.data.nas.NasStreamCache
 import com.kamneko88.comicveil.ui.home.HomeViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -114,7 +115,6 @@ fun SettingsScreen(
     }
 
     // ── キャッシュ ────────────────────────────────────────────────────────
-    val nasCacheDir               = remember { File(context.cacheDir, "nas_cache") }
     val pageCacheDir               = remember { File(context.cacheDir, "archive_pages") }
     var nasCacheSize              by remember { mutableStateOf<Long?>(null) }
     var thumbnailCacheStats       by remember { mutableStateOf<ThumbnailCacheStats?>(null) }
@@ -123,9 +123,10 @@ fun SettingsScreen(
     var showClearThumbnailDialog  by remember { mutableStateOf(false) }
     var showClearPageDialog       by remember { mutableStateOf(false) }
     var pageCacheLimit            by remember { mutableStateOf(appPrefs.pageCacheLimit) }
+    var nasStreamCacheLimit       by remember { mutableStateOf(appPrefs.nasStreamCacheLimit) }
 
     LaunchedEffect(Unit) {
-        nasCacheSize = withContext(Dispatchers.IO) { calcDirSize(nasCacheDir) }
+        nasCacheSize = withContext(Dispatchers.IO) { NasStreamCache.totalSize(context) }
     }
     LaunchedEffect(Unit) {
         thumbnailCacheStats = withContext(Dispatchers.IO) { calcThumbnailCacheStats(thumbnailCacheDir) }
@@ -137,7 +138,7 @@ fun SettingsScreen(
     if (showClearNasDialog) {
         AlertDialog(
             onDismissRequest = { showClearNasDialog = false },
-            title = { Text("STRキャッシュを削除") },
+            title = { Text("NASストリーミングキャッシュを削除") },
             text  = { Text("ストリーミングでダウンロードしたキャッシュ（${formatBytes(nasCacheSize ?: 0L)}）を全て削除します。") },
             confirmButton = {
                 TextButton(onClick = {
@@ -499,11 +500,32 @@ fun SettingsScreen(
             SettingsSectionHeader("キャッシュ管理")
 
             SettingsCacheItem(
-                title    = "STRキャッシュ",
+                title    = "NASストリーミングキャッシュ",
                 subtitle = "ストリーミング再生でダウンロードした一時ファイル",
                 size     = nasCacheSize,
                 onClear  = { showClearNasDialog = true }
             )
+            HorizontalDivider()
+            Spacer(Modifier.height(12.dp))
+
+            // ── NASストリーミングキャッシュの上限 ─────────────────
+            SettingsItemHeader(
+                title       = "NASストリーミングキャッシュの上限",
+                description = "上限を超えると、しばらく開いていない本から順に削除されます"
+            )
+            AppPrefs.NasStreamCacheLimit.entries.forEach { limit ->
+                SettingsRadioItem(
+                    label       = limit.label,
+                    description = "",
+                    selected    = nasStreamCacheLimit == limit,
+                    onSelect    = {
+                        nasStreamCacheLimit          = limit
+                        appPrefs.nasStreamCacheLimit = limit
+                        viewModel.evictNasStreamCacheIfNeeded()
+                    }
+                )
+            }
+
             HorizontalDivider()
             SettingsCacheItem(
                 title    = "サムネイルキャッシュ",

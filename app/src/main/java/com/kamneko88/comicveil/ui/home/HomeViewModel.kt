@@ -24,6 +24,7 @@ import com.kamneko88.comicveil.data.db.ReadStatus
 import com.kamneko88.comicveil.data.db.ReadingProgressRepository
 import com.kamneko88.comicveil.data.nas.NasServer
 import com.kamneko88.comicveil.data.nas.NasServerPrefs
+import com.kamneko88.comicveil.data.nas.NasStreamCache
 import com.kamneko88.comicveil.data.nas.RemoteBookmark
 import com.kamneko88.comicveil.data.nas.RemoteBookmarkPrefs
 import com.kamneko88.comicveil.data.nas.SmbRepository
@@ -199,6 +200,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         fileTitleDao        = db.fileTitleDao()
         refreshNasServers()
         evictPageCacheIfNeeded()
+        evictNasStreamCacheIfNeeded()
 
         viewModelScope.launch {
             kotlinx.coroutines.flow.combine(
@@ -727,10 +729,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun openNasComicStr(fileItem: FileItem) {
         val ext      = fileItem.name.substringAfterLast(".")
-        val destFile = File(
-            File(getApplication<Application>().cacheDir, "nas_cache"),
-            "nas_${fileItem.nasPath.hashCode()}.$ext"
-        )
+        val destFile = NasStreamCache.destFile(getApplication(), fileItem.nasPath, ext)
 
         // キャッシュの名前は nas_-409694946.zip のような機械的なものなので、
         // 元の作品名を控えておく（閲覧履歴で正しいタイトルを出すため）
@@ -740,6 +739,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val isFullyCached = destFile.exists() &&
             isFullyCached(destFile.length(), fileItem.size)
         if (isFullyCached) {
+            // 「最後に読んだ日時」を更新する（古い順の自動削除がこれを見て判定する）
+            NasStreamCache.touchComplete(destFile.parentFile!!)
             viewModelScope.launch { openLocalOrVolumeComic(fileItem.copy(file = destFile)) }
             return
         }
@@ -798,10 +799,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             val (fileSize, tailBytes) = tail
-            val cacheDir = File(getApplication<Application>().cacheDir, "nas_cache")
 
             val scan = withContext(Dispatchers.IO) {
-                com.kamneko88.comicveil.data.ZipStreamSupport.probeFromTail(cacheDir, fileSize, tailBytes)
+                com.kamneko88.comicveil.data.ZipStreamSupport.probeFromTail(destFile.parentFile!!, fileSize, tailBytes)
             }
 
             // 目次が読めない（壊れている）・巻フォルダ構成 → 従来どおり全DLしてから開く
@@ -837,10 +837,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun downloadThenOpenNasComic(fileItem: FileItem) {
         val ext      = fileItem.name.substringAfterLast(".")
-        val destFile = File(
-            File(getApplication<Application>().cacheDir, "nas_cache"),
-            "nas_${fileItem.nasPath.hashCode()}.$ext"
-        )
+        val destFile = NasStreamCache.destFile(getApplication(), fileItem.nasPath, ext)
         val server = fileItem.nasServer ?: run {
             _nasError.value = "リモートサーバー情報がありません"
             return
@@ -867,14 +864,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 )
                 _downloadProgress.value = null
+                NasStreamCache.markComplete(destFile.parentFile!!)
                 openLocalOrVolumeComic(fileItem.copy(file = destFile))
             } catch (e: kotlinx.coroutines.CancellationException) {
                 _downloadProgress.value = null
-                runCatching { destFile.delete() }
+                runCatching { destFile.parentFile?.deleteRecursively() }
             } catch (e: Exception) {
                 _downloadProgress.value = null
                 _nasError.value = "接続に失敗しました\n${e.message}"
-                runCatching { destFile.delete() }
+                runCatching { destFile.parentFile?.deleteRecursively() }
             } finally {
                 downloadJob = null
             }
@@ -957,24 +955,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── キャッシュ管理 ─────────────────────────────────────────────────
 
-    private fun nasCacheDir(): File =
-        File(getApplication<Application>().cacheDir, "nas_cache")
-
     fun isNasCached(fileItem: FileItem): Boolean {
         if (!fileItem.isNas) return false
         val ext  = fileItem.name.substringAfterLast(".")
-        val file = File(nasCacheDir(), "nas_${fileItem.nasPath.hashCode()}.$ext")
+        val file = NasStreamCache.destFile(getApplication(), fileItem.nasPath, ext)
         return file.exists() && isFullyCached(file.length(), fileItem.size)
     }
 
-    fun clearNasCache(): Long {
-        val dir = nasCacheDir()
-        var totalBytes = 0L
-        dir.listFiles()?.forEach {
-            totalBytes += it.length()
-            it.delete()
+    fun clearNasCache(): Long = NasStreamCache.clearAll(getApplication())
+
+    /** NASストリーミングキャッシュが上限を超えていれば、古い順に削除する（起動時・本を閉じたとき・上限変更時） */
+    fun evictNasStreamCacheIfNeeded() {
+        viewModelScope.launch {
+            NasStreamCache.evictIfNeeded(getApplication(), appPrefs.nasStreamCacheLimit.bytes)
         }
-        return totalBytes
     }
 
     fun clearThumbnailCache(thumbnailCacheDir: File): Long {

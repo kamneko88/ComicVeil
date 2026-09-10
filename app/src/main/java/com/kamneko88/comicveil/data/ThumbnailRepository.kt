@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import androidx.core.graphics.scale
 import com.github.junrar.Archive
 import com.kamneko88.comicveil.data.nas.NasServer
+import com.kamneko88.comicveil.data.nas.NasStreamCache
 import com.kamneko88.comicveil.data.nas.SmbRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Semaphore
@@ -80,12 +81,9 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
         if (cacheFile.exists()) return cacheFile
 
         return generationSemaphore.withPermit {
-            // 1. STRキャッシュがあればそこから生成
-            val strCacheFile = File(
-                File(cacheDir.parentFile, "nas_cache"),
-                "nas_${nasPath.hashCode()}.$ext"
-            )
-            if (strCacheFile.exists() && strCacheFile.length() > 0) {
+            // 1. NASストリーミングキャッシュがあればそこから生成
+            val strCacheFile = context?.let { NasStreamCache.destFile(it, nasPath, ext) }
+            if (strCacheFile != null && strCacheFile.exists() && strCacheFile.length() > 0) {
                 return@withPermit generateAndCache(strCacheFile, 0L, cacheFile, metaFile)
             }
 

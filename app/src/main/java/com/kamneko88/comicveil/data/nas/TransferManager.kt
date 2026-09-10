@@ -69,6 +69,9 @@ object TransferManager {
         appPrefs    = AppPrefs(appContext)
         initialized = true
         File(appContext.cacheDir, "dl_work").deleteRecursively()
+        // 旧バージョンで使っていたcacheDir内のNASストリーミングキャッシュの残骸を一度だけ掃除する。
+        // （保存先をgetExternalFilesDir配下のnas_stream_cacheへ移行したため、もう使われない）
+        File(appContext.cacheDir, "nas_cache").deleteRecursively()
     }
 
     // ─── キュー操作 ──────────────────────────────────────────────────────
@@ -89,8 +92,7 @@ object TransferManager {
         var safTargetUri: String? = null
 
         if (isStreaming) {
-            val dir = File(appContext.cacheDir, "nas_cache")
-            destFile = File(dir, "nas_${fileItem.nasPath.hashCode()}.$ext")
+            destFile = NasStreamCache.destFile(appContext, fileItem.nasPath, ext)
         } else {
             when (appPrefs.downloadFolderType) {
                 AppPrefs.DownloadFolderType.APP_FOLDER -> {
@@ -193,7 +195,7 @@ object TransferManager {
                 updateItem(item.id) {
                     it.copy(status = TransferStatus.CANCELLED, completedAt = System.currentTimeMillis())
                 }
-                runCatching { File(item.destPath).delete() }
+                deleteIncompleteDest(item)
             }
             Log.d(TAG, "ストリーミングDLを中止: ${item.fileName}")
         }
@@ -228,6 +230,7 @@ object TransferManager {
 
                 // すでにファイルが存在する場合はスキップ（キャッシュ済み）
                 if (destFile.exists() && isFullyCached(destFile.length(), next.totalBytes) && next.safTargetUri == null) {
+                    if (next.isStreaming) NasStreamCache.markComplete(destFile.parentFile!!)
                     updateItem(next.id) {
                         it.copy(
                             status          = TransferStatus.COMPLETED,
@@ -270,6 +273,8 @@ object TransferManager {
                     copyToSafFolder(destFile, next.safTargetUri, next.fileName)
                     runCatching { destFile.delete() }
                     Log.d(TAG, "SAFコピー完了: ${next.fileName}")
+                } else if (next.isStreaming) {
+                    NasStreamCache.markComplete(destFile.parentFile!!)
                 }
 
                 updateItem(next.id) {
@@ -281,8 +286,8 @@ object TransferManager {
                 Log.d(TAG, "転送完了: ${next.fileName}")
 
             } catch (e: kotlinx.coroutines.CancellationException) {
-                // キャンセル：不完全ファイルを削除
-                runCatching { File(next.destPath).delete() }
+                // キャンセル：不完全なファイル（STRなら本のディレクトリごと）を削除
+                deleteIncompleteDest(next)
                 updateItem(next.id) {
                     it.copy(
                         status      = TransferStatus.CANCELLED,
@@ -290,9 +295,9 @@ object TransferManager {
                     )
                 }
             } catch (e: Exception) {
-                // エラー：不完全ファイルを削除
+                // エラー：不完全なファイル（STRなら本のディレクトリごと）を削除
                 Log.w(TAG, "転送エラー: ${next.fileName} / ${e.message}")
-                runCatching { File(next.destPath).delete() }
+                deleteIncompleteDest(next)
                 updateItem(next.id) {
                     it.copy(
                         status       = TransferStatus.ERROR,
@@ -305,6 +310,19 @@ object TransferManager {
                 // 次のキューを処理
                 processQueue()
             }
+        }
+    }
+
+    /**
+     * 不完全な転送先を削除する。STR（ストリーミング）は本のディレクトリごと破棄する
+     * （サイドカー等も含めて再利用できないため）。DL（ユーザーが意図的に保存中）はファイルのみ削除する。
+     */
+    private fun deleteIncompleteDest(item: TransferItem) {
+        val destFile = File(item.destPath)
+        if (item.isStreaming) {
+            runCatching { destFile.parentFile?.deleteRecursively() }
+        } else {
+            runCatching { destFile.delete() }
         }
     }
 
