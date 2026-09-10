@@ -830,6 +830,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * 外部（SAF）ファイルを蔵書へ取り込む。
+     *
+     * 以前は選んだファイルをその場で一時的に開くだけだったが、それでは蔵書（HOME一覧）に
+     * 並ばず評価・カラーラベル・読書履歴が効かなかった。DL保存先（Comicsフォルダ等）へ
+     * 常にコピーすることで、DLモードのNAS本と同様にHOME一覧へ自動的に並ぶようにする。
+     */
+    fun importExternalFile(fileItem: FileItem) {
+        transferViewModel?.enqueue(fileItem, isStreaming = false)
+        _navigateToTransfer.tryEmit("")
+    }
+
+    /**
      * NASファイルをキャッシュへダウンロードしてから、ローカルと同じ判定フロー
      * （巻検出・再開ダイアログ）に合流する。ZIP/RAR/7z問わずこの一本に統一。
      * ダウンロード完了後にArchiveScannerで巻検出するため、フォーマットを問わず

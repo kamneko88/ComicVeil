@@ -190,7 +190,7 @@ fun HomeScreen(
         ThumbnailRepository(File(context.cacheDir, "thumbnails"), context)
     }
 
-    // ダウンロードフォルダの中身をシステム標準のファイル選択画面で選ばせる。
+    // 端末内・Google Driveなどのファイルをシステム標準のファイル選択画面で選ばせ、蔵書へ取り込む。
     // MediaStore.Downloadsは他アプリ（ブラウザ等）が作成したファイルを列挙できないため、
     // SAFのファイルピッカーを都度起動する方式を採る（追加権限は不要）。
     val openDownloadsLauncher = rememberLauncherForActivityResult(
@@ -199,7 +199,7 @@ fun HomeScreen(
         if (uri != null) {
             val fileItem = DocumentFile.fromSingleUri(context, uri)?.let { FileItem.fromDocumentFile(it) }
             if (fileItem != null && fileItem.isComic) {
-                viewModel.onComicTapped(fileItem)
+                viewModel.importExternalFile(fileItem)
             } else {
                 unsupportedFileError = true
             }
@@ -1579,12 +1579,12 @@ private fun DownloadsFolderListItem(
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text       = "ダウンロードフォルダ",
+                text       = "ファイルを取り込む",
                 style      = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium
             )
             Text(
-                text  = "端末のDownloadフォルダから開く",
+                text  = "端末内・Google Drive等から選んで蔵書に追加",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -2295,7 +2295,7 @@ private fun DownloadsFolderShelfItem(
             )
         }
         Text(
-            text      = "ダウンロード",
+            text      = "取り込み",
             style     = MaterialTheme.typography.labelSmall.copy(
                 color  = Color.White,
                 shadow = Shadow(color = Color.Black.copy(alpha = 0.7f), blurRadius = 4f)
