@@ -388,6 +388,21 @@ fun ViewerScreen(
             )
         }
 
+        uiState.fileMissing -> {
+            AlertDialog(
+                onDismissRequest = onClose,
+                title = { Text("ファイルが見つかりません") },
+                text  = {
+                    Text(
+                        "ファイルが見つかりませんでした。\n\n" +
+                        "キャッシュから削除された可能性があります。\n" +
+                        "もう一度ファイル一覧から開き直してください。"
+                    )
+                },
+                confirmButton = { TextButton(onClick = onClose) { Text("閉じる") } }
+            )
+        }
+
         uiState.pages.isEmpty() && uiState.pageFiles.isEmpty() -> {
             AlertDialog(
                 onDismissRequest = onClose,

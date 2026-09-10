@@ -23,6 +23,7 @@ import com.kamneko88.comicveil.data.db.ComicFileRepository
 import com.kamneko88.comicveil.data.db.ComicVeilDatabase
 import com.kamneko88.comicveil.data.db.ReadStatus
 import com.kamneko88.comicveil.data.db.ReadingProgressRepository
+import com.kamneko88.comicveil.data.nas.NasStreamCache
 import com.kamneko88.comicveil.data.nas.TransferManager
 import com.kamneko88.comicveil.ui.home.HomeViewModel
 import kotlinx.coroutines.DelicateCoroutinesApi
@@ -75,6 +76,9 @@ data class ViewerUiState(
     val bookmarks: List<Bookmark> = emptyList(),
     val isCurrentPageBookmarked: Boolean = false,
     val needsPassword: Boolean = false,
+    /** trueなら、アーカイブが見つからなかった（キャッシュから削除された等）ことが原因。
+     *  「非対応のファイル形式」ダイアログと区別して専用メッセージを出す。 */
+    val fileMissing: Boolean = false,
     /** ストリーミング中のダウンロード進捗（0.0〜1.0）。通常の開き方のときは null */
     val downloadFraction: Float? = null,
     /** 画面に出すファイル名。リモートの本はキャッシュ名ではなく元の作品名を出す */
@@ -119,6 +123,11 @@ class ViewerViewModel(
         // viewModelScopeはこの時点で破棄済みのため、GlobalScopeで独立して走らせる（メインスレッドは塞がない）。
         GlobalScope.launch(Dispatchers.IO) {
             HomeViewModel.evictPageCache(getApplication(), AppPrefs(getApplication()).pageCacheLimit.bytes)
+        }
+
+        // NASストリーミングキャッシュも同様に、本を閉じるたびに上限チェックを行う。
+        GlobalScope.launch(Dispatchers.IO) {
+            NasStreamCache.evictIfNeeded(getApplication(), AppPrefs(getApplication()).nasStreamCacheLimit.bytes)
         }
 
         // 本を閉じたら、その本のストリーミング用ダウンロードを中止して中途半端なキャッシュを破棄する。
@@ -297,6 +306,16 @@ class ViewerViewModel(
             }
             // 完了マークはあるが実ページが0枚 = 過去の展開失敗キャッシュ。作り直す。
             logD("空のcompleteキャッシュを検出したため再展開します: ${pageDir.name}")
+        }
+
+        // 【ファイル消失チェック】展開済みページキャッシュが無く、ここから先はアーカイブ本体が
+        // 必要になる。NASストリーミングキャッシュがシステム都合で削除された場合など、
+        // ファイルが物理的に存在しないことがある。これをArchiveScanner.scan()に渡すと
+        // 形式を判定できず「非対応のファイル形式」と誤って表示してしまうため、先に区別する。
+        if (!file.exists()) {
+            Log.w("ComicVeil", "アーカイブが見つかりません（キャッシュから削除された可能性）: ${file.absolutePath}")
+            _uiState.update { it.copy(isLoading = false, fileMissing = true) }
+            return
         }
 
         val scanStart = System.currentTimeMillis()
