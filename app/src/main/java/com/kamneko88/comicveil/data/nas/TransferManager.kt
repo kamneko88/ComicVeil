@@ -80,14 +80,16 @@ object TransferManager {
      * ファイルをダウンロードキューに追加する
      *
      * @param fileItem    NASのファイルアイテム
-     * @param isStreaming true=STRモード（cacheDir）/ false=DLモード（DL保存先設定に従う）
+     * @param isStreaming true=STRモード（nas_stream_cache／getExternalFilesDir）/ false=DLモード（DL保存先設定に従う）
      */
     fun enqueue(fileItem: FileItem, isStreaming: Boolean = false): TransferItem {
         val server = fileItem.nasServer ?: error("NASサーバー情報がありません")
         val ext    = fileItem.name.substringAfterLast(".")
 
-        // 実際のダウンロード先は常にアプリキャッシュ内の作業用パス
-        // （DL保存先がSAFフォルダの場合、ダウンロード完了後にSAF側へコピーする）
+        // ダウンロード先はモードごとに異なる。
+        // ・STR：getExternalFilesDir配下のnas_stream_cache（本1冊＝1ディレクトリ。上限・LRU削除の対象）
+        // ・DL（アプリ専用フォルダ）：Comicsフォルダへ直接保存（そのまま最終的な保存先になる）
+        // ・DL（SAFフォルダ）：アプリキャッシュ内の作業用パスへ一旦落とし、完了後にSAF側へコピーする
         val destFile: File
         var safTargetUri: String? = null
 
