@@ -29,6 +29,7 @@ import com.kamneko88.comicveil.data.nas.RemoteBookmark
 import com.kamneko88.comicveil.data.nas.RemoteBookmarkPrefs
 import com.kamneko88.comicveil.data.nas.SmbRepository
 import com.kamneko88.comicveil.ui.transfer.TransferViewModel
+import com.kamneko88.comicveil.ui.viewer.ViewerViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -49,6 +50,25 @@ sealed class ViewLocation {
     data class NasFolder(val server: NasServer, val path: String) : ViewLocation() {
         val displayTitle: String get() =
             if (path.isEmpty()) server.displayName else path.substringAfterLast("/")
+    }
+}
+
+/**
+ * ビューワーへ渡すナビゲーションキーを組み立てる。
+ *
+ * 通常は実ファイルパス（item.file?.absolutePath）をそのまま使うが、NAS由来のFileItemは
+ * 実ファイルがローカルキャッシュパス（nas_stream_cache等）になっている一方、HOME一覧・
+ * ブックマーク一覧はFileItem.path（smb://...）で進捗・既読状態・評価・カラーラベルを
+ * 読み書きしているため、そのままでは食い違って反映されない不具合があった。
+ * NAS由来かつ両者が異なる場合だけ、ViewerViewModel.KEY_MARKER_PUBLICで正規キー
+ * （item.path）を付加して渡す（ローカル・SAF取り込み済み・SAF直接閲覧には影響しない）。
+ */
+internal fun navKeyFor(item: FileItem): String {
+    val effectivePath = item.file?.absolutePath ?: item.path
+    return if (item.isNas && effectivePath != item.path) {
+        "$effectivePath${ViewerViewModel.KEY_MARKER_PUBLIC}${item.path}"
+    } else {
+        effectivePath
     }
 }
 
@@ -397,6 +417,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         refreshBookmarks()
+        // 追加直後のブックマークもすぐに既読状態・評価・カラーラベルが反映されるようにする
+        loadFileStatuses(_files.value + _bookmarks.value)
     }
 
     /**
@@ -440,7 +462,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        loadFileStatuses(_files.value)
+        // HOME画面はローカル一覧に加えてブックマークセクションも表示するため、
+        // ブックマーク分の既読状態・評価・カラーラベルも一緒に読み込む
+        // （そうしないとブックマーク側のバッジが常に未設定のまま表示されてしまう）。
+        loadFileStatuses(_files.value + _bookmarks.value)
     }
 
     fun loadInitialFolder() {
@@ -612,7 +637,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
      */
     private suspend fun openLocalOrVolumeComic(item: FileItem) {
         val file = item.file
-        val effectivePath = file?.absolutePath ?: item.path
 
         if (file != null) {
             val ext = FormatDetector.effectiveExtension(file)
@@ -625,15 +649,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        val navKey = navKeyFor(item)
         val progress = withContext(Dispatchers.IO) {
-            progressRepository.getProgress(effectivePath)
+            progressRepository.getProgress(navKey)
         }
         if (progress != null && progress.currentPage > 0) {
             _dialogState.value = ResumeDialogState(
                 item, progress.currentPage, progress.totalPages
             )
         } else {
-            _navigateEvent.tryEmit(effectivePath)
+            _navigateEvent.tryEmit(navKey)
         }
     }
 
@@ -819,7 +844,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
             // フォアグラウンドサービスでダウンロードを開始し、すぐにビューワーへ
             transferViewModel?.enqueue(fileItem, isStreaming = true)
-            _navigateEvent.tryEmit(destFile.absolutePath)
+            _navigateEvent.tryEmit(navKeyFor(fileItem.copy(file = destFile)))
         }
     }
 
@@ -905,18 +930,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun resumeReading() {
         val state = _dialogState.value ?: return
         _dialogState.value = null
-        _navigateEvent.tryEmit(state.fileItem.file?.absolutePath ?: state.fileItem.path)
+        _navigateEvent.tryEmit(navKeyFor(state.fileItem))
     }
 
     fun readFromBeginning() {
         val state = _dialogState.value ?: return
         _dialogState.value = null
-        val effectivePath = state.fileItem.file?.absolutePath ?: state.fileItem.path
+        val navKey = navKeyFor(state.fileItem)
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                progressRepository.saveProgress(effectivePath, 0, state.totalPages)
+                progressRepository.saveProgress(navKey, 0, state.totalPages)
             }
-            _navigateEvent.tryEmit(effectivePath)
+            _navigateEvent.tryEmit(navKey)
         }
     }
 

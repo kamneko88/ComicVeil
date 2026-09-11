@@ -54,6 +54,14 @@ import java.io.InputStream
 private const val VOLUME_MARKER = "##vol##"
 
 /**
+ * filePath内で「実ファイルパス」と「進捗/状態の保存に使う正規キー」を区切るマーカー。
+ * NAS STR/DLモードでは実ファイルがローカルキャッシュパスになるが、HOME一覧・ブックマーク
+ * 一覧はFileItem.path（NASならsmb://...）で状態を読み書きしているため、両者を一致させたい
+ * ときにこのマーカーで正規キーを付加して受け渡す（VOLUME_MARKERと同じ考え方）。
+ */
+private const val KEY_MARKER = "##key##"
+
+/**
  * 開発時のみ出力されるデバッグログ。
  * リリースビルドでは何も出力しない（ログの整理）。
  * エラー・警告（Log.e / Log.w）は常に出力する。
@@ -91,8 +99,43 @@ enum class PageLimitEvent { FIRST, LAST }
 
 class ViewerViewModel(
     application: Application,
-    private val filePath: String
+    navKey: String
 ) : AndroidViewModel(application) {
+
+    // navKeyは以下のいずれかの形式：
+    //   "実ファイルパス"
+    //   "実ファイルパス##vol##巻フォルダ名"                （複数巻構成。ArchiveVolumeViewModel由来）
+    //   "実ファイルパス##key##正規キー"                     （NAS STR/DL。実ファイルはローカルキャッシュだが
+    //                                                         進捗・状態はHOME/ブックマーク側のFileItem.pathで保存したい場合）
+    //   "実ファイルパス##vol##巻フォルダ名##key##正規キー"   （理論上の組み合わせ。現状のNAS経路では発生しない）
+    //
+    // 【なぜ分けるか】以前はfilePath 1つで「実ファイルの読み込み」と「進捗/状態の保存キー」を
+    // 兼用しており、NAS STRモードでは実ファイルがローカルキャッシュパスになるため、
+    // HOME一覧・ブックマーク一覧が使うFileItem.path（NASならsmb://...）と食い違い、
+    // 既読状態・評価・カラーラベルがHOME側に反映されない不具合があった。
+    private val keyMarkerIndex = navKey.indexOf(KEY_MARKER)
+    private val canonicalKeyOverride: String? =
+        if (keyMarkerIndex >= 0) navKey.substring(keyMarkerIndex + KEY_MARKER.length) else null
+    private val pathAndVolume: String =
+        if (keyMarkerIndex >= 0) navKey.substring(0, keyMarkerIndex) else navKey
+
+    private val volumeMarkerIndex = pathAndVolume.indexOf(VOLUME_MARKER)
+    /** 実ファイルパス（アーカイブ本体・ページキャッシュディレクトリなど、実際のI/Oに使う） */
+    private val filePath: String =
+        if (volumeMarkerIndex >= 0) pathAndVolume.substring(0, volumeMarkerIndex) else pathAndVolume
+    /** 巻フォルダ名（複数巻構成でなければnull） */
+    private val requestedVolume: String? =
+        if (volumeMarkerIndex >= 0) pathAndVolume.substring(volumeMarkerIndex + VOLUME_MARKER.length) else null
+    /**
+     * 進捗・既読状態・評価・カラーラベル・栞の保存に使う正規キー。
+     * canonicalKeyOverrideが無ければ実ファイルパスをそのまま使う（ローカル・SAF取り込み済み
+     * ファイルは従来どおり）。複数巻構成では巻ごとに区別するため、
+     * ArchiveVolumeViewModel.keyFor()と同じ形でVOLUME_MARKER+巻名を末尾に付ける。
+     */
+    private val statusKey: String =
+        (canonicalKeyOverride ?: filePath).let { base ->
+            if (requestedVolume != null) "$base$VOLUME_MARKER$requestedVolume" else base
+        }
 
     private val progressRepository : ReadingProgressRepository
     private val comicFileRepository: ComicFileRepository
@@ -134,13 +177,10 @@ class ViewerViewModel(
         // （「あのシーン何巻だっけ？」と1→2→3巻を開いて閉じるような使い方で、
         //   読んでいない本のDLが裏で走り続け、次に開く本を順番待ちで待たせるのを防ぐ）
         // DLモード（ユーザーが意図的に保存中の転送）は TransferManager 側で対象外にしている。
-        val markerIndex = filePath.indexOf(VOLUME_MARKER)
-        val archivePath = if (markerIndex >= 0) filePath.substring(0, markerIndex) else filePath
-        TransferManager.cancelStreamingByPath(archivePath)
+        TransferManager.cancelStreamingByPath(filePath)
         // 展開途中のページキャッシュも破棄する（完了済みキャッシュには触れない）
         if (_uiState.value.isProgressiveMode && !_uiState.value.isComplete) {
-            val volume = if (markerIndex >= 0) filePath.substring(markerIndex + VOLUME_MARKER.length) else null
-            runCatching { pageDirFor(File(archivePath), volume).deleteRecursively() }
+            runCatching { pageDirFor(File(filePath), requestedVolume).deleteRecursively() }
         }
 
         val total = maxOf(_uiState.value.pages.size, _uiState.value.totalPageCount)
@@ -151,7 +191,7 @@ class ViewerViewModel(
             else                      -> ReadStatus.READING
         }
         kotlinx.coroutines.runBlocking(Dispatchers.IO) {
-            comicFileRepository.updateStatus(filePath, status)
+            comicFileRepository.updateStatus(statusKey, status)
         }
     }
 
@@ -166,20 +206,16 @@ class ViewerViewModel(
         // リモートの本はキャッシュ上で nas_-409694946.zip のような名前になっているので、
         // Home側で控えておいた元の作品名を優先する（一時ファイル名は内部でだけ使う）。
         viewModelScope.launch {
-            val markerIndex = filePath.indexOf(VOLUME_MARKER)
-            val archivePath = if (markerIndex >= 0) filePath.substring(0, markerIndex) else filePath
-            val volumeName  = if (markerIndex >= 0) filePath.substring(markerIndex + VOLUME_MARKER.length) else null
-
             val original = withContext(Dispatchers.IO) {
-                runCatching { fileTitleDao.getName(archivePath) }.getOrNull()
-            } ?: File(archivePath).name
+                runCatching { fileTitleDao.getName(filePath) }.getOrNull()
+            } ?: File(filePath).name
 
-            val shown = if (volumeName != null) "$original ／ $volumeName" else original
+            val shown = if (requestedVolume != null) "$original ／ $requestedVolume" else original
             _uiState.update { it.copy(displayName = shown) }
         }
 
         viewModelScope.launch {
-            val progress = withContext(Dispatchers.IO) { progressRepository.getProgress(filePath) }
+            val progress = withContext(Dispatchers.IO) { progressRepository.getProgress(statusKey) }
             val savedPage = progress?.currentPage ?: 0
             lastSavedPage = savedPage
             _uiState.update { it.copy(initialPage = savedPage, isSavedPageLoaded = true) }
@@ -193,12 +229,7 @@ class ViewerViewModel(
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
-                    // filePathは "実ファイルパス" または "実ファイルパス##vol##巻フォルダ名" の形式
-                    val markerIndex  = filePath.indexOf(VOLUME_MARKER)
-                    val archivePath  = if (markerIndex >= 0) filePath.substring(0, markerIndex) else filePath
-                    val requestedVolume = if (markerIndex >= 0) filePath.substring(markerIndex + VOLUME_MARKER.length) else null
-
-                    val file = File(archivePath)
+                    val file = File(filePath)
                     if (file.isDirectory) {
                         loadFromPageDirectory(file)
                         return@withContext
@@ -518,25 +549,25 @@ class ViewerViewModel(
             else                         -> ReadStatus.READING
         }
         viewModelScope.launch(Dispatchers.IO) {
-            progressRepository.saveProgress(filePath, currentPage, totalPages)
-            comicFileRepository.updateStatus(filePath, newStatus)
-            val isBookmarked = bookmarkRepository.isBookmarked(filePath, currentPage)
+            progressRepository.saveProgress(statusKey, currentPage, totalPages)
+            comicFileRepository.updateStatus(statusKey, newStatus)
+            val isBookmarked = bookmarkRepository.isBookmarked(statusKey, currentPage)
             _uiState.update { it.copy(isCurrentPageBookmarked = isBookmarked) }
         }
     }
 
     fun toggleBookmark(currentPage: Int) {
         viewModelScope.launch(Dispatchers.IO) {
-            bookmarkRepository.toggleBookmark(filePath, currentPage)
-            val bookmarks    = bookmarkRepository.getBookmarks(filePath)
-            val isBookmarked = bookmarkRepository.isBookmarked(filePath, currentPage)
+            bookmarkRepository.toggleBookmark(statusKey, currentPage)
+            val bookmarks    = bookmarkRepository.getBookmarks(statusKey)
+            val isBookmarked = bookmarkRepository.isBookmarked(statusKey, currentPage)
             _uiState.update { it.copy(bookmarks = bookmarks, isCurrentPageBookmarked = isBookmarked) }
         }
     }
 
     fun loadBookmarks() {
         viewModelScope.launch(Dispatchers.IO) {
-            val bookmarks = bookmarkRepository.getBookmarks(filePath)
+            val bookmarks = bookmarkRepository.getBookmarks(statusKey)
             _uiState.update { it.copy(bookmarks = bookmarks) }
         }
     }
@@ -544,16 +575,16 @@ class ViewerViewModel(
     fun deleteBookmark(page: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             val db = ComicVeilDatabase.getDatabase(getApplication())
-            db.bookmarkDao().deleteBookmark(filePath, page)
-            val bookmarks    = bookmarkRepository.getBookmarks(filePath)
-            val isBookmarked = bookmarkRepository.isBookmarked(filePath, lastSavedPage)
+            db.bookmarkDao().deleteBookmark(statusKey, page)
+            val bookmarks    = bookmarkRepository.getBookmarks(statusKey)
+            val isBookmarked = bookmarkRepository.isBookmarked(statusKey, lastSavedPage)
             _uiState.update { it.copy(bookmarks = bookmarks, isCurrentPageBookmarked = isBookmarked) }
         }
     }
 
     fun deleteAllBookmarks() {
         viewModelScope.launch(Dispatchers.IO) {
-            bookmarkRepository.deleteAllBookmarks(filePath)
+            bookmarkRepository.deleteAllBookmarks(statusKey)
             _uiState.update { it.copy(bookmarks = emptyList(), isCurrentPageBookmarked = false) }
         }
     }
@@ -564,6 +595,7 @@ class ViewerViewModel(
 
     companion object {
         const val VOLUME_MARKER_PUBLIC = VOLUME_MARKER
+        const val KEY_MARKER_PUBLIC = KEY_MARKER
 
         fun Factory(application: Application, filePath: String): ViewModelProvider.Factory {
             return object : ViewModelProvider.Factory {

@@ -277,9 +277,11 @@ fun HomeScreen(
         }
     }
 
-    // ファイルリストが変わったら状態を一括読み込み
-    LaunchedEffect(files) {
-        viewModel.loadFileStatuses(files)
+    // ファイルリスト・ブックマークが変わったら状態を一括読み込み
+    // （ブックマークもHOME画面に別セクションとして表示されるため、既読状態・評価・
+    //   カラーラベルをここに含めないとブックマーク側のバッジが反映されない）
+    LaunchedEffect(files, bookmarks) {
+        viewModel.loadFileStatuses(files + bookmarks)
     }
 
     // 権限は一切不要（アプリ専用フォルダ or SAFで選択したフォルダのみを扱うため）
@@ -811,6 +813,7 @@ fun HomeScreen(
                                         thumbnailRepository = thumbnailRepository,
                                         showTitle           = true,
                                         generateThumbnail   = false,
+                                        status              = fileStatuses[bm.path] ?: ReadStatus.UNREAD,
                                         onClick     = {
                                             if (bm.isFolder) viewModel.navigateToNas(bm.nasServer!!, bm.nasPath)
                                             else             viewModel.onComicTapped(bm)
@@ -955,12 +958,16 @@ fun HomeScreen(
                                 if (bm.isFolder) viewModel.navigateToNas(bm.nasServer!!, bm.nasPath)
                                 else             viewModel.onComicTapped(bm)
                             }
+                            val bmStatus = fileStatuses[bm.path] ?: ReadStatus.UNREAD
+                            val bmMeta   = fileMetaMap[bm.path]
                             if (displayMode == com.kamneko88.comicveil.data.AppPrefs.ListDisplayMode.COMPACT) {
                                 CompactFileListItem(
                                     fileItem            = bm,
                                     thumbnailRepository = thumbnailRepository,
                                     generateThumbnail   = false,
+                                    status              = bmStatus,
                                     onClick     = bmTap,
+                                    onInfoClick = { viewModel.openFileInfo(bm) },
                                     onLongClick = { contextTarget = bm }
                                 )
                             } else {
@@ -968,7 +975,11 @@ fun HomeScreen(
                                     fileItem            = bm,
                                     thumbnailRepository = thumbnailRepository,
                                     generateThumbnail   = false,
+                                    status              = bmStatus,
+                                    rating              = bmMeta?.rating ?: 0,
+                                    colorLabel          = bmMeta?.colorLabel ?: 0,
                                     onClick     = bmTap,
+                                    onInfoClick = { viewModel.openFileInfo(bm) },
                                     onLongClick = { contextTarget = bm }
                                 )
                             }
