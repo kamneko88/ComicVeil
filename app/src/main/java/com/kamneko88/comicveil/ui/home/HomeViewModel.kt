@@ -76,16 +76,13 @@ internal fun navKeyFor(item: FileItem): String {
 
 /**
  * NASストリーミングでzip/cbzとして開こうとしたファイルについて、拡張子と実体（先頭署名から
- * 判定した形式）が食い違っている場合の警告文を組み立てる。食い違っていなければnullを返す。
+ * 判定した形式）が食い違っているかを判定する。
  *
- * detectedがnull（先頭が読めない・判定不能）の場合も、誤検知を避けるためnullを返す
- * （＝警告を出さず、従来通りZIPとして扱わせる）。
+ * detectedがnull（先頭が読めない・判定不能）の場合は、誤検知を避けるため不一致として扱わない
+ * （＝従来通りZIPとして扱わせる）。
  */
-internal fun zipExtensionMismatchWarning(fileName: String, ext: String, detected: String?): String? {
-    if (detected == null || detected == "zip") return null
-    return "「$fileName」は拡張子と実際のファイル形式が一致していません" +
-        "（拡張子: $ext、実際の形式: $detected）。ファイル名の拡張子を正しいものに直してください。"
-}
+internal fun isZipExtensionMismatch(detected: String?): Boolean =
+    detected != null && detected != "zip"
 
 /** スクロール位置を覚えておくための、場所ごとに一意なキー */
 val ViewLocation.key: String
@@ -786,7 +783,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         if (ext.lowercase() in setOf("zip", "cbz")) {
-            checkFormatThenStreamZip(fileItem, destFile, ext)
+            checkFormatThenStreamZip(fileItem, destFile)
         } else {
             downloadThenOpenNasComic(fileItem)
         }
@@ -797,13 +794,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
      *
      * NASの自炊ファイルには、実体がRAR等なのに拡張子だけ.cbzになっているものがあり、
      * そのままZIP用の目次読み取り（startZipStreaming）に進めると分かりにくい失敗になる。
-     * ここでは実体に合わせて自動的に成功させる対応はせず、食い違いを検知したら警告して
-     * 中断するだけに留める（フル修正はスコープ外）。
+     * 食い違いを検知した場合は、ストリーミングをやめてdownloadThenOpenNasComic()に委譲する。
+     * そちらは全体ダウンロード後にローカルファイルと同じ経路（先頭署名で実際の形式を
+     * 判定して正しく開くロジックを含む）で開くため、実体に合わせて自動的に正しく開ける。
      *
      * 先頭が読めない・判定不能（NASのスパースファイル等）の場合や、nasServerが取れない場合は
      * 誤検知でZIPまで止めないよう、従来通りstartZipStreamingへ進める。
      */
-    private fun checkFormatThenStreamZip(fileItem: FileItem, destFile: File, ext: String) {
+    private fun checkFormatThenStreamZip(fileItem: FileItem, destFile: File) {
         val server = fileItem.nasServer
         if (server == null) {
             startZipStreaming(fileItem, destFile)
@@ -824,9 +822,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _downloadProgress.value = null
 
             val detected = head?.let { FormatDetector.detectFromBytes(it) }
-            val warning  = zipExtensionMismatchWarning(fileItem.name, ext, detected)
-            if (warning != null) {
-                _nasError.value = warning
+            if (isZipExtensionMismatch(detected)) {
+                downloadThenOpenNasComic(fileItem)
                 return@launch
             }
 
