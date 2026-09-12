@@ -3,6 +3,7 @@ package com.kamneko88.comicveil.data
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.Log
 import androidx.core.graphics.scale
 import com.github.junrar.Archive
 import com.kamneko88.comicveil.data.nas.NasServer
@@ -58,6 +59,7 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
             if (scaled !== bitmap) scaled.recycle()
             true
         } catch (e: Exception) {
+            Log.w("ComicVeil", "saveCustomCover失敗: ${e::class.simpleName}: ${e.message}", e)
             false
         }
     }

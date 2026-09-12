@@ -611,14 +611,25 @@ class ViewerViewModel(
      * ページの画像バイト列は、段階展開（ZIP/RAR/7z）なら[ViewerUiState.pageFiles]の
      * 展開済みJPEGファイルから、PDF（非段階展開）なら[ViewerUiState.pages]から取得する
      * （ui/viewer/ViewerScreen.ktのページ表示分岐と同じ考え方）。
+     *
+     * 【v1.5.1 追記】画面表示はCoilのメモリキャッシュに乗っているため、実機ではpageFilesの
+     * パスに実ファイルが存在しない（OSのストレージ逼迫等で消えた）状態でも表示が継続してしまい、
+     * File(path).readBytes()が失敗するケースを確認した。その場合は[reExtractSinglePage]で
+     * 書庫から対象ページ1枚だけを直接再抽出するフォールバックを行う。
      */
     fun setCurrentPageAsCover(pageIndex: Int, half: PageHalf) {
         if (isMultiVolumeView) return
         viewModelScope.launch(Dispatchers.IO) {
             val state = _uiState.value
             val rawBytes = if (state.isProgressiveMode) {
-                state.pageFiles.getOrNull(pageIndex)?.let { path ->
+                val cachedBytes = state.pageFiles.getOrNull(pageIndex)?.let { path ->
                     runCatching { File(path).readBytes() }.getOrNull()
+                }
+                cachedBytes ?: run {
+                    Log.w("ComicVeil", "表紙設定: ページキャッシュが読めないため書庫から再抽出します (pageIndex=$pageIndex)")
+                    runCatching { reExtractSinglePage(pageIndex) }
+                        .onFailure { Log.w("ComicVeil", "表紙設定: 書庫からの再抽出で例外が発生しました (pageIndex=$pageIndex)", it) }
+                        .getOrNull()
                 }
             } else {
                 state.pages.getOrNull(pageIndex)
@@ -627,6 +638,7 @@ class ViewerViewModel(
             val success = rawBytes?.let { bytes ->
                 val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 if (decoded == null) {
+                    Log.w("ComicVeil", "表紙設定に失敗: 画像のデコードに失敗しました (pageIndex=$pageIndex, bytes=${bytes.size})")
                     false
                 } else {
                     val cropped = cropHalf(decoded, half)
@@ -636,13 +648,74 @@ class ViewerViewModel(
                     )
                     val fileItem = FileItem(type = FileItemType.COMIC_FILE, path = statusKey)
                     val saved = repository.saveCustomCover(fileItem, cropped)
+                    if (!saved) Log.w("ComicVeil", "表紙設定に失敗: ThumbnailRepository.saveCustomCoverがfalseを返しました")
                     if (cropped !== decoded) decoded.recycle()
                     cropped.recycle()
                     saved
                 }
-            } ?: false
+            } ?: run {
+                Log.w(
+                    "ComicVeil",
+                    "表紙設定に失敗: ページの画像バイト列を取得できませんでした " +
+                        "(pageIndex=$pageIndex, isProgressiveMode=${state.isProgressiveMode})"
+                )
+                false
+            }
 
             _coverSavedEvent.tryEmit(success)
+        }
+    }
+
+    /**
+     * 表紙設定のフォールバック：ページキャッシュ（[ViewerUiState.pageFiles]）が消えている場合に、
+     * 書庫（ZIP/RAR/7z）から対象ページ1枚だけを直接再抽出する。
+     *
+     * 【設計】新規に専用の抽出ロジックは書かず、既存のprogressive展開関数
+     * （extractZipProgressive/extractRarProgressive/extract7zProgressive。いずれも
+     * ZIP/RAR5はCommons Compress・libarchive、RAR4はRarSupport(junrar)を使い分ける
+     * 既存実装をそのまま流用）に、対象1件だけのtargetEntriesと使い捨ての一時ディレクトリを
+     * 渡して呼び出す。書庫全体は再展開されず、指定した1エントリだけが読まれる。
+     */
+    private fun reExtractSinglePage(pageIndex: Int): ByteArray? {
+        val file = File(filePath)
+        if (!file.exists()) {
+            Log.w("ComicVeil", "表紙設定: 再抽出用の書庫ファイルが見つかりません: $filePath")
+            return null
+        }
+        val ext = FormatDetector.effectiveExtension(file)
+        if (ext !in setOf("zip", "cbz", "rar", "cbr", "7z")) {
+            Log.w("ComicVeil", "表紙設定: 再抽出未対応の形式です: $ext")
+            return null
+        }
+
+        val scan = ArchiveScanner.scan(file)
+        val targetEntries = if (requestedVolume != null) {
+            scan.entries.filter { it.volumeName == requestedVolume }
+        } else {
+            scan.entries
+        }
+        val info = targetEntries.getOrNull(pageIndex)
+        if (info == null) {
+            Log.w("ComicVeil", "表紙設定: 再走査結果にpageIndex=${pageIndex}のエントリがありません（全${targetEntries.size}件）")
+            return null
+        }
+
+        val tmpDir = File(getApplication<Application>().cacheDir, "cover_reextract_${System.nanoTime()}")
+        tmpDir.mkdirs()
+        try {
+            when (ext) {
+                "zip", "cbz" -> extractZipProgressive(file, listOf(info), tmpDir, null, scan.zipCharset)
+                "rar", "cbr" -> extractRarProgressive(file, listOf(info), tmpDir)
+                "7z"         -> extract7zProgressive(file, listOf(info), tmpDir)
+            }
+            val out = File(tmpDir, "%05d.jpg".format(0))
+            if (!out.exists()) {
+                Log.w("ComicVeil", "表紙設定: 再抽出は完了したがページファイルが見つかりません (entry=${info.name})")
+                return null
+            }
+            return out.readBytes()
+        } finally {
+            tmpDir.deleteRecursively()
         }
     }
 
