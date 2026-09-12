@@ -23,19 +23,26 @@ class HalfCropTransformation(
 
     override val cacheKey: String = "half_crop_$half"
 
-    override suspend fun transform(input: Bitmap, size: Size): Bitmap {
-        if (half == PageHalf.FULL) return input
-
-        val width     = input.width
-        val height    = input.height
-        val halfWidth = width / 2
-        if (halfWidth < 1) return input
-
-        val left = if (half == PageHalf.RIGHT) width - halfWidth else 0
-        return Bitmap.createBitmap(input, left, 0, halfWidth, height)
-    }
+    override suspend fun transform(input: Bitmap, size: Size): Bitmap = cropHalf(input, half)
 
     override fun equals(other: Any?): Boolean = other is HalfCropTransformation && other.half == half
 
     override fun hashCode(): Int = cacheKey.hashCode()
+}
+
+/**
+ * 画像の右半分・左半分だけを切り出す（見開き分割用）。表紙設定（「表紙に設定」機能）でも
+ * 表示中の見開き分割状態をそのまま保存するために同じ計算を使う。
+ * [PageHalf.FULL] は分割しないので入力をそのまま返す。
+ */
+fun cropHalf(input: Bitmap, half: PageHalf): Bitmap {
+    if (half == PageHalf.FULL) return input
+
+    val width     = input.width
+    val height    = input.height
+    val halfWidth = width / 2
+    if (halfWidth < 1) return input
+
+    val left = if (half == PageHalf.RIGHT) width - halfWidth else 0
+    return Bitmap.createBitmap(input, left, 0, halfWidth, height)
 }

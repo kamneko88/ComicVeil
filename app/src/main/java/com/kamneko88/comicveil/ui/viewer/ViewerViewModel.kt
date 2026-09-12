@@ -2,6 +2,7 @@ package com.kamneko88.comicveil.ui.viewer
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
@@ -14,8 +15,11 @@ import androidx.lifecycle.viewModelScope
 import com.kamneko88.comicveil.BuildConfig
 import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.data.ArchiveScanner
+import com.kamneko88.comicveil.data.FileItem
+import com.kamneko88.comicveil.data.FileItemType
 import com.kamneko88.comicveil.data.FormatDetector
 import com.kamneko88.comicveil.data.GrowingFileInputStream
+import com.kamneko88.comicveil.data.ThumbnailRepository
 import com.kamneko88.comicveil.data.ZipStreamSupport
 import com.kamneko88.comicveil.data.db.Bookmark
 import com.kamneko88.comicveil.data.db.BookmarkRepository
@@ -126,6 +130,9 @@ class ViewerViewModel(
     /** 巻フォルダ名（複数巻構成でなければnull） */
     private val requestedVolume: String? =
         if (volumeMarkerIndex >= 0) pathAndVolume.substring(volumeMarkerIndex + VOLUME_MARKER.length) else null
+
+    /** 複数巻構成（巻フォルダ）を開いているか。「表紙に設定」は複数巻構成では対象外にする */
+    val isMultiVolumeView: Boolean = requestedVolume != null
     /**
      * 進捗・既読状態・評価・カラーラベル・栞の保存に使う正規キー。
      * canonicalKeyOverrideが無ければ実ファイルパスをそのまま使う（ローカル・SAF取り込み済み
@@ -147,6 +154,10 @@ class ViewerViewModel(
 
     private val _pageLimitEvent = MutableSharedFlow<PageLimitEvent>(replay = 0, extraBufferCapacity = 1)
     val pageLimitEvent: SharedFlow<PageLimitEvent> = _pageLimitEvent.asSharedFlow()
+
+    /** 「表紙に設定」の結果（true=成功）。Snackbar表示のためにViewerScreen側で購読する */
+    private val _coverSavedEvent = MutableSharedFlow<Boolean>(replay = 0, extraBufferCapacity = 1)
+    val coverSavedEvent: SharedFlow<Boolean> = _coverSavedEvent.asSharedFlow()
 
     private var lastSavedPage = 0
 
@@ -591,6 +602,48 @@ class ViewerViewModel(
 
     fun onPageLimitReached(event: PageLimitEvent) {
         _pageLimitEvent.tryEmit(event)
+    }
+
+    /**
+     * 現在表示中のページ（と見開き分割状態）を、この本（アーカイブ全体）の表紙として保存する。
+     * 複数巻構成（[isMultiVolumeView]）では呼び出し側がUIを出さない想定だが、念のためここでも弾く。
+     *
+     * ページの画像バイト列は、段階展開（ZIP/RAR/7z）なら[ViewerUiState.pageFiles]の
+     * 展開済みJPEGファイルから、PDF（非段階展開）なら[ViewerUiState.pages]から取得する
+     * （ui/viewer/ViewerScreen.ktのページ表示分岐と同じ考え方）。
+     */
+    fun setCurrentPageAsCover(pageIndex: Int, half: PageHalf) {
+        if (isMultiVolumeView) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val state = _uiState.value
+            val rawBytes = if (state.isProgressiveMode) {
+                state.pageFiles.getOrNull(pageIndex)?.let { path ->
+                    runCatching { File(path).readBytes() }.getOrNull()
+                }
+            } else {
+                state.pages.getOrNull(pageIndex)
+            }
+
+            val success = rawBytes?.let { bytes ->
+                val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                if (decoded == null) {
+                    false
+                } else {
+                    val cropped = cropHalf(decoded, half)
+                    val repository = ThumbnailRepository(
+                        File(getApplication<Application>().cacheDir, "thumbnails"),
+                        getApplication()
+                    )
+                    val fileItem = FileItem(type = FileItemType.COMIC_FILE, path = statusKey)
+                    val saved = repository.saveCustomCover(fileItem, cropped)
+                    if (cropped !== decoded) decoded.recycle()
+                    cropped.recycle()
+                    saved
+                }
+            } ?: false
+
+            _coverSavedEvent.tryEmit(success)
+        }
     }
 
     companion object {

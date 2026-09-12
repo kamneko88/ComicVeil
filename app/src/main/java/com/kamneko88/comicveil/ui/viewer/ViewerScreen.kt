@@ -183,6 +183,7 @@ fun ViewerScreen(
     var showBookmarkList     by remember { mutableStateOf(false) }
     var showPageStrip        by remember { mutableStateOf(false) }
     var orientationLocked    by remember { mutableStateOf(false) }
+    var showSetCoverDialog   by remember { mutableStateOf(false) }
 
     // 明るさを調整したら、少しして自動で引っ込める。
     // 出しっぱなしだとページ移動スライダーと近くて誤タップのもとになるし、画面もうるさい。
@@ -331,6 +332,13 @@ fun ViewerScreen(
             }
             snackbarHostState.currentSnackbarData?.dismiss()
             snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.coverSavedEvent.collect { success ->
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(if (success) "表紙に設定しました" else "表紙の設定に失敗しました")
         }
     }
 
@@ -573,6 +581,9 @@ fun ViewerScreen(
                                 pageHalf       = pageHalves.getOrElse(spreadIndex) { PageHalf.FULL },
                                 onMenuToggle   = { menuVisible = !menuVisible },
                                 onPageLimit    = { viewModel.onPageLimitReached(it) },
+                                onLongPress    = {
+                                    if (!viewModel.isMultiVolumeView) showSetCoverDialog = true
+                                },
                                 isFirst        = spreadIndex == 0,
                                 isLast         = spreadIndex == spreads.size - 1,
                                 onZoomChanged  = { isAnyPageZoomed = it }
@@ -663,6 +674,24 @@ fun ViewerScreen(
                                 }
                             },
                             confirmButton = { TextButton(onClick = { showBookmarkList = false }) { Text("閉じる") } }
+                        )
+                    }
+
+                    if (showSetCoverDialog) {
+                        AlertDialog(
+                            onDismissRequest = { showSetCoverDialog = false },
+                            title = { Text("表紙に設定") },
+                            text  = { Text("このページを表紙に設定しますか？") },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    showSetCoverDialog = false
+                                    viewModel.setCurrentPageAsCover(
+                                        currentPageIndex,
+                                        pageHalves.getOrElse(pagerState.currentPage) { PageHalf.FULL }
+                                    )
+                                }) { Text("設定する") }
+                            },
+                            dismissButton = { TextButton(onClick = { showSetCoverDialog = false }) { Text("キャンセル") } }
                         )
                     }
 
@@ -1169,6 +1198,7 @@ private fun ZoomablePage(
     reverseLayout: Boolean,
     onMenuToggle: () -> Unit,
     onPageLimit: (PageLimitEvent) -> Unit,
+    onLongPress: () -> Unit = {},
     isFirst: Boolean,
     isLast: Boolean,
     onZoomChanged: (Boolean) -> Unit,
@@ -1257,8 +1287,11 @@ private fun ZoomablePage(
                     } else {
                         // スワイプ（＝ページ送り／ズーム中のパン）だった場合はメニューを出さない
                         if (moved) return@awaitEachGesture
-                        // 長押しでない限りタップとして扱う（以前は300ms以上押すと無効になっていた）
-                        if (System.currentTimeMillis() - downTime > viewConfiguration.longPressTimeoutMillis) return@awaitEachGesture
+                        // 長押しなら「表紙に設定」ダイアログを出す（以前はここで何もせず握りつぶしていた）
+                        if (System.currentTimeMillis() - downTime > viewConfiguration.longPressTimeoutMillis) {
+                            onLongPress()
+                            return@awaitEachGesture
+                        }
                         // ページ送り直後の誤タップを防ぐガード
                         if (System.currentTimeMillis() - lastScrollEndTime < SWIPE_GUARD_MS) return@awaitEachGesture
 

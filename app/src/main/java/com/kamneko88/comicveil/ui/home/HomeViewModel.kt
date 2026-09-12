@@ -13,6 +13,7 @@ import com.kamneko88.comicveil.data.calcDirSize
 import com.kamneko88.comicveil.data.isFullyCached
 import com.kamneko88.comicveil.data.selectDirsToEvict
 import com.kamneko88.comicveil.data.FileItem
+import com.kamneko88.comicveil.data.canonicalStatusKey
 import com.kamneko88.comicveil.data.FormatDetector
 import com.kamneko88.comicveil.data.SafFileRepository
 import com.kamneko88.comicveil.data.SortPrefs
@@ -65,8 +66,9 @@ sealed class ViewLocation {
  */
 internal fun navKeyFor(item: FileItem): String {
     val effectivePath = item.file?.absolutePath ?: item.path
-    return if (item.isNas && effectivePath != item.path) {
-        "$effectivePath${ViewerViewModel.KEY_MARKER_PUBLIC}${item.path}"
+    val canonicalKey  = item.canonicalStatusKey()
+    return if (item.isNas && effectivePath != canonicalKey) {
+        "$effectivePath${ViewerViewModel.KEY_MARKER_PUBLIC}$canonicalKey"
     } else {
         effectivePath
     }

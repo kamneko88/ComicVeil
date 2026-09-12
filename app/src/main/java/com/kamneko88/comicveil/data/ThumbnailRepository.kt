@@ -24,18 +24,55 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
 
     private val smbRepository = SmbRepository()
 
+    /**
+     * あつのりさんが手動で選んだ表紙の保存先。
+     *
+     * 【なぜcacheDir配下（サムネイルキャッシュ）に置かないか】
+     * 設定画面の「サムネイルキャッシュを削除」で自動生成のサムネイルは消えてよいが、
+     * カスタム表紙は意図して選んだデータであり、キャッシュではないため消えてはいけない。
+     * NasStreamCacheと同じ「システムのキャッシュ領域を使わない」パターンに合わせ、
+     * getExternalFilesDir(null)配下の専用ディレクトリに保存する。
+     */
+    private val customCoversDir: File =
+        File(context?.getExternalFilesDir(null) ?: cacheDir, "custom_covers")
+
     init {
         cacheDir.mkdirs()
+        customCoversDir.mkdirs()
+    }
+
+    /** カスタム表紙が設定済みか */
+    fun hasCustomCover(item: FileItem): Boolean = customCoverFile(item).exists()
+
+    /** カスタム表紙の保存先ファイル（存在確認・削除用に公開） */
+    fun customCoverFile(item: FileItem): File =
+        File(customCoversDir, "cover_${item.canonicalStatusKey().hashCode()}.jpg")
+
+    /** 表紙として選ばれた画像を、既存サムネイルと同じサイズ・形式で保存する */
+    fun saveCustomCover(item: FileItem, bitmap: Bitmap): Boolean {
+        return try {
+            val scaled = createScaledBitmap(bitmap, TARGET_WIDTH, TARGET_HEIGHT)
+            FileOutputStream(customCoverFile(item)).use { out ->
+                scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            }
+            if (scaled !== bitmap) scaled.recycle()
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /**
      * サムネイルを取得する。キャッシュがあれば即返し、なければ生成してから返す。
+     * カスタム表紙が設定済みならそれを最優先で返す（生成処理は一切通らない）。
      * NASファイルは STRキャッシュ → 部分取得 の順で生成する
      * SAFファイルは 先頭部分取得（ZIPのみ）で生成する
      */
     suspend fun getOrGenerateThumbnail(fileItem: FileItem): File? =
         withContext(Dispatchers.IO) {
             if (!fileItem.isComic) return@withContext null
+
+            if (hasCustomCover(fileItem)) return@withContext customCoverFile(fileItem)
 
             if (fileItem.isNas) {
                 return@withContext getOrGenerateNasThumbnail(fileItem)
