@@ -271,6 +271,57 @@ class SmbRepository {
         }
     }
 
+    /**
+     * ファイルの**先頭だけ**を読む。
+     *
+     * NASストリーミング開始前に、拡張子と実体（先頭の署名）が一致しているか確認するために使う
+     * （HomeViewModel.checkFormatThenStreamZip参照）。通信量は少ないため（既定16バイト）、
+     * 呼び出しても体感の遅延はほぼ無い想定。
+     *
+     * @return 読めたバイト列。0バイトしか読めない・例外発生時は null
+     */
+    suspend fun readHead(
+        server: NasServer,
+        nasPath: String,
+        length: Int = 16
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        val client = SMBClient()
+        try {
+            val connection = client.connect(server.host)
+            val auth = AuthenticationContext(
+                server.username,
+                server.password.toCharArray(),
+                null
+            )
+            val session = connection.authenticate(auth)
+            val share   = session.connectShare(server.shareName) as DiskShare
+            val smbPath = nasPath.replace("/", "\\")
+            val smbFile = share.openFile(
+                smbPath,
+                setOf(AccessMask.GENERIC_READ),
+                null,
+                setOf(SMB2ShareAccess.FILE_SHARE_READ),
+                SMB2CreateDisposition.FILE_OPEN,
+                null
+            )
+
+            val buffer = ByteArray(length)
+            var filled = 0
+            while (filled < buffer.size) {
+                val read = smbFile.read(buffer, filled.toLong(), filled, buffer.size - filled)
+                if (read <= 0) break
+                filled += read
+            }
+            if (filled <= 0) return@withContext null
+
+            if (filled == buffer.size) buffer else buffer.copyOf(filled)
+        } catch (e: Exception) {
+            null
+        } finally {
+            runCatching { client.close() }
+        }
+    }
+
     // ※ downloadZipProgressive（NAS上でZIPを逐次ストリーミング展開する旧ロジック）は削除済み。
     // NASコミックは全体ダウンロード後にArchiveScannerで巻検出する方式に統一したため、
     // downloadFile()だけで十分となった（HomeViewModel.downloadThenOpenNasComic参照）。
