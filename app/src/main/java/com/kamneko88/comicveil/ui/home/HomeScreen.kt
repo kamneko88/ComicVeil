@@ -2,6 +2,7 @@ package com.kamneko88.comicveil.ui.home
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -87,6 +88,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -105,6 +107,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import coil3.compose.AsyncImage
+import com.kamneko88.comicveil.data.CloudProviderEntry
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.FileItemType
 import com.kamneko88.comicveil.data.LocalFileRepository
@@ -112,7 +115,9 @@ import com.kamneko88.comicveil.data.SortPrefs
 import com.kamneko88.comicveil.data.ThumbnailRepository
 import com.kamneko88.comicveil.data.db.ColorLabel
 import com.kamneko88.comicveil.data.db.ReadStatus
+import com.kamneko88.comicveil.data.detectInstalledCloudProviders
 import com.kamneko88.comicveil.data.nas.NasServer
+import com.kamneko88.comicveil.data.resolveInitialRootUri
 import com.kamneko88.comicveil.ui.transfer.TransferViewModel
 import java.io.File
 import java.net.URLEncoder
@@ -121,17 +126,20 @@ import java.util.Date
 import java.util.Locale
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * システム標準のファイル選択画面を、可能であれば端末のDownloadフォルダを初期表示にして開く。
+ * システム標準のファイル選択画面を、呼び出し側が指定した初期表示先URIで開く。
  * EXTRA_INITIAL_URIは非公式仕様のため、対応しないランチャーではユーザーが手動で移動するのみ。
  */
-private class OpenDocumentInDownloads : ActivityResultContracts.OpenDocument() {
+private class OpenDocumentWithInitialUri(
+    private val initialUriProvider: () -> Uri?
+) : ActivityResultContracts.OpenDocument() {
     override fun createIntent(context: Context, input: Array<String>): Intent {
         val intent = super.createIntent(context, input)
-        val downloadsUri =
-            "content://com.android.externalstorage.documents/document/primary%3ADownload".toUri()
-        intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, downloadsUri)
+        initialUriProvider()?.let { intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, it) }
         return intent
     }
 }
@@ -185,6 +193,19 @@ fun HomeScreen(
     var contextTarget      by remember { mutableStateOf<FileItem?>(null) }
     // ダウンロードフォルダのファイル選択で非対応拡張子を選んだ場合のエラー表示
     var unsupportedFileError by remember { mutableStateOf(false) }
+    // クラウドピッカー（取り込み元選択ダイアログ）関連
+    var showCloudPicker by remember { mutableStateOf(false) }
+    var pendingCloudInitialUri by remember { mutableStateOf<Uri?>(null) }
+    var cloudProviders by remember { mutableStateOf<List<CloudProviderEntry>>(emptyList()) }
+    val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        cloudProviders = withContext(Dispatchers.IO) { detectInstalledCloudProviders(context) }
+    }
+
+    val downloadsInitialUri = remember {
+        "content://com.android.externalstorage.documents/document/primary%3ADownload".toUri()
+    }
 
     val thumbnailRepository = remember {
         ThumbnailRepository(File(context.cacheDir, "thumbnails"), context)
@@ -194,8 +215,9 @@ fun HomeScreen(
     // MediaStore.Downloadsは他アプリ（ブラウザ等）が作成したファイルを列挙できないため、
     // SAFのファイルピッカーを都度起動する方式を採る（追加権限は不要）。
     val openDownloadsLauncher = rememberLauncherForActivityResult(
-        contract = OpenDocumentInDownloads()
+        contract = remember { OpenDocumentWithInitialUri { pendingCloudInitialUri } }
     ) { uri ->
+        pendingCloudInitialUri = null
         if (uri != null) {
             val fileItem = DocumentFile.fromSingleUri(context, uri)?.let { FileItem.fromDocumentFile(it) }
             if (fileItem != null && fileItem.isComic) {
@@ -319,6 +341,31 @@ fun HomeScreen(
             },
             onListShares = { host, user, pass -> viewModel.listShares(host, user, pass) },
             editServer = editingServer
+        )
+    }
+
+    // 取り込み元選択ダイアログ（クラウドピッカー）
+    if (showCloudPicker) {
+        CloudPickerDialog(
+            providers = cloudProviders,
+            onSelectDownloads = {
+                pendingCloudInitialUri = downloadsInitialUri
+                openDownloadsLauncher.launch(arrayOf("*/*"))
+                showCloudPicker = false
+            },
+            onSelectProvider = { provider ->
+                showCloudPicker = false
+                coroutineScope.launch {
+                    pendingCloudInitialUri = resolveInitialRootUri(context, provider.authority)
+                    openDownloadsLauncher.launch(arrayOf("*/*"))
+                }
+            },
+            onSelectOther = {
+                pendingCloudInitialUri = null
+                openDownloadsLauncher.launch(arrayOf("*/*"))
+                showCloudPicker = false
+            },
+            onDismiss = { showCloudPicker = false }
         )
     }
 
@@ -877,7 +924,7 @@ fun HomeScreen(
                                 ) {
                                     DownloadsFolderShelfItem(
                                         enabled = !isEditMode,
-                                        onClick = { openDownloadsLauncher.launch(arrayOf("*/*")) }
+                                        onClick = { showCloudPicker = true }
                                     )
                                 }
                             }
@@ -1029,7 +1076,7 @@ fun HomeScreen(
                         item {
                             DownloadsFolderListItem(
                                 enabled = !isEditMode,
-                                onClick = { openDownloadsLauncher.launch(arrayOf("*/*")) }
+                                onClick = { showCloudPicker = true }
                             )
                             HorizontalDivider()
                         }
