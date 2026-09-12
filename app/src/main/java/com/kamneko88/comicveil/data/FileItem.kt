@@ -90,12 +90,13 @@ data class FileItem(
 
 /**
  * 進捗・既読状態・評価・カラーラベル・カスタム表紙の保存に使う「正規キー」。
- * NAS由来なら[FileItem.path]（smb://...）、それ以外なら実ファイルパス
- * （[FileItem.file]の絶対パス。無ければ[FileItem.path]）を返す。
+ * NAS・SAF由来なら[FileItem.path]（smb://... または content://...）、それ以外なら
+ * 実ファイルパス（[FileItem.file]の絶対パス。無ければ[FileItem.path]）を返す。
  *
- * NAS STR/DLモードでは実ファイルがローカルキャッシュパスになる一方、HOME一覧・
- * ブックマーク一覧は常にFileItem.pathで状態を読み書きしているため、両者を
- * 一致させる必要がある（ui/home/HomeViewModel.kt の navKeyFor() が同じロジックで使用）。
+ * NAS STR/DLモードやSAF直接閲覧（ensureSafCached）では実ファイルがローカルキャッシュ
+ * パスになる一方、HOME一覧・ブックマーク一覧は常にFileItem.pathで状態を読み書きしている
+ * ため、両者を一致させる必要がある（ui/home/HomeViewModel.kt の navKeyFor() が同じ
+ * ロジックで使用）。
  */
 fun FileItem.canonicalStatusKey(): String =
-    if (isNas) path else (file?.absolutePath ?: path)
+    if (isNas || isSaf) path else (file?.absolutePath ?: path)

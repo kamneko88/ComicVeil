@@ -57,17 +57,18 @@ sealed class ViewLocation {
 /**
  * ビューワーへ渡すナビゲーションキーを組み立てる。
  *
- * 通常は実ファイルパス（item.file?.absolutePath）をそのまま使うが、NAS由来のFileItemは
- * 実ファイルがローカルキャッシュパス（nas_stream_cache等）になっている一方、HOME一覧・
- * ブックマーク一覧はFileItem.path（smb://...）で進捗・既読状態・評価・カラーラベルを
- * 読み書きしているため、そのままでは食い違って反映されない不具合があった。
- * NAS由来かつ両者が異なる場合だけ、ViewerViewModel.KEY_MARKER_PUBLICで正規キー
- * （item.path）を付加して渡す（ローカル・SAF取り込み済み・SAF直接閲覧には影響しない）。
+ * 通常は実ファイルパス（item.file?.absolutePath）をそのまま使うが、NAS由来・SAF直接閲覧の
+ * FileItemは実ファイルがローカルキャッシュパス（nas_stream_cache・saf_cache等）になっている
+ * 一方、HOME一覧・ブックマーク一覧はFileItem.path（smb://...・content://...）で進捗・既読
+ * 状態・評価・カラーラベルを読み書きしているため、そのままでは食い違って反映されない
+ * 不具合があった。
+ * NAS由来またはSAF直接閲覧で両者が異なる場合だけ、ViewerViewModel.KEY_MARKER_PUBLICで
+ * 正規キー（item.path）を付加して渡す（ローカル・SAF取り込み済みには影響しない）。
  */
 internal fun navKeyFor(item: FileItem): String {
     val effectivePath = item.file?.absolutePath ?: item.path
     val canonicalKey  = item.canonicalStatusKey()
-    return if (item.isNas && effectivePath != canonicalKey) {
+    return if ((item.isNas || item.isSaf) && effectivePath != canonicalKey) {
         "$effectivePath${ViewerViewModel.KEY_MARKER_PUBLIC}$canonicalKey"
     } else {
         effectivePath

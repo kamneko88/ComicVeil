@@ -1,5 +1,7 @@
 package com.kamneko88.comicveil.ui.home
 
+import android.net.FakeUri
+import android.net.Uri
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.FileItemType
 import com.kamneko88.comicveil.data.nas.NasServer
@@ -63,17 +65,36 @@ class NavKeyForTest {
     }
 
     @Test
-    fun `non-NAS item is never given a canonical key even if paths differ`() {
-        // ensureSafCached経由（SAF直接閲覧）を模したケース：実ファイルはキャッシュパス、
-        // pathはcontent://...相当だが、isNas=falseなので今回の修正の対象外のまま
-        // （このテストはスコープ外に手を加えていないことの回帰ガード）
+    fun `SAF item with local cache file gets canonical key appended`() {
+        // ensureSafCached経由（SAF直接閲覧）を模したケース：uriを正しく設定した上で、
+        // 実ファイルだけキャッシュパスに差し替えられている（onComicTappedのcopy(file=...)相当）
+        val path      = "content://com.example.provider/document/999"
+        val uri       = fakeUri(path)
         val cacheFile = File("saf_cache/saf_999.zip")
         val item = FileItem(
+            uri  = uri,
             file = cacheFile,
-            path = "content://com.example.provider/document/999",
+            path = path,
             type = FileItemType.COMIC_FILE
         )
 
-        assertEquals(cacheFile.absolutePath, navKeyFor(item))
+        val expected = "${cacheFile.absolutePath}${ViewerViewModel.KEY_MARKER_PUBLIC}$path"
+        assertEquals(expected, navKeyFor(item))
     }
+
+    @Test
+    fun `plain local file without uri or cache swap gets no canonical key`() {
+        // uriもキャッシュ差し替えも無い、file.absolutePath == pathの純粋なローカルファイル。
+        // スコープ外（ローカル・SAF取り込み済み）に影響していないことの回帰ガード
+        val file = File("/storage/emulated/0/Comics/plain.zip")
+        val item = FileItem(
+            file = file,
+            path = file.absolutePath,
+            type = FileItemType.COMIC_FILE
+        )
+
+        assertEquals(file.absolutePath, navKeyFor(item))
+    }
+
+    private fun fakeUri(value: String): Uri = FakeUri(value)
 }
