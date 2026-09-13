@@ -156,6 +156,7 @@ fun HomeScreen(
     val nasServers       by viewModel.nasServers.collectAsState()
     val currentLocation  by viewModel.currentLocation.collectAsState()
     val dialogState      by viewModel.dialogState.collectAsState()
+    val imageFolderDialogState by viewModel.imageFolderDialogState.collectAsState()
     val isLoading        by viewModel.isLoading.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val nasError         by viewModel.nasError.collectAsState()
@@ -404,6 +405,25 @@ fun HomeScreen(
                     TextButton(onClick = { viewModel.readFromBeginning() }) {
                         Text("最初から読む")
                     }
+                }
+            }
+        )
+    }
+
+    // 非圧縮画像フォルダ：「選択した画像を開く」確認ダイアログ
+    imageFolderDialogState?.let { fileItem ->
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissImageFolderDialog() },
+            title = { Text(fileItem.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            text  = { Text("この画像からフォルダ内の画像を順に読みます") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmOpenImageFolder() }) {
+                    Text("選択した画像を開く")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissImageFolderDialog() }) {
+                    Text("キャンセル")
                 }
             }
         )
@@ -1869,8 +1889,16 @@ private fun handleFileClick(
             }
         }
         fileItem.isComic -> viewModel.onComicTapped(fileItem)
+        fileItem.type == FileItemType.IMAGE_FILE &&
+            fileItem.file != null &&
+            fileItem.extension.lowercase() in IMAGE_FILE_EXTENSIONS -> {
+            viewModel.onImageFileTapped(fileItem)
+        }
     }
 }
+
+/** 非圧縮画像フォルダとして開ける拡張子（大文字小文字問わず）。NAS・SAF直接閲覧はスコープ外のため対象外 */
+private val IMAGE_FILE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable

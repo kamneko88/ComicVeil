@@ -19,6 +19,7 @@ import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.FileItemType
 import com.kamneko88.comicveil.data.FormatDetector
 import com.kamneko88.comicveil.data.GrowingFileInputStream
+import com.kamneko88.comicveil.data.ImageFolderScanner
 import com.kamneko88.comicveil.data.ThumbnailRepository
 import com.kamneko88.comicveil.data.ZipStreamSupport
 import com.kamneko88.comicveil.data.db.Bookmark
@@ -64,6 +65,19 @@ private const val VOLUME_MARKER = "##vol##"
  * ときにこのマーカーで正規キーを付加して受け渡す（VOLUME_MARKERと同じ考え方）。
  */
 private const val KEY_MARKER = "##key##"
+
+/**
+ * filePath内で「非圧縮の画像フォルダを開く」ことと「開始ページのインデックス」を表すマーカー。
+ * ユーザーがフォルダ内の画像ファイルを直接タップして開いた場合に、そのフォルダの絶対パス
+ * （＝実ファイルパス兼進捗保存キー）に続けて付加する（例："/path/to/folder##page##3"）。
+ *
+ * 【なぜファイルシステムのisDirectory判定と分離するか】既存の
+ * 「if (file.isDirectory) { loadFromPageDirectory(file) }」は、アーカイブ展開後の内部
+ * キャッシュ（cacheDir/archive_pages/arc_xxx、.jpg固定・completeマーカー前提）を読むための
+ * 経路であり、ユーザーの生の画像フォルダとは中身の前提が異なる。isDirectoryだけで判定すると
+ * 両者が衝突するため、このマーカーの有無だけで「画像フォルダオープンかどうか」を判定する。
+ */
+private const val PAGE_MARKER = "##page##"
 
 /**
  * 開発時のみ出力されるデバッグログ。
@@ -112,6 +126,8 @@ class ViewerViewModel(
     //   "実ファイルパス##key##正規キー"                     （NAS STR/DL。実ファイルはローカルキャッシュだが
     //                                                         進捗・状態はHOME/ブックマーク側のFileItem.pathで保存したい場合）
     //   "実ファイルパス##vol##巻フォルダ名##key##正規キー"   （理論上の組み合わせ。現状のNAS経路では発生しない）
+    //   "フォルダの絶対パス##page##開始インデックス"          （非圧縮画像フォルダをタップして開いた場合。
+    //                                                         HomeViewModel.confirmOpenImageFolder()由来）
     //
     // 【なぜ分けるか】以前はfilePath 1つで「実ファイルの読み込み」と「進捗/状態の保存キー」を
     // 兼用しており、NAS STRモードでは実ファイルがローカルキャッシュパスになるため、
@@ -120,8 +136,17 @@ class ViewerViewModel(
     private val keyMarkerIndex = navKey.indexOf(KEY_MARKER)
     private val canonicalKeyOverride: String? =
         if (keyMarkerIndex >= 0) navKey.substring(keyMarkerIndex + KEY_MARKER.length) else null
-    private val pathAndVolume: String =
+    private val pathAndVolumeAndPage: String =
         if (keyMarkerIndex >= 0) navKey.substring(0, keyMarkerIndex) else navKey
+
+    private val pageMarkerIndex = pathAndVolumeAndPage.indexOf(PAGE_MARKER)
+    /** 画像フォルダの開始ページ（タップして明示的に選んだ場合のみ非null） */
+    private val imageFolderStartIndex: Int? =
+        if (pageMarkerIndex >= 0) {
+            pathAndVolumeAndPage.substring(pageMarkerIndex + PAGE_MARKER.length).toIntOrNull()
+        } else null
+    private val pathAndVolume: String =
+        if (pageMarkerIndex >= 0) pathAndVolumeAndPage.substring(0, pageMarkerIndex) else pathAndVolumeAndPage
 
     private val volumeMarkerIndex = pathAndVolume.indexOf(VOLUME_MARKER)
     /** 実ファイルパス（アーカイブ本体・ページキャッシュディレクトリなど、実際のI/Oに使う） */
@@ -229,7 +254,11 @@ class ViewerViewModel(
             val progress = withContext(Dispatchers.IO) { progressRepository.getProgress(statusKey) }
             val savedPage = progress?.currentPage ?: 0
             lastSavedPage = savedPage
-            _uiState.update { it.copy(initialPage = savedPage, isSavedPageLoaded = true) }
+            // 画像フォルダをタップして明示的にページを選んだ場合は、保存済みの読書進捗より
+            // タップ操作を優先する（ユーザーが個別の画像を選ぶ操作そのものが「そこから読む」
+            // という意思表示のため）。読書進捗・既読状態・栞の保存自体は従来通り行う。
+            val initial = imageFolderStartIndex ?: savedPage
+            _uiState.update { it.copy(initialPage = initial, isSavedPageLoaded = true) }
         }
 
         loadFile()
@@ -241,6 +270,10 @@ class ViewerViewModel(
             withContext(Dispatchers.IO) {
                 try {
                     val file = File(filePath)
+                    if (imageFolderStartIndex != null) {
+                        loadFromImageFolder(file)
+                        return@withContext
+                    }
                     if (file.isDirectory) {
                         loadFromPageDirectory(file)
                         return@withContext
@@ -462,6 +495,33 @@ class ViewerViewModel(
     fun retryWithPassword(password: String) {
         _uiState.update { it.copy(isLoading = true, needsPassword = false) }
         loadFile(password)
+    }
+
+    /**
+     * 非圧縮の画像フォルダ（フォルダ直下に画像ファイルが並んでいる構成）を読み込む。
+     * 展開キャッシュは使わず、フォルダ内の画像ファイルの絶対パスをそのまま自然順で渡す。
+     * 展開待ちが無いため、アーカイブ用のポーリング（loadFromPageDirectory）は不要で一括セットする。
+     *
+     * 【指示書との相違点】指示書はisProgressiveMode = falseと指定していたが、ViewerScreen.ktの
+     * 実際の描画分岐（"isProgressive && p < pageFiles.size -> pageFiles[p]" /
+     * "!isProgressive && p < pages.size -> pages[p]"、pagerCountの算出も同様に分岐）は、
+     * isProgressiveMode=falseだとpageFilesを一切参照せずpages（本関数ではセットしない）だけを
+     * 見るため、falseのままだとページが1枚も表示されない（pagerCountも0になる）。
+     * pageFilesを描画に使わせるにはisProgressiveMode=trueが必須なため、trueを採用した。
+     */
+    private fun loadFromImageFolder(folder: File) {
+        val images = ImageFolderScanner.scan(folder)
+        val filePaths = images.map { it.absolutePath }
+        _uiState.update {
+            it.copy(
+                pageFiles          = filePaths,
+                isProgressiveMode  = true,
+                availablePageCount = filePaths.size,
+                totalPageCount     = filePaths.size,
+                isComplete         = true,
+                isLoading          = false
+            )
+        }
     }
 
     private suspend fun loadFromPageDirectory(pageDir: File, knownTotal: Int? = null) {
@@ -722,6 +782,7 @@ class ViewerViewModel(
     companion object {
         const val VOLUME_MARKER_PUBLIC = VOLUME_MARKER
         const val KEY_MARKER_PUBLIC = KEY_MARKER
+        const val PAGE_MARKER_PUBLIC = PAGE_MARKER
 
         fun Factory(application: Application, filePath: String): ViewModelProvider.Factory {
             return object : ViewModelProvider.Factory {

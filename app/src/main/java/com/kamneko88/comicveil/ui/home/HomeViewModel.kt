@@ -13,6 +13,7 @@ import com.kamneko88.comicveil.data.calcDirSize
 import com.kamneko88.comicveil.data.isFullyCached
 import com.kamneko88.comicveil.data.selectDirsToEvict
 import com.kamneko88.comicveil.data.FileItem
+import com.kamneko88.comicveil.data.ImageFolderScanner
 import com.kamneko88.comicveil.data.canonicalStatusKey
 import com.kamneko88.comicveil.data.FormatDetector
 import com.kamneko88.comicveil.data.SafFileRepository
@@ -197,6 +198,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _dialogState = MutableStateFlow<ResumeDialogState?>(null)
     val dialogState: StateFlow<ResumeDialogState?> = _dialogState.asStateFlow()
+
+    /** 「選択した画像を開く」確認ダイアログの対象（非圧縮画像フォルダ内でタップされた画像） */
+    private val _imageFolderDialogState = MutableStateFlow<FileItem?>(null)
+    val imageFolderDialogState: StateFlow<FileItem?> = _imageFolderDialogState.asStateFlow()
 
     private val _fileInfoState = MutableStateFlow<FileInfoState?>(null)
     val fileInfoState: StateFlow<FileInfoState?> = _fileInfoState.asStateFlow()
@@ -671,6 +676,37 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 item, progress.currentPage, progress.totalPages
             )
         } else {
+            _navigateEvent.tryEmit(navKey)
+        }
+    }
+
+    // ─── 非圧縮画像フォルダ（ローカルのみ） ───────────────────────────────
+
+    /** フォルダ内の画像ファイルがタップされた時：「選択した画像を開く」確認ダイアログを出す */
+    fun onImageFileTapped(fileItem: FileItem) {
+        _imageFolderDialogState.value = fileItem
+    }
+
+    fun dismissImageFolderDialog() {
+        _imageFolderDialogState.value = null
+    }
+
+    /**
+     * 「選択した画像を開く」確定時：同じ親フォルダの画像一覧をスキャンし、タップされた
+     * ファイルのインデックスを求めてビューワーへ渡す。フォルダ単位で1冊として扱うため、
+     * 進捗・既読状態・栞の保存キーにはフォルダの絶対パスを使う
+     * （ViewerViewModelのstatusKeyは##key##指定が無ければ実ファイルパスをそのまま使うため、
+     * navKeyの実ファイルパス部分にフォルダの絶対パスを渡せば自動的にそうなる）。
+     */
+    fun confirmOpenImageFolder() {
+        val fileItem = _imageFolderDialogState.value ?: return
+        _imageFolderDialogState.value = null
+        val file = fileItem.file ?: return
+        val folder = file.parentFile ?: return
+        viewModelScope.launch {
+            val images = withContext(Dispatchers.IO) { ImageFolderScanner.scan(folder) }
+            val startIndex = images.indexOfFirst { it.absolutePath == file.absolutePath }.coerceAtLeast(0)
+            val navKey = "${folder.absolutePath}${ViewerViewModel.PAGE_MARKER_PUBLIC}$startIndex"
             _navigateEvent.tryEmit(navKey)
         }
     }

@@ -72,7 +72,9 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
      */
     suspend fun getOrGenerateThumbnail(fileItem: FileItem): File? =
         withContext(Dispatchers.IO) {
-            if (!fileItem.isComic) return@withContext null
+            // 非圧縮の画像ファイル単体（ローカルのみ）も表紙候補にする。NAS・SAFはスコープ外
+            val isLocalImageFile = fileItem.type == FileItemType.IMAGE_FILE && fileItem.file != null
+            if (!fileItem.isComic && !isLocalImageFile) return@withContext null
 
             if (hasCustomCover(fileItem)) return@withContext customCoverFile(fileItem)
 
@@ -98,7 +100,11 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
             }
 
             generationSemaphore.withPermit {
-                generateAndCache(file, fileItem.lastModified, cacheFile, metaFile)
+                if (isLocalImageFile) {
+                    generateAndCacheImageFile(file, fileItem.lastModified, cacheFile, metaFile)
+                } else {
+                    generateAndCache(file, fileItem.lastModified, cacheFile, metaFile)
+                }
             }
         }
 
@@ -219,6 +225,23 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
                 else -> null
             } ?: return null
 
+            generateCacheFromBytes(imageBytes, cacheFile)?.also {
+                metaFile.writeText(lastModified.toString())
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** 画像ファイル単体（非圧縮画像フォルダ内の1枚）用の軽量なサムネイル生成。アーカイブ展開は不要 */
+    private fun generateAndCacheImageFile(
+        file: File,
+        lastModified: Long,
+        cacheFile: File,
+        metaFile: File
+    ): File? {
+        return try {
+            val imageBytes = file.readBytes()
             generateCacheFromBytes(imageBytes, cacheFile)?.also {
                 metaFile.writeText(lastModified.toString())
             }
