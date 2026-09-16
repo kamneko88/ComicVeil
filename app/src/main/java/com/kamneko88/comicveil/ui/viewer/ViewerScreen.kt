@@ -402,6 +402,22 @@ fun ViewerScreen(
             )
         }
 
+        // ── パスワード付きRAR5（libarchiveが暗号化データの読み取りに対応していないため非対応） ──
+        uiState.rarPasswordUnsupported -> {
+            AlertDialog(
+                onDismissRequest = onClose,
+                title = { Text("パスワード付きRAR") },
+                text  = {
+                    Text(
+                        "このRARファイルはパスワードで保護されています。\n\n" +
+                        "ComicVeilは現在、この形式（RAR5）のパスワード付きRARに対応していません。\n" +
+                        "古い形式（RAR4）で圧縮されたパスワード付きRARには対応しています。"
+                    )
+                },
+                confirmButton = { TextButton(onClick = onClose) { Text("閉じる") } }
+            )
+        }
+
         uiState.error != null -> {
             AlertDialog(
                 onDismissRequest = onClose,

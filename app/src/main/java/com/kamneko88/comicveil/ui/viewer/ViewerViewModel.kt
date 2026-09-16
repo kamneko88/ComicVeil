@@ -108,6 +108,11 @@ data class ViewerUiState(
     /** trueなら、パスワード付きPDFを開こうとした（Android標準PdfRendererには復号手段が無いため非対応）。
      *  needsPasswordとは別枠で扱い、専用の非対応メッセージを出す。 */
     val pdfPasswordUnsupported: Boolean = false,
+    /** trueなら、パスワード付きRAR5（libarchive経由）を開こうとした。
+     *  libarchiveのAndroidバインディングは暗号化データの読み取りに対応していない
+     *  （ArchiveException: "Reading encrypted data is not currently supported"）ため、
+     *  パスワード入力を促さず、この専用フラグで非対応メッセージを出す。RAR4（junrar経由）は対象外。 */
+    val rarPasswordUnsupported: Boolean = false,
     /** trueなら、アーカイブが見つからなかった（キャッシュから削除された等）ことが原因。
      *  「非対応のファイル形式」ダイアログと区別して専用メッセージを出す。 */
     val fileMissing: Boolean = false,
@@ -297,8 +302,15 @@ class ViewerViewModel(
                         when (ext) {
                             "rar", "cbr" -> {
                                 if (RarSupport.isEncrypted(file)) {
-                                    logD("パスワード付きRARを検出: ${file.name}")
-                                    _uiState.update { it.copy(isLoading = false, needsPassword = true) }
+                                    if (RarSupport.detectVersion(file) == RarVersion.RAR4) {
+                                        logD("パスワード付きRAR(RAR4)を検出: ${file.name}")
+                                        _uiState.update { it.copy(isLoading = false, needsPassword = true) }
+                                    } else {
+                                        // libarchiveのAndroidバインディングは暗号化データの読み取りに
+                                        // 対応していないため、パスワード入力を促さず非対応メッセージへ回す
+                                        logD("パスワード付きRAR(RAR5・非対応)を検出: ${file.name}")
+                                        _uiState.update { it.copy(isLoading = false, rarPasswordUnsupported = true) }
+                                    }
                                     return@withContext
                                 }
                             }
