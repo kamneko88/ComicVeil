@@ -614,6 +614,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             val statusMap = comics.associate { it.path to comicFileRepository.getStatus(it.path) }
             val metaMap   = comics.mapNotNull { comicFileRepository.getComicFile(it.path) }
                                   .associateBy { it.filePath }
+            // ★一時デバッグログ（2026-09-16・SAF直接閲覧のバッジ不反映の切り分け用）。
+            // 原因判明後に削除すること。読み出し時のキーをそのまま出す。
+            comics.filter { it.isSaf }.forEach {
+                android.util.Log.d("SAF_BADGE_DEBUG", "READ path=[${it.path}] status=${statusMap[it.path]}")
+            }
             _fileStatuses.value = statusMap
             _fileMetaMap.value  = metaMap
         }

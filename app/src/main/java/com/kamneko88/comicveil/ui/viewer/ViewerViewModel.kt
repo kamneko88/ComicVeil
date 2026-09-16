@@ -226,6 +226,9 @@ class ViewerViewModel(
             lastSavedPage == 0        -> ReadStatus.UNREAD
             else                      -> ReadStatus.READING
         }
+        // ★一時デバッグログ（2026-09-16・SAF直接閲覧のバッジ不反映の切り分け用）。
+        // 原因判明後に削除すること。書き込み時のキーをそのまま出す。
+        android.util.Log.d("SAF_BADGE_DEBUG", "WRITE statusKey=[$statusKey] filePath=[$filePath] canonicalKeyOverride=[$canonicalKeyOverride]")
         kotlinx.coroutines.runBlocking(Dispatchers.IO) {
             comicFileRepository.updateStatus(statusKey, status)
         }
