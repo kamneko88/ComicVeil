@@ -108,10 +108,13 @@ data class ViewerUiState(
     /** trueなら、パスワード付きPDFを開こうとした（Android標準PdfRendererには復号手段が無いため非対応）。
      *  needsPasswordとは別枠で扱い、専用の非対応メッセージを出す。 */
     val pdfPasswordUnsupported: Boolean = false,
-    /** trueなら、パスワード付きRAR5（libarchive経由）を開こうとした。
-     *  libarchiveのAndroidバインディングは暗号化データの読み取りに対応していない
-     *  （ArchiveException: "Reading encrypted data is not currently supported"）ため、
-     *  パスワード入力を促さず、この専用フラグで非対応メッセージを出す。RAR4（junrar経由）は対象外。 */
+    /** trueなら、パスワード付きRARを開こうとした。
+     *  RAR5（libarchive経由）は暗号化データの読み取りに対応していない
+     *  （ArchiveException: "Reading encrypted data is not currently supported"）ことが実機テストで
+     *  確認されている。RAR4（junrar経由）の復号コードは実装済みだが、現在の環境では
+     *  RAR4形式のパスワード付きテストファイルを作成できず実機検証ができないため、
+     *  2026-09-16の判断でRAR・全バージョンのパスワード付きを非対応として扱うことにした。
+     *  パスワード入力を促さず、この専用フラグで非対応メッセージを出す。 */
     val rarPasswordUnsupported: Boolean = false,
     /** trueなら、アーカイブが見つからなかった（キャッシュから削除された等）ことが原因。
      *  「非対応のファイル形式」ダイアログと区別して専用メッセージを出す。 */
@@ -302,15 +305,11 @@ class ViewerViewModel(
                         when (ext) {
                             "rar", "cbr" -> {
                                 if (RarSupport.isEncrypted(file)) {
-                                    if (RarSupport.detectVersion(file) == RarVersion.RAR4) {
-                                        logD("パスワード付きRAR(RAR4)を検出: ${file.name}")
-                                        _uiState.update { it.copy(isLoading = false, needsPassword = true) }
-                                    } else {
-                                        // libarchiveのAndroidバインディングは暗号化データの読み取りに
-                                        // 対応していないため、パスワード入力を促さず非対応メッセージへ回す
-                                        logD("パスワード付きRAR(RAR5・非対応)を検出: ${file.name}")
-                                        _uiState.update { it.copy(isLoading = false, rarPasswordUnsupported = true) }
-                                    }
+                                    // 2026-09-16：RAR4（junrar経由）の復号コードは実装済みだが、
+                                    // RAR4形式のパスワード付きファイルを作る手段が無く実機検証できないため、
+                                    // バージョンを問わずパスワード付きRARは非対応として扱う
+                                    logD("パスワード付きRARを検出（非対応）: ${file.name}")
+                                    _uiState.update { it.copy(isLoading = false, rarPasswordUnsupported = true) }
                                     return@withContext
                                 }
                             }
