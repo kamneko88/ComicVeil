@@ -3,6 +3,9 @@ package com.kamneko88.comicveil.data
 import android.util.Log
 import com.github.junrar.Archive as JunrarArchive
 import com.github.junrar.rarfile.FileHeader
+import me.zhanghai.android.libarchive.Archive
+import me.zhanghai.android.libarchive.ArchiveEntry
+import me.zhanghai.android.libarchive.ArchiveException
 import java.io.ByteArrayOutputStream
 import java.io.File
 
@@ -88,18 +91,20 @@ object RarSupport {
      * targetEntriesで指定されたページを、それぞれ最終的なページ番号の位置（%05d.jpg）へ書き出す。
      * アーカイブに現れる順に処理するため、ソリッド書庫でも正しく展開できる。
      *
+     * @param password パスワード付きRARの場合に指定する（未指定ならnull）
      * @return 書き出したページ数
      */
     fun extractPages(
         file: File,
         targetEntries: List<ArchiveEntryInfo>,
         pageDir: File,
-        maxPageBytes: Long
+        maxPageBytes: Long,
+        password: String? = null
     ): Int {
         val finalIndexByName = targetEntries.withIndex().associate { (i, info) -> info.name to i }
         var written = 0
         try {
-            JunrarArchive(file).use { archive ->
+            JunrarArchive(file, password).use { archive ->
                 var header = archive.nextFileHeader()
                 while (header != null) {
                     if (!header.isDirectory) {
@@ -128,5 +133,72 @@ object RarSupport {
         }
         logD("junrar展開完了: ${written}ページ / 対象${targetEntries.size}件")
         return written
+    }
+
+    /**
+     * RARがパスワードで保護されているか判定する。
+     * バージョンに応じて検知方法を使い分ける（展開ライブラリの選択とは別枠）：
+     * - RAR4：junrarでヘッダーを読み、FileHeader.isEncrypted（LHD_PASSWORDフラグ由来）を見る
+     * - RAR5：junrarはRAR5ヘッダーを一切読めない（UnsupportedRarV5Exceptionを即座に投げる。
+     *   junrar 7.5.5のArchive.java readHeaders()内、MarkHeaderのバージョン判定箇所で確認済み）ため、
+     *   展開に使っているlibarchiveのreadHasEncryptedEntries()で代替する
+     *
+     * 判定できない場合はfalseを返す（誤って「暗号化あり」と過検知してユーザーの正常なファイルを
+     * 開けなくすることを避けるため）。
+     */
+    fun isEncrypted(file: File): Boolean {
+        return try {
+            when (detectVersion(file)) {
+                RarVersion.RAR4 -> junrarHeadersEncrypted(readRar4EncryptedFlags(file))
+                else            -> libarchiveHasEncryptedEntries(readRar5EncryptedEntriesCode(file))
+            }
+        } catch (e: Exception) {
+            logD("RAR暗号化チェック失敗: ${e.message}")
+            false
+        }
+    }
+
+    /** [isEncrypted]のRAR4判定ロジック（ピュア関数・テスト用に分離） */
+    internal fun junrarHeadersEncrypted(flags: List<Boolean>): Boolean = flags.any { it }
+
+    /** [isEncrypted]のRAR5判定ロジック（ピュア関数・テスト用に分離）。libarchiveのarchive_read_has_encrypted_entries()の戻り値を解釈する（1件以上あれば正の値） */
+    internal fun libarchiveHasEncryptedEntries(code: Int): Boolean = code > 0
+
+    private fun readRar4EncryptedFlags(file: File): List<Boolean> {
+        val flags = mutableListOf<Boolean>()
+        JunrarArchive(file).use { archive ->
+            var header = archive.nextFileHeader()
+            while (header != null) {
+                flags.add(header.isEncrypted)
+                header = archive.nextFileHeader()
+            }
+        }
+        return flags
+    }
+
+    /** RAR5のヘッダーを1件だけ読み、libarchiveのarchive_read_has_encrypted_entries()相当の戻り値を取得する */
+    private fun readRar5EncryptedEntriesCode(file: File): Int {
+        var archive = 0L
+        try {
+            archive = Archive.readNew()
+            Archive.readSupportFormatRar(archive)
+            Archive.readSupportFormatRar5(archive)
+            Archive.readOpenFileName(archive, file.absolutePath.toByteArray(Charsets.UTF_8), 10240L)
+            val entry = ArchiveEntry.new1()
+            try {
+                Archive.readNextHeader2(archive, entry)
+            } catch (e: ArchiveException) {
+                // パス名変換警告等でもヘッダー自体は読めているため無視して続行する
+                logD("RAR5暗号化チェック: ヘッダー読み取り警告(code=${e.code}) ${e.message}")
+            } finally {
+                ArchiveEntry.free(entry)
+            }
+            return Archive.readHasEncryptedEntries(archive)
+        } finally {
+            if (archive != 0L) {
+                runCatching { Archive.readClose(archive) }
+                runCatching { Archive.readFree(archive) }
+            }
+        }
     }
 }

@@ -136,11 +136,11 @@ import kotlin.math.abs
 /**
  * パスワード付きファイルへの対応を有効にするか。
  *
- * 2026-08-30：正式リリースまでは未対応とする方針になったため false。
- * 検知・入力ダイアログ・展開の実装はすべて残してあるので、
- * リリース後に対応を再開するときは、この値を true に戻すだけでよい。
+ * 2026-09-16：ZIP・RAR・7zの検知・入力・復号を実装したため true に戻した。
+ * PDFはAndroid標準PdfRendererにパスワードを渡して復号する手段が無いため対象外
+ * （SecurityExceptionを検知し、[ViewerUiState.pdfPasswordUnsupported]で専用メッセージを出す）。
  */
-private val PASSWORD_SUPPORT_ENABLED = false
+private val PASSWORD_SUPPORT_ENABLED = true
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Suppress("UnusedMaterial3ScaffoldPaddingParameter") // 全画面没入表示のため、あえてinnerPaddingを適用しない設計
@@ -385,6 +385,21 @@ fun ViewerScreen(
                     confirmButton = { TextButton(onClick = onClose) { Text("閉じる") } }
                 )
             }
+        }
+
+        // ── パスワード付きPDF（Android標準PdfRendererには復号手段が無いため非対応） ──────
+        uiState.pdfPasswordUnsupported -> {
+            AlertDialog(
+                onDismissRequest = onClose,
+                title = { Text("パスワード付きPDF") },
+                text  = {
+                    Text(
+                        "このPDFはパスワードで保護されています。\n\n" +
+                        "ComicVeilは現在、パスワード付きPDFに対応していません。"
+                    )
+                },
+                confirmButton = { TextButton(onClick = onClose) { Text("閉じる") } }
+            )
         }
 
         uiState.error != null -> {
@@ -988,7 +1003,7 @@ private fun PasswordInputDialog(
         text  = {
             Column {
                 Text(
-                    text  = "このZIPファイルはパスワードで保護されています。",
+                    text  = "このファイルはパスワードで保護されています。",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(Modifier.height(12.dp))

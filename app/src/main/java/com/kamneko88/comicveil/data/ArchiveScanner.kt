@@ -7,6 +7,7 @@ import me.zhanghai.android.libarchive.ArchiveException
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import org.apache.commons.compress.archivers.zip.ZipFile
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
+import org.apache.commons.compress.PasswordRequiredException
 import java.io.File
 
 private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
@@ -24,7 +25,9 @@ data class ArchiveEntryInfo(
 data class ArchiveScanResult(
     val entries: List<ArchiveEntryInfo>, // 自然順ソート済みの画像エントリ一覧
     val volumes: List<String>?,          // 複数巻フォルダが検出された場合、その一覧（自然順）。単巻ならnull
-    val zipCharset: String? = null       // ZIP展開時に使うべき文字コード名（スキャンで採用したもの）。RAR/7zはnull
+    val zipCharset: String? = null,      // ZIP展開時に使うべき文字コード名（スキャンで採用したもの）。RAR/7zはnull
+    /** ZIPがパスワードで保護されているか（1件でも暗号化エントリがあればtrue）。ZIP以外は常にfalse */
+    val encrypted: Boolean = false
 )
 
 /**
@@ -40,8 +43,8 @@ object ArchiveScanner {
         return try {
             when (FormatDetector.effectiveExtension(file)) {
                 "zip", "cbz" -> {
-                    val (names, charsetName) = scanZip(file)
-                    buildResult(names).copy(zipCharset = charsetName)
+                    val (names, charsetName, encrypted) = scanZip(file)
+                    buildResult(names).copy(zipCharset = charsetName, encrypted = encrypted)
                 }
                 "rar", "cbr" -> buildResult(scanRar(file))
                 "7z"         -> buildResult(scan7z(file))
@@ -58,20 +61,27 @@ object ArchiveScanner {
      * まず高速なランダムアクセス方式（ZipFile）をUTF-8とShift-JISの両方で試し、文字化けしていない方を採用する。
      * どちらも失敗する場合は、より緩い逐次読み込み方式にフォールバックする。
      * （libarchiveではAndroid上で日本語パス名のUTF-8取得が安定しなかったため、ZIPはCommons Compressに戻している）
+     *
+     * 【暗号化判定】各エントリのgeneralPurposeBit.usesEncryption()はヘッダーのフラグのみで判定でき、
+     * 展開を必要としない。NASストリーミング中で中央ディレクトリが読めない場合は、
+     * 下のscanZipSequential（逐次読み込み・ローカルヘッダー由来）でも同じフラグが読めるため、
+     * ダウンロード完了前でも判定できる。
      */
-    private fun scanZip(file: File): Pair<List<String>, String?> {
+    private fun scanZip(file: File): Triple<List<String>, String?, Boolean> {
         for (csName in listOf("UTF-8", "Shift_JIS")) {
             try {
                 val names = mutableListOf<String>()
+                var encrypted = false
                 ZipFile.builder().setFile(file).setCharset(charset(csName)).get().use { zip ->
                     zip.entries.iterator().forEach { entry ->
+                        if (entry.generalPurposeBit.usesEncryption()) encrypted = true
                         if (!entry.isDirectory && isImage(entry.name)) names.add(entry.name)
                     }
                 }
-                if (names.isNotEmpty() && !looksGarbled(names)) return names to csName
+                if (names.isNotEmpty() && !looksGarbled(names)) return Triple(names, csName, encrypted)
                 if (names.isNotEmpty() && csName == "Shift_JIS") {
                     // 最後の候補。これ以上試す手段がないのでこのまま採用する
-                    return names to csName
+                    return Triple(names, csName, encrypted)
                 }
             } catch (e: Exception) {
                 Log.d("ComicVeil", "ZipFileランダムアクセス失敗（$csName）: ${e.message}")
@@ -90,17 +100,20 @@ object ArchiveScanner {
      * nextZipEntry()だけに頼ると、非標準なZIPでは正しく次のエントリへ進めないことがあるため、
      * 各エントリのデータを実際に読んで消費してから次へ進む（展開処理と同じ考え方）。
      */
-    private fun scanZipSequential(file: File): Pair<List<String>, String?> {
+    private fun scanZipSequential(file: File): Triple<List<String>, String?, Boolean> {
         val names = mutableListOf<String>()
         var usedCharset: String? = null
+        var encrypted = false
         for (cs in listOf("UTF-8", "Shift_JIS")) {
             names.clear()
+            encrypted = false
             try {
                 ZipArchiveInputStream(file.inputStream().buffered(), cs, false, true).use { zis ->
                     var entry = zis.nextZipEntry
                     while (entry != null) {
                         val isDir = entry.isDirectory
                         val name  = entry.name
+                        if (entry.generalPurposeBit.usesEncryption()) encrypted = true
                         // データを読み切って消費する（読み飛ばしだけだと次のエントリ位置がズレることがある）
                         val consumed = consumeEntry(zis)
                         if (!consumed) break
@@ -113,7 +126,7 @@ object ArchiveScanner {
             }
             if (names.isNotEmpty()) { usedCharset = cs; break }
         }
-        return names to usedCharset
+        return Triple(names, usedCharset, encrypted)
     }
 
     /** ストリームからエントリのデータを最後まで読んで消費する（上限を超えたら異常とみなしfalse） */
@@ -140,6 +153,41 @@ object ArchiveScanner {
                 Archive.readSupportFormatRar(archive)
                 Archive.readSupportFormatRar5(archive)
             }
+        }
+    }
+
+    /**
+     * 7zがパスワードで保護されているか判定する。
+     *
+     * 【なぜ1バイトだけ読むか】7-Zipの「ファイル名を暗号化する」オプション付きで作られた7zは
+     * ヘッダー自体が暗号化されているため、SevenZFile.builder()...get()を呼んだ時点で
+     * PasswordRequiredExceptionが投げられる。しかしそれ以外の（より一般的な）7zは、
+     * ヘッダー（ファイル名一覧）は平文のままで、各エントリの中身（コンテンツ）だけが
+     * 暗号化されている。この場合は例外が実際にエントリを読み取ろうとした瞬間まで
+     * 遅延して投げられる（commons-compressのAES256SHA256Decoder実装より）ため、
+     * 開くだけでは判定できず、先頭エントリを1バイトだけ読んで確認する必要がある。
+     *
+     * 判定できない場合はfalseを返す（誤って「暗号化あり」と過検知してユーザーの正常なファイルを
+     * 開けなくすることを避けるため）。
+     */
+    fun is7zEncrypted(file: File): Boolean {
+        return try {
+            SevenZFile.builder().setFile(file).get().use { sevenZFile ->
+                var entry = sevenZFile.nextEntry
+                while (entry != null) {
+                    if (!entry.isDirectory && entry.hasStream()) {
+                        sevenZFile.read(ByteArray(1))
+                        break
+                    }
+                    entry = sevenZFile.nextEntry
+                }
+            }
+            false
+        } catch (e: PasswordRequiredException) {
+            true
+        } catch (e: Exception) {
+            Log.d("ComicVeil", "7z暗号化チェック失敗: ${e.message}")
+            false
         }
     }
 

@@ -47,10 +47,13 @@ import me.zhanghai.android.libarchive.Archive
 import me.zhanghai.android.libarchive.ArchiveEntry
 import me.zhanghai.android.libarchive.ArchiveException
 import net.lingala.zip4j.ZipFile as Zip4jFile
+import org.apache.commons.compress.PasswordRequiredException
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
 import org.apache.commons.compress.archivers.zip.UnsupportedZipFeatureException
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import org.apache.commons.compress.archivers.zip.ZipFile as CommonsZipFile
+import com.kamneko88.comicveil.data.RarSupport
+import com.kamneko88.comicveil.data.RarVersion
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -102,6 +105,9 @@ data class ViewerUiState(
     val bookmarks: List<Bookmark> = emptyList(),
     val isCurrentPageBookmarked: Boolean = false,
     val needsPassword: Boolean = false,
+    /** trueなら、パスワード付きPDFを開こうとした（Android標準PdfRendererには復号手段が無いため非対応）。
+     *  needsPasswordとは別枠で扱い、専用の非対応メッセージを出す。 */
+    val pdfPasswordUnsupported: Boolean = false,
     /** trueなら、アーカイブが見つからなかった（キャッシュから削除された等）ことが原因。
      *  「非対応のファイル形式」ダイアログと区別して専用メッセージを出す。 */
     val fileMissing: Boolean = false,
@@ -284,18 +290,25 @@ class ViewerViewModel(
 
                     val ext = FormatDetector.effectiveExtension(file)
 
-                    // ZIPの場合：展開前にzip4jでパスワード付きか確認する
-                    if (ext in setOf("zip", "cbz") && password == null) {
-                        val encrypted = try {
-                            Zip4jFile(file).isEncrypted
-                        } catch (e: Exception) {
-                            logD("zip4j暗号化チェック失敗: ${e.message}")
-                            false
-                        }
-                        if (encrypted) {
-                            logD("パスワード付きZIPを検出: ${file.name}")
-                            _uiState.update { it.copy(isLoading = false, needsPassword = true) }
-                            return@withContext
+                    // RAR・7zの場合：展開前にパスワード付きか確認する
+                    // （ZIPはNASストリーミング中の部分ファイルにも対応する必要があるため、
+                    //   既存のArchiveScanner.scan()呼び出しを使い回せるloadArchiveProgressive内で判定する）
+                    if (password == null) {
+                        when (ext) {
+                            "rar", "cbr" -> {
+                                if (RarSupport.isEncrypted(file)) {
+                                    logD("パスワード付きRARを検出: ${file.name}")
+                                    _uiState.update { it.copy(isLoading = false, needsPassword = true) }
+                                    return@withContext
+                                }
+                            }
+                            "7z" -> {
+                                if (ArchiveScanner.is7zEncrypted(file)) {
+                                    logD("パスワード付き7zを検出: ${file.name}")
+                                    _uiState.update { it.copy(isLoading = false, needsPassword = true) }
+                                    return@withContext
+                                }
+                            }
                         }
                     }
 
@@ -304,21 +317,31 @@ class ViewerViewModel(
                             loadArchiveProgressive(file, ext, requestedVolume, password)
                         "pdf" -> {
                             logD("展開開始: ${file.name} (${file.length()} bytes)")
-                            val pages = extractPdf(file)
-                            val wide = pages.withIndex()
-                                .filter { (_, bytes) -> isWideImageBytes(bytes) }
-                                .map { it.index }
-                                .toSet()
-                            _uiState.update {
-                                it.copy(
-                                    pages              = pages,
-                                    availablePageCount = pages.size,
-                                    totalPageCount     = pages.size,
-                                    isComplete         = true,
-                                    isLoading          = false,
-                                    needsPassword      = false,
-                                    widePages          = wide
-                                )
+                            try {
+                                val pages = extractPdf(file)
+                                val wide = pages.withIndex()
+                                    .filter { (_, bytes) -> isWideImageBytes(bytes) }
+                                    .map { it.index }
+                                    .toSet()
+                                _uiState.update {
+                                    it.copy(
+                                        pages                   = pages,
+                                        availablePageCount      = pages.size,
+                                        totalPageCount          = pages.size,
+                                        isComplete              = true,
+                                        isLoading               = false,
+                                        needsPassword           = false,
+                                        pdfPasswordUnsupported  = false,
+                                        widePages               = wide
+                                    )
+                                }
+                            } catch (e: Exception) {
+                                // PdfRendererはパスワード付きPDFを開こうとするとSecurityExceptionを投げる
+                                // （Android標準APIにはパスワードを渡して復号する手段が無いため非対応）。
+                                // それ以外の例外は通常の読み込みエラーとして外側のcatchに委ねる。
+                                if (!isPdfPasswordError(e)) throw e
+                                logD("パスワード付きPDFを検出: ${file.name}")
+                                _uiState.update { it.copy(isLoading = false, pdfPasswordUnsupported = true) }
                             }
                         }
                         else -> _uiState.update { it.copy(isLoading = false) }
@@ -353,8 +376,26 @@ class ViewerViewModel(
         val streamInfo = ZipStreamSupport.readSidecar(file)
         if (streamInfo != null) {
             if (file.length() < streamInfo.expectedSize) {
-                loadZipStreaming(file, streamInfo, pageDir)
-                return
+                if (password == null) {
+                    // 【パスワード検知】部分ファイルでも、ZipArchiveEntryのgeneralPurposeBitは
+                    // ローカルヘッダー由来で読めるため、ArchiveScanner.scan()の逐次読み込み
+                    // フォールバックがダウンロード完了前でも正しく判定できる
+                    // （中央ディレクトリを必要とするzip4jのisEncryptedでは判定できなかった）。
+                    if (ArchiveScanner.scan(file).encrypted) {
+                        logD("パスワード付きZIPを検出（ストリーミング中）: ${file.name}")
+                        _uiState.update { it.copy(isLoading = false, needsPassword = true) }
+                        return
+                    }
+                    loadZipStreaming(file, streamInfo, pageDir)
+                    return
+                }
+                // パスワード入力済みでの再試行：ストリーミング展開（extractZipStreaming）は
+                // パスワード復号に対応していないため、ダウンロード完了を待ってから
+                // 通常の展開経路（zip4j）に回す。
+                logD("パスワード付きZIP: ダウンロード完了を待機してから展開します")
+                while (file.length() < streamInfo.expectedSize) {
+                    kotlinx.coroutines.delay(300)
+                }
             }
             // ダウンロード完了済みなのでサイドカーは不要
             ZipStreamSupport.deleteSidecar(file)
@@ -400,6 +441,12 @@ class ViewerViewModel(
         val scan = ArchiveScanner.scan(file)
         logD("アーカイブ走査: ${System.currentTimeMillis() - scanStart}ms (${scan.entries.size}件)")
 
+        if (ext in setOf("zip", "cbz") && password == null && scan.encrypted) {
+            logD("パスワード付きZIPを検出: ${file.name}")
+            _uiState.update { it.copy(isLoading = false, needsPassword = true) }
+            return
+        }
+
         val targetEntries = if (requestedVolume != null) {
             scan.entries.filter { it.volumeName == requestedVolume }
         } else {
@@ -420,8 +467,8 @@ class ViewerViewModel(
             try {
                 when (ext) {
                     "zip", "cbz" -> extractZipProgressive(file, targetEntries, pageDir, password, scan.zipCharset)
-                    "rar", "cbr" -> extractRarProgressive(file, targetEntries, pageDir)
-                    "7z"         -> extract7zProgressive(file, targetEntries, pageDir)
+                    "rar", "cbr" -> extractRarProgressive(file, targetEntries, pageDir, password)
+                    "7z"         -> extract7zProgressive(file, targetEntries, pageDir, password)
                 }
                 logD("展開完了: ${System.currentTimeMillis() - extractStart}ms (${targetEntries.size}ページ)")
             } catch (e: Exception) {
@@ -1047,6 +1094,7 @@ private fun extractWithLibarchive(
     targetEntries: List<com.kamneko88.comicveil.data.ArchiveEntryInfo>,
     pageDir: File,
     formatLabel: String,
+    password: String? = null,
     configureFormat: (archive: Long) -> Unit
 ) {
     val finalIndexByName = targetEntries.withIndex().associate { (i, info) -> info.name to i }
@@ -1054,6 +1102,9 @@ private fun extractWithLibarchive(
     try {
         archive = Archive.readNew()
         configureFormat(archive)
+        if (password != null) {
+            Archive.readAddPassphrase(archive, password.toByteArray(Charsets.UTF_8))
+        }
         Archive.readOpenFileName(archive, file.absolutePath.toByteArray(Charsets.UTF_8), 10240L)
 
         while (true) {
@@ -1141,19 +1192,20 @@ private fun isLibarchivePathnameWarning(e: ArchiveException): Boolean {
 private fun extractRarProgressive(
     file: File,
     targetEntries: List<com.kamneko88.comicveil.data.ArchiveEntryInfo>,
-    pageDir: File
+    pageDir: File,
+    password: String? = null
 ) {
-    val version = com.kamneko88.comicveil.data.RarSupport.detectVersion(file)
-    if (version == com.kamneko88.comicveil.data.RarVersion.RAR4) {
+    val version = RarSupport.detectVersion(file)
+    if (version == RarVersion.RAR4) {
         // RAR4はjunrarで展開（libarchiveはAndroidで日本語名を取得できないため）
-        val written = com.kamneko88.comicveil.data.RarSupport.extractPages(
-            file, targetEntries, pageDir, MAX_PAGE_BYTES
+        val written = RarSupport.extractPages(
+            file, targetEntries, pageDir, MAX_PAGE_BYTES, password
         )
         File(pageDir, "complete").writeText(written.toString())
         return
     }
     // RAR5（または判定不能）はlibarchiveで展開
-    extractWithLibarchive(file, targetEntries, pageDir, "RAR") { archive ->
+    extractWithLibarchive(file, targetEntries, pageDir, "RAR", password) { archive ->
         Archive.readSupportFormatRar(archive)
         Archive.readSupportFormatRar5(archive)
     }
@@ -1168,13 +1220,16 @@ private fun extractRarProgressive(
 private fun extract7zProgressive(
     file: File,
     targetEntries: List<com.kamneko88.comicveil.data.ArchiveEntryInfo>,
-    pageDir: File
+    pageDir: File,
+    password: String? = null
 ) {
     val targetNames = targetEntries.map { it.name }.toSet()
     var arrivalIndex = 0
     val arrivalNameOrder = mutableListOf<String>()
 
-    SevenZFile.builder().setFile(file).get().use { sevenZFile ->
+    val builder = SevenZFile.builder().setFile(file)
+    if (password != null) builder.setPassword(password)
+    builder.get().use { sevenZFile ->
         var entry = sevenZFile.nextEntry
         while (entry != null) {
             val name = entry.name ?: ""
@@ -1254,6 +1309,14 @@ private fun isWideImageBytes(bytes: ByteArray): Boolean {
 }
 
 // ─── PDF ─────────────────────────────────────────────────────────────────────
+
+/**
+ * PDF読み込みの失敗が「パスワード付きPDF」によるものか判定する。
+ * android.graphics.pdf.PdfRendererはパスワード付きPDFを開こうとするとSecurityExceptionを
+ * 投げる（Android公式APIの既知の挙動）。パスワードを渡して復号する手段は無いため、
+ * ComicVeilでは検知だけ行い専用メッセージを出す（[ViewerUiState.pdfPasswordUnsupported]）。
+ */
+internal fun isPdfPasswordError(e: Throwable): Boolean = e is SecurityException
 
 private fun extractPdf(file: File): List<ByteArray> {
     val pages = mutableListOf<ByteArray>()
