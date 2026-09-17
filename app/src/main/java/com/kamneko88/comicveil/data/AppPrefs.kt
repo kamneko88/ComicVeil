@@ -33,23 +33,11 @@ class AppPrefs(context: Context) {
         get() = prefs.getString(KEY_HOME_FOLDER_SAF_URI, null)
         set(value) = prefs.edit { putString(KEY_HOME_FOLDER_SAF_URI, value) }
 
-    // ─── DL保存先 ─────────────────────────────────────────────────────────
+    // ─── 外部取り込みフォルダ ─────────────────────────────────────────────
+    // ComicVeilの外（クラウドサービス等）でダウンロードしたファイルを読み込む場所。
+    // NASからのダウンロード保存先（常にgetAppFolder()固定）とは別の用途。
 
-    enum class DownloadFolderType {
-        APP_FOLDER,  // アプリ専用フォルダ（デフォルト・権限不要）
-        SAF_FOLDER   // ユーザーがSAFで選んだ任意のフォルダ
-    }
-
-    var downloadFolderType: DownloadFolderType
-        get() = runCatching {
-            DownloadFolderType.valueOf(
-                prefs.getString(KEY_DOWNLOAD_FOLDER, DownloadFolderType.APP_FOLDER.name)
-                    ?: DownloadFolderType.APP_FOLDER.name
-            )
-        }.getOrDefault(DownloadFolderType.APP_FOLDER) // 旧バージョンのDOWNLOADS等、未知の値が保存されていた場合の保険
-        set(value) = prefs.edit { putString(KEY_DOWNLOAD_FOLDER, value.name) }
-
-    /** SAFで選択したDL保存先のツリーURI（未選択ならnull） */
+    /** SAFで選択した外部取り込みフォルダのツリーURI（未選択ならnull） */
     var downloadFolderSafUri: String?
         get() = prefs.getString(KEY_DOWNLOAD_FOLDER_SAF_URI, null)
         set(value) = prefs.edit { putString(KEY_DOWNLOAD_FOLDER_SAF_URI, value) }
@@ -58,6 +46,7 @@ class AppPrefs(context: Context) {
 
     fun resolveHomeFolder(context: Context): File = getAppFolder(context)
 
+    /** NASからのダウンロード保存先。常にアプリ専用フォルダ固定（設定での変更不可）。 */
     fun resolveDownloadFolder(context: Context): File = getAppFolder(context)
 
     // ─── ページ送り方向 ───────────────────────────────────────────────────
@@ -264,7 +253,6 @@ class AppPrefs(context: Context) {
     companion object {
         private const val KEY_HOME_FOLDER            = "home_folder_type"
         private const val KEY_HOME_FOLDER_SAF_URI    = "home_folder_saf_uri"
-        private const val KEY_DOWNLOAD_FOLDER        = "download_folder_type"
         private const val KEY_DOWNLOAD_FOLDER_SAF_URI = "download_folder_saf_uri"
         private const val KEY_PAGE_DIRECTION         = "page_direction"
         private const val KEY_PAGE_ANIMATION         = "page_animation"

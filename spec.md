@@ -555,8 +555,8 @@ v3 → v4：files に rating / colorLabel カラム追加
 
 ### SharedPreferences 設定項目（AppPrefs）
 ```
-homeFolderType     ：APP_FOLDER / DOWNLOADS
-downloadFolderType ：APP_FOLDER / DOWNLOADS
+homeFolderType       ：APP_FOLDER / SAF_FOLDER
+downloadFolderSafUri ：外部取り込みフォルダのSAF URI（nullなら未設定。NASのDL先は常にアプリ専用フォルダ固定）
 doubleTapZoom      ：ZOOM_120(1.2f) / ZOOM_135(1.35f) / ZOOM_150(1.5f)
 listDisplayMode    ：DETAIL / COMPACT
 ```

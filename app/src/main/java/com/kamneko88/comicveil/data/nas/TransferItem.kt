@@ -1,6 +1,5 @@
 package com.kamneko88.comicveil.data.nas
 
-import android.net.Uri
 import java.util.UUID
 
 /** 転送アイテムのステータス */
@@ -17,10 +16,9 @@ enum class TransferStatus {
     ERROR
 }
 
-/** 転送元の種類（NASサーバー／外部ファイル）を表す */
+/** 転送元の種類（NASサーバー）を表す */
 sealed class TransferSource {
     data class Nas(val server: NasServer, val nasPath: String) : TransferSource()
-    data class External(val uri: Uri) : TransferSource()
 }
 
 /**
@@ -28,9 +26,8 @@ sealed class TransferSource {
  *
  * @param id          一意ID（自動生成）
  * @param fileName    ファイル名（保存先での実際のファイル名でもある。表示にも使う）
- * @param source      転送元（NASサーバー／外部ファイル）
- * @param destPath    保存先のローカルパス（アプリキャッシュ内の作業用パス）
- * @param safTargetUri DL保存先がSAFフォルダの場合、コピー先のツリーURI（不要ならnull）
+ * @param source      転送元（NASサーバー）
+ * @param destPath    保存先のローカルパス
  * @param isStreaming  ストリーミング再生用の一時DLか（true=本を閉じたら中止して破棄してよい）
  * @param totalBytes  ファイルサイズ（不明時は -1）
  * @param downloadedBytes ダウンロード済みバイト数
@@ -44,7 +41,6 @@ data class TransferItem(
     val fileName: String,
     val source: TransferSource,
     val destPath: String,
-    val safTargetUri: String? = null,
     val isStreaming: Boolean = false,
     val totalBytes: Long = -1L,
     val downloadedBytes: Long = 0L,
@@ -56,22 +52,19 @@ data class TransferItem(
     /** 転送元を示す短い表示名（履歴の行などで使う） */
     val sourceLabel: String
         get() = when (source) {
-            is TransferSource.Nas      -> source.server.displayName
-            is TransferSource.External -> "外部ファイル"
+            is TransferSource.Nas -> source.server.displayName
         }
 
-    /** 転送中であることを示す文言（NAS由来か外部取り込みかで言い回しを変える） */
+    /** 転送中であることを示す文言 */
     val activityLabel: String
         get() = when (source) {
-            is TransferSource.Nas      -> "${source.server.displayName} からダウンロード中"
-            is TransferSource.External -> "外部ファイルを取り込み中"
+            is TransferSource.Nas -> "${source.server.displayName} からダウンロード中"
         }
 
     /** 待機中であることを示す文言 */
     val waitingLabel: String
         get() = when (source) {
-            is TransferSource.Nas      -> "${source.server.displayName} からのダウンロード待機中"
-            is TransferSource.External -> "外部ファイルの取り込み待機中"
+            is TransferSource.Nas -> "${source.server.displayName} からのダウンロード待機中"
         }
     /** 進捗率 0.0f〜1.0f（ファイルサイズ不明時は null）*/
     val fraction: Float?

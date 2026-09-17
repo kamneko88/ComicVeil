@@ -173,7 +173,7 @@ fun HomeScreen(
 
     val openDlFolder: () -> Unit = {
         val safUri = appPrefs.downloadFolderSafUri
-        if (appPrefs.downloadFolderType == com.kamneko88.comicveil.data.AppPrefs.DownloadFolderType.SAF_FOLDER && safUri != null) {
+        if (safUri != null) {
             viewModel.loadSafFolder(Uri.parse(safUri), "DLフォルダ")
         } else {
             dlFolderNotConfigured = true
@@ -471,7 +471,7 @@ fun HomeScreen(
         AlertDialog(
             onDismissRequest = { dlFolderNotConfigured = false },
             title = { Text("DLフォルダが未設定です") },
-            text  = { Text("設定画面の「DL保存先」でフォルダを指定してください") },
+            text  = { Text("設定画面の「外部取り込みフォルダ」でフォルダを指定してください") },
             confirmButton = {
                 TextButton(onClick = { dlFolderNotConfigured = false }) { Text("閉じる") }
             }
@@ -1588,7 +1588,7 @@ private fun DlFolderListItem(
                 fontWeight = FontWeight.Medium
             )
             Text(
-                text  = "設定したDL保存先フォルダを開く",
+                text  = "設定した外部取り込みフォルダを開く",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

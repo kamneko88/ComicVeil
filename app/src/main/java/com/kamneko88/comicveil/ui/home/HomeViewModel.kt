@@ -550,7 +550,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _nasError.value = "フォルダへのアクセス許可の取得に失敗しました"
             return
         }
-        appPrefs.downloadFolderType   = AppPrefs.DownloadFolderType.SAF_FOLDER
         appPrefs.downloadFolderSafUri = uri.toString()
     }
 

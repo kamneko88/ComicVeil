@@ -85,7 +85,6 @@ fun SettingsScreen(
             appPrefs.homeFolderSafUri?.let { getSafFolderDisplayName(context, it) }
         )
     }
-    var downloadFolderType     by remember { mutableStateOf(appPrefs.downloadFolderType) }
     var downloadFolderSafName  by remember {
         mutableStateOf(
             appPrefs.downloadFolderSafUri?.let { getSafFolderDisplayName(context, it) }
@@ -103,13 +102,12 @@ fun SettingsScreen(
         }
     }
 
-    // SAFフォルダ選択ピッカー（DL保存先用）
+    // SAFフォルダ選択ピッカー（外部取り込みフォルダ用）
     val downloadSafPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         if (uri != null) {
             viewModel.pickedSafDownloadFolder(uri)
-            downloadFolderType    = AppPrefs.DownloadFolderType.SAF_FOLDER
             downloadFolderSafName = getSafFolderDisplayName(context, uri.toString())
         }
     }
@@ -468,29 +466,28 @@ fun SettingsScreen(
 
             SettingsDivider()
 
-            // ── DL保存先 ───────────────────────────────────────
+            // ── 外部取り込みフォルダ ─────────────────────────────
             SettingsItemHeader(
-                title       = "DL保存先",
-                description = "DLモードでダウンロードしたファイルの保存先"
+                title       = "外部取り込みフォルダ",
+                description = "ComicVeilの外（クラウドサービス等）でダウンロードしたファイルを読み込む場所"
             )
-            SettingsRadioItem(
-                label       = "ComicVeilフォルダ（推奨）",
-                description = "アプリ専用領域。権限不要で常にアクセス可能",
-                selected    = downloadFolderType == AppPrefs.DownloadFolderType.APP_FOLDER,
-                onSelect    = {
-                    downloadFolderType          = AppPrefs.DownloadFolderType.APP_FOLDER
-                    appPrefs.downloadFolderType = AppPrefs.DownloadFolderType.APP_FOLDER
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text  = downloadFolderSafName?.let { "選択中：$it" } ?: "未設定",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedButton(
+                    onClick  = { downloadSafPickerLauncher.launch(null) },
+                    modifier = Modifier.padding(start = 8.dp)
+                ) {
+                    Text("フォルダを選択")
                 }
-            )
-            SettingsRadioItem(
-                label       = "フォルダを選択",
-                description = if (downloadFolderType == AppPrefs.DownloadFolderType.SAF_FOLDER && downloadFolderSafName != null)
-                    "選択中：$downloadFolderSafName（タップで変更）"
-                else
-                    "端末内の好きなフォルダを選んで保存します",
-                selected    = downloadFolderType == AppPrefs.DownloadFolderType.SAF_FOLDER,
-                onSelect    = { downloadSafPickerLauncher.launch(null) }
-            )
+            }
 
             Spacer(Modifier.height(24.dp))
 
