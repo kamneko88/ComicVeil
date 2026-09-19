@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
+import android.provider.DocumentsContract
 import com.kamneko88.comicveil.BuildConfig
 import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.data.ThumbnailCacheStats
@@ -581,12 +582,33 @@ fun SettingsScreen(
     }
 }
 
+/**
+ * SAFフォルダの表示名を返す。末端フォルダ名だけだと「HomeフォルダのComicVeil」と
+ * 「DLフォルダのComicVeil」のように別フォルダなのに同名に見えて紛らわしいため、
+ * 可能なら「ひとつ上の階層 > フォルダ名」の形にする（例：Download > ComicVeil）。
+ * ExternalStorageProvider以外（クラウドプロバイダ等）でdocumentIdの形式が異なり
+ * 親階層を取り出せない場合は、末端フォルダ名のみにフォールバックする。
+ */
 private fun getSafFolderDisplayName(context: android.content.Context, uriString: String): String? {
-    return try {
-        DocumentFile.fromTreeUri(context, uriString.toUri())?.name
+    val uri = uriString.toUri()
+    val leafName = try {
+        DocumentFile.fromTreeUri(context, uri)?.name
+    } catch (e: Exception) {
+        null
+    } ?: return null
+
+    val parentName = try {
+        val docId = DocumentsContract.getTreeDocumentId(uri)
+        // ExternalStorageProviderのdocumentIdは "primary:Download/ComicVeil" のような
+        // 「ボリュームID : ボリューム内相対パス」の形式。相対パスの1つ上のセグメントを取る。
+        val relativePath = docId.substringAfter(':', missingDelimiterValue = "")
+        val segments = relativePath.split("/").filter { it.isNotEmpty() }
+        if (segments.size >= 2) segments[segments.size - 2] else null
     } catch (e: Exception) {
         null
     }
+
+    return if (parentName != null) "$parentName > $leafName" else leafName
 }
 
 // ════════════════════════════════════════════════════════════════════════════
