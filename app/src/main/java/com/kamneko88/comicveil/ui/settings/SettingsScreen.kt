@@ -102,7 +102,7 @@ fun SettingsScreen(
         }
     }
 
-    // SAFフォルダ選択ピッカー（外部取り込みフォルダ用）
+    // SAFフォルダ選択ピッカー（DLフォルダ用）
     val downloadSafPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
@@ -466,9 +466,9 @@ fun SettingsScreen(
 
             SettingsDivider()
 
-            // ── 外部取り込みフォルダ ─────────────────────────────
+            // ── DLフォルダ ─────────────────────────────
             SettingsItemHeader(
-                title       = "外部取り込みフォルダ",
+                title       = "DLフォルダ",
                 description = "ComicVeilの外（クラウドサービス等）でダウンロードしたファイルを読み込む場所"
             )
             Row(

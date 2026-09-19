@@ -33,11 +33,11 @@ class AppPrefs(context: Context) {
         get() = prefs.getString(KEY_HOME_FOLDER_SAF_URI, null)
         set(value) = prefs.edit { putString(KEY_HOME_FOLDER_SAF_URI, value) }
 
-    // ─── 外部取り込みフォルダ ─────────────────────────────────────────────
+    // ─── DLフォルダ（外部取り込みフォルダ） ─────────────────────────────────
     // ComicVeilの外（クラウドサービス等）でダウンロードしたファイルを読み込む場所。
     // NASからのダウンロード保存先（常にgetAppFolder()固定）とは別の用途。
 
-    /** SAFで選択した外部取り込みフォルダのツリーURI（未選択ならnull） */
+    /** SAFで選択したDLフォルダのツリーURI（未選択ならnull） */
     var downloadFolderSafUri: String?
         get() = prefs.getString(KEY_DOWNLOAD_FOLDER_SAF_URI, null)
         set(value) = prefs.edit { putString(KEY_DOWNLOAD_FOLDER_SAF_URI, value) }
