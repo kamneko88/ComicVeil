@@ -47,6 +47,30 @@ class SmbRepository {
             }
         }
 
+    /**
+     * 保存済みNASサーバーへの接続確認（設定画面等からの「接続確認」アクション用）。
+     *
+     * ホスト＋認証情報でセッションを確立し、共有フォルダ名が設定済みならその共有への
+     * 接続まで検証する（未設定ならセッション確立のみで確認とする）。
+     * 成功時は正常終了、失敗時は例外を投げる（呼び出し側でエラーメッセージ化する）。
+     */
+    suspend fun testConnection(server: NasServer): Unit =
+        withContext(Dispatchers.IO) {
+            val client = SMBClient()
+            try {
+                client.connect(server.host).use { connection ->
+                    val session = connection.authenticate(
+                        AuthenticationContext(server.username, server.password.toCharArray(), null)
+                    )
+                    if (server.shareName.isNotEmpty()) {
+                        (session.connectShare(server.shareName) as DiskShare).close()
+                    }
+                }
+            } finally {
+                runCatching { client.close() }
+            }
+        }
+
     suspend fun listDirectory(server: NasServer, nasPath: String): List<FileItem> =
         withContext(Dispatchers.IO) {
             val client = SMBClient()

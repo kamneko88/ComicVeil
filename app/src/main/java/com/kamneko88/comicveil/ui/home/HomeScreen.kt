@@ -132,6 +132,7 @@ fun HomeScreen(
     val isLoading        by viewModel.isLoading.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val nasError         by viewModel.nasError.collectAsState()
+    val nasTestSuccess   by viewModel.nasTestSuccess.collectAsState()
     val isStreamingMode  by viewModel.isStreamingMode.collectAsState()
     val fileInfoState    by viewModel.fileInfoState.collectAsState()
     val fileStatuses     by viewModel.fileStatuses.collectAsState()
@@ -462,6 +463,18 @@ fun HomeScreen(
             text  = { Text(errorMsg) },
             confirmButton = {
                 TextButton(onClick = { viewModel.clearNasError() }) { Text("閉じる") }
+            }
+        )
+    }
+
+    // NAS接続確認（成功）ダイアログ
+    nasTestSuccess?.let { successMsg ->
+        AlertDialog(
+            onDismissRequest = { viewModel.clearNasTestSuccess() },
+            title = { Text("接続確認") },
+            text  = { Text(successMsg) },
+            confirmButton = {
+                TextButton(onClick = { viewModel.clearNasTestSuccess() }) { Text("閉じる") }
             }
         )
     }
@@ -854,7 +867,8 @@ fun HomeScreen(
                                                 viewModel.navigateToNas(server)
                                             },
                                             onEdit   = { editingServer = server; showAddNasDialog = true },
-                                            onDelete = { viewModel.deleteNasServer(server.id) }
+                                            onDelete = { viewModel.deleteNasServer(server.id) },
+                                            onTestConnection = { viewModel.testNasConnection(it) }
                                         )
                                     }
                                 }
@@ -1014,7 +1028,8 @@ fun HomeScreen(
                                         viewModel.navigateToNas(server)
                                     },
                                     onEdit   = { editingServer = it; showAddNasDialog = true },
-                                    onDelete = { viewModel.deleteNasServer(it.id) }
+                                    onDelete = { viewModel.deleteNasServer(it.id) },
+                                    onTestConnection = { viewModel.testNasConnection(it) }
                                 )
                                 HorizontalDivider()
                             }
@@ -1467,6 +1482,7 @@ fun NasServerListItem(
     onClick: () -> Unit,
     onEdit: (NasServer) -> Unit,
     onDelete: (NasServer) -> Unit,
+    onTestConnection: (NasServer) -> Unit = {},
     isEditMode: Boolean = false,
     isSelected: Boolean = false,
     onToggleSelect: () -> Unit = {}
@@ -1544,6 +1560,10 @@ fun NasServerListItem(
                 expanded         = showMenu,
                 onDismissRequest = { showMenu = false }
             ) {
+                DropdownMenuItem(
+                    text    = { Text("接続確認") },
+                    onClick = { showMenu = false; onTestConnection(server) }
+                )
                 DropdownMenuItem(
                     text    = { Text("編集") },
                     onClick = { showMenu = false; onEdit(server) }
@@ -2179,6 +2199,7 @@ private fun ShelfServerItem(
     onClick: () -> Unit,
     onEdit: (NasServer) -> Unit,
     onDelete: (NasServer) -> Unit,
+    onTestConnection: (NasServer) -> Unit = {},
     isEditMode: Boolean = false,
     isSelected: Boolean = false,
     onToggleSelect: () -> Unit = {}
@@ -2249,6 +2270,10 @@ private fun ShelfServerItem(
                 expanded         = showMenu,
                 onDismissRequest = { showMenu = false }
             ) {
+                DropdownMenuItem(
+                    text    = { Text("接続確認") },
+                    onClick = { showMenu = false; onTestConnection(server) }
+                )
                 DropdownMenuItem(
                     text    = { Text("編集") },
                     onClick = { showMenu = false; onEdit(server) }

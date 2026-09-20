@@ -196,6 +196,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _nasError = MutableStateFlow<String?>(null)
     val nasError: StateFlow<String?> = _nasError.asStateFlow()
 
+    private val _nasTestSuccess = MutableStateFlow<String?>(null)
+    val nasTestSuccess: StateFlow<String?> = _nasTestSuccess.asStateFlow()
+
     private val _dialogState = MutableStateFlow<ResumeDialogState?>(null)
     val dialogState: StateFlow<ResumeDialogState?> = _dialogState.asStateFlow()
 
@@ -460,6 +463,25 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearNasError() {
         _nasError.value = null
+    }
+
+    /** 保存済みサーバーの「接続確認」アクション（HOME画面のNASサーバーメニューから呼ばれる） */
+    fun testNasConnection(server: NasServer) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            try {
+                smbRepository.testConnection(server)
+                _nasTestSuccess.value = "「${server.displayName}」に接続できました"
+            } catch (e: Exception) {
+                _nasError.value = "接続テストに失敗しました\n${e.message}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun clearNasTestSuccess() {
+        _nasTestSuccess.value = null
     }
 
     // ─── ローカル/SAF ホームの読み込み共通処理 ───────────────────────────
