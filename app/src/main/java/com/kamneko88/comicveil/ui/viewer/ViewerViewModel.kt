@@ -243,7 +243,13 @@ class ViewerViewModel(
         // ★一時デバッグログ（2026-09-16・SAF直接閲覧のバッジ不反映の切り分け用）。
         // 原因判明後に削除すること。書き込み時のキーをそのまま出す。
         android.util.Log.d("SAF_BADGE_DEBUG", "WRITE statusKey=[$statusKey] filePath=[$filePath] canonicalKeyOverride=[$canonicalKeyOverride]")
-        kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+        // ★レスポンス改善（2026-09-21）：ここが唯一のrunBlocking使用箇所だった。
+        // onCleared()はメインスレッドで呼ばれるため、runBlocking(Dispatchers.IO)は
+        // Room DBへの書き込み（SELECT→UPSERT/UPDATE）が終わるまでメインスレッドを
+        // ブロックしており、「本を閉じる動作が遅い」の原因候補だった。
+        // 上の2つのキャッシュ上限チェックと同じくGlobalScopeでIOへ逃がし、
+        // メインスレッドを塞がない形に変更。
+        GlobalScope.launch(Dispatchers.IO) {
             comicFileRepository.updateStatus(statusKey, status)
         }
     }
