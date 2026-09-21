@@ -12,8 +12,8 @@ android {
         applicationId = "com.kamneko88.comicveil"
         minSdk = 26
         targetSdk = 36
-        versionCode = 89
-        versionName = "1.14.4"
+        versionCode = 90
+        versionName = "1.15.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -100,6 +100,14 @@ dependencies {
 
     // SAF（Storage Access Framework）でのフォルダ操作用
     implementation("androidx.documentfile:documentfile:1.0.1")
+
+    // アプリロック：生体認証（指紋・顔）
+    implementation("androidx.biometric:biometric:1.1.0")
+    // androidx.biometric 1.1.0が古いfragmentを引き込み、registerForActivityResult系に
+    // 必要な1.3.0未満のままlint失敗するため明示的に新しいバージョンへ引き上げる
+    implementation("androidx.fragment:fragment-ktx:1.9.0")
+    // アプリロック：アプリ全体（個々のActivityではなく）のフォアグラウンド/バックグラウンド検知
+    implementation("androidx.lifecycle:lifecycle-process:2.10.0")
 
     // テスト
     testImplementation(libs.junit)

@@ -29,6 +29,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +50,7 @@ import com.kamneko88.comicveil.data.calcDirSize
 import com.kamneko88.comicveil.data.calcThumbnailCacheStats
 import com.kamneko88.comicveil.data.nas.NasStreamCache
 import com.kamneko88.comicveil.ui.home.HomeViewModel
+import com.kamneko88.comicveil.ui.lock.isBiometricAvailable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -57,11 +59,28 @@ import java.io.File
 @Composable
 fun SettingsScreen(
     viewModel: HomeViewModel,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    onNavigateToLockSetup: (activate: Boolean) -> Unit
 ) {
     val context = LocalContext.current
     val thumbnailCacheDir = remember { File(context.cacheDir, "thumbnails") }
     val appPrefs = remember { viewModel.appPrefs }
+
+    // ── セキュリティ ──────────────────────────────────────────────────────
+    // PIN設定画面（別のNavHostエントリ）から戻ったときにlockModeが変わっている
+    // ことがあるため、この画面が再びONRESUMEになるたびappPrefsから読み直す
+    var lockMode by remember { mutableStateOf(appPrefs.lockMode) }
+    val biometricAvailable = remember { isBiometricAvailable(context) }
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                lockMode = appPrefs.lockMode
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // ── 読む ──────────────────────────────────────────────────────────────
     var pageDirection     by remember { mutableStateOf(appPrefs.pageDirection) }
@@ -563,6 +582,76 @@ fun SettingsScreen(
                     }
                 )
             }
+
+            // ════════════════════════════════════════════════════
+            // 🔒 セキュリティ
+            // ════════════════════════════════════════════════════
+            Spacer(Modifier.height(24.dp))
+            SettingsSectionHeader("セキュリティ")
+
+            SettingsSwitchItem(
+                title       = "アプリロック",
+                description = "起動時・バックグラウンドから戻ったときにPINまたは生体認証で解除するまで中身を表示しない",
+                checked     = lockMode != AppPrefs.LockMode.OFF,
+                onCheckedChange = { enable ->
+                    if (enable) {
+                        if (appPrefs.hasPinSet) {
+                            lockMode = AppPrefs.LockMode.BOTH
+                            appPrefs.lockMode = AppPrefs.LockMode.BOTH
+                        } else {
+                            // PIN未設定なら先にPIN設定画面へ（保存と同時にロックが有効化される）
+                            onNavigateToLockSetup(true)
+                        }
+                    } else {
+                        lockMode = AppPrefs.LockMode.OFF
+                        appPrefs.lockMode = AppPrefs.LockMode.OFF
+                    }
+                }
+            )
+
+            if (lockMode != AppPrefs.LockMode.OFF) {
+                Spacer(Modifier.height(8.dp))
+                SettingsRadioItem(
+                    label       = "PINのみ",
+                    description = "起動時に常にPIN入力を求める",
+                    selected    = lockMode == AppPrefs.LockMode.PIN_ONLY,
+                    onSelect    = {
+                        lockMode = AppPrefs.LockMode.PIN_ONLY
+                        appPrefs.lockMode = AppPrefs.LockMode.PIN_ONLY
+                    }
+                )
+                SettingsRadioItem(
+                    label       = "生体認証のみ",
+                    description = if (biometricAvailable)
+                        "指紋・顔認証を優先。失敗時のみ「PINを使う」から入力可能（保険としてPINは内部で保持）"
+                    else
+                        "この端末には指紋・顔認証が設定されていないため選べません",
+                    selected    = lockMode == AppPrefs.LockMode.BIOMETRIC_ONLY,
+                    onSelect    = {
+                        if (biometricAvailable) {
+                            lockMode = AppPrefs.LockMode.BIOMETRIC_ONLY
+                            appPrefs.lockMode = AppPrefs.LockMode.BIOMETRIC_ONLY
+                        }
+                    }
+                )
+                SettingsRadioItem(
+                    label       = "PIN・生体認証の両方",
+                    description = "PIN入力欄を常に表示しつつ、生体認証も同時に試す",
+                    selected    = lockMode == AppPrefs.LockMode.BOTH,
+                    onSelect    = {
+                        lockMode = AppPrefs.LockMode.BOTH
+                        appPrefs.lockMode = AppPrefs.LockMode.BOTH
+                    }
+                )
+
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = { onNavigateToLockSetup(false) }) {
+                    Text(if (appPrefs.hasPinSet) "PINを変更" else "PINを設定")
+                }
+            }
+
+            Spacer(Modifier.height(24.dp))
+            SettingsDivider()
 
             // ════════════════════════════════════════════════════
             // ℹ️ バージョン情報

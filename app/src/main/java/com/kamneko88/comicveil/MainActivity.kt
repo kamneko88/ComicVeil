@@ -7,22 +7,35 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.KeyEvent
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.kamneko88.comicveil.data.AppPrefs
 import com.kamneko88.comicveil.ui.home.HomeScreen
 import com.kamneko88.comicveil.ui.history.HistoryScreen
+import com.kamneko88.comicveil.ui.lock.AppLockState
+import com.kamneko88.comicveil.ui.lock.LockScreen
+import com.kamneko88.comicveil.ui.lock.PinSetupScreen
 import com.kamneko88.comicveil.ui.settings.SettingsScreen
 import com.kamneko88.comicveil.ui.theme.ComicVeilTheme
 import com.kamneko88.comicveil.ui.transfer.TransferScreen
@@ -33,7 +46,11 @@ import java.io.File
 import java.net.URLDecoder
 import java.net.URLEncoder
 
-class MainActivity : ComponentActivity() {
+/**
+ * アプリロック（BiometricPrompt）を使うため FragmentActivity が必要
+ * （FragmentActivity は ComponentActivity を継承しているため、Compose の setContent 等はそのまま使える）
+ */
+class MainActivity : FragmentActivity() {
 
     // 音量キーイベントを ViewerScreen に転送するコールバック
     // ViewerScreen が DisposableEffect で登録・解除する
@@ -88,6 +105,36 @@ fun ComicVeilApp(intent: Intent? = null) {
     val navController = rememberNavController()
     val transferViewModel: TransferViewModel = viewModel()
     val homeViewModel: com.kamneko88.comicveil.ui.home.HomeViewModel = viewModel()
+
+    // ─── アプリロック ───────────────────────────────────────────────────
+    // バックグラウンドに一度でも行ったら再ロックする。ProcessLifecycleOwnerで
+    // アプリ全体（個々のActivityではなく）のフォアグラウンド/バックグラウンドを監視する。
+    val lockContext = LocalContext.current
+    val appPrefs = remember { AppPrefs(lockContext) }
+    var locked by remember {
+        mutableStateOf(appPrefs.lockMode != AppPrefs.LockMode.OFF && !AppLockState.isUnlocked)
+    }
+    DisposableEffect(Unit) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP && appPrefs.lockMode != AppPrefs.LockMode.OFF) {
+                AppLockState.isUnlocked = false
+                locked = true
+            }
+        }
+        ProcessLifecycleOwner.get().lifecycle.addObserver(observer)
+        onDispose { ProcessLifecycleOwner.get().lifecycle.removeObserver(observer) }
+    }
+
+    if (locked) {
+        LockScreen(
+            appPrefs   = appPrefs,
+            onUnlocked = {
+                AppLockState.isUnlocked = true
+                locked = false
+            }
+        )
+        return
+    }
 
     // 他アプリからの Intentファイルを受け取って直接ビューワーを起動
     LaunchedEffect(intent) {
@@ -163,8 +210,22 @@ fun ComicVeilApp(intent: Intent? = null) {
 
         composable("settings") {
             SettingsScreen(
-                viewModel = homeViewModel,
-                onClose   = { navController.popBackStack() }
+                viewModel              = homeViewModel,
+                onClose                = { navController.popBackStack() },
+                onNavigateToLockSetup  = { activate -> navController.navigate("lock_setup/$activate") }
+            )
+        }
+
+        composable(
+            route     = "lock_setup/{activate}",
+            arguments = listOf(navArgument("activate") { type = NavType.BoolType })
+        ) { backStackEntry ->
+            val activate = backStackEntry.arguments?.getBoolean("activate") ?: false
+            PinSetupScreen(
+                appPrefs           = appPrefs,
+                activateLockOnSave = activate,
+                onDone             = { navController.popBackStack() },
+                onCancel           = { navController.popBackStack() }
             )
         }
 

@@ -3,6 +3,7 @@ package com.kamneko88.comicveil.data
 import android.content.Context
 import androidx.core.content.edit
 import java.io.File
+// PinCrypto は同じ data パッケージ内にあるため import 不要
 
 /**
  * アプリ全体の設定を SharedPreferences で管理するクラス。
@@ -250,6 +251,54 @@ class AppPrefs(context: Context) {
         }.getOrDefault(NasStreamCacheLimit.GB3)
         set(value) = prefs.edit { putString(KEY_NAS_STREAM_CACHE_LIMIT, value.name) }
 
+    // ─── アプリロック（PIN／生体認証） ───────────────────────────────────
+
+    /**
+     * OFF＝ロック無効。PIN_ONLY＝PIN入力のみ。BIOMETRIC_ONLY＝生体認証を前面に出すが、
+     * 内部的にPINを保険として保持し「PINを使う」から入力可能。BOTH＝PIN入力欄と
+     * 生体認証ボタンを両方常時表示（生体認証を先に試す）。
+     */
+    enum class LockMode { OFF, PIN_ONLY, BIOMETRIC_ONLY, BOTH }
+
+    var lockMode: LockMode
+        get() = runCatching {
+            LockMode.valueOf(prefs.getString(KEY_LOCK_MODE, LockMode.OFF.name) ?: LockMode.OFF.name)
+        }.getOrDefault(LockMode.OFF)
+        set(value) = prefs.edit { putString(KEY_LOCK_MODE, value.name) }
+
+    private var pinHash: String?
+        get() = prefs.getString(KEY_PIN_HASH, null)
+        set(value) = prefs.edit { putString(KEY_PIN_HASH, value) }
+
+    private var pinSalt: String?
+        get() = prefs.getString(KEY_PIN_SALT, null)
+        set(value) = prefs.edit { putString(KEY_PIN_SALT, value) }
+
+    /** PINが設定済みか（ロックを有効化するにはまずPINの設定が必要） */
+    val hasPinSet: Boolean
+        get() = pinHash != null && pinSalt != null
+
+    /** PINを新規設定・変更する（平文は保存せずソルト付きハッシュのみ保存） */
+    fun setPin(pin: String) {
+        val salt = PinCrypto.generateSalt()
+        pinSalt = salt
+        pinHash = PinCrypto.hash(pin, salt)
+    }
+
+    /** 入力されたPINが正しいか検証する */
+    fun verifyPin(pin: String): Boolean {
+        val salt = pinSalt ?: return false
+        val hash = pinHash ?: return false
+        return PinCrypto.verify(pin, salt, hash)
+    }
+
+    /** ロックを完全に無効化し、PINも削除する（設定画面の「アプリロックを解除して削除」用） */
+    fun clearLock() {
+        lockMode = LockMode.OFF
+        pinHash = null
+        pinSalt = null
+    }
+
     companion object {
         private const val KEY_HOME_FOLDER            = "home_folder_type"
         private const val KEY_HOME_FOLDER_SAF_URI    = "home_folder_saf_uri"
@@ -272,6 +321,9 @@ class AppPrefs(context: Context) {
         private const val KEY_VIEWER_BRIGHTNESS      = "viewer_brightness"
         private const val KEY_PAGE_CACHE_LIMIT       = "page_cache_limit"
         private const val KEY_NAS_STREAM_CACHE_LIMIT = "nas_stream_cache_limit"
+        private const val KEY_LOCK_MODE              = "lock_mode"
+        private const val KEY_PIN_HASH               = "lock_pin_hash"
+        private const val KEY_PIN_SALT               = "lock_pin_salt"
 
         fun getAppFolder(context: Context): File {
             val dir = File(context.getExternalFilesDir(null), "Comics")
