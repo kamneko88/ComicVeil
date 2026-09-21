@@ -1229,9 +1229,10 @@ private fun extractRarProgressive(
 }
 
 /**
- * 7z：SevenZFileは前から順にしか読めない制約があるため、
- * アーカイブに現れる順（到着順）で一時ファイルに書き出し、
- * 完了後に自然順の最終位置へ一括リネームする（バイトの再書き込みはしない：高速）
+ * 7z：SevenZFileは前から順にしか読めない制約があるため、アーカイブに現れる順（到着順）で
+ * 読むが、1ページ抽出できた時点でそのページの最終ファイル名（%05d.jpg）へ直接書き込む
+ * （ZIP・RARと同じ方式）。画面側の監視ループが該当ページの展開完了を即座に検知できるため、
+ * 全ページの展開完了を待たずに1ページ目から表示できる。
  * （libarchiveではAndroid上で日本語パス名のUTF-8取得が安定しなかったため、7zはCommons Compressに戻している）
  */
 private fun extract7zProgressive(
@@ -1241,8 +1242,7 @@ private fun extract7zProgressive(
     password: String? = null
 ) {
     val targetNames = targetEntries.map { it.name }.toSet()
-    var arrivalIndex = 0
-    val arrivalNameOrder = mutableListOf<String>()
+    val finalIndexByName = targetEntries.withIndex().associate { (i, info) -> info.name to i }
 
     val builder = SevenZFile.builder().setFile(file)
     if (password != null) builder.setPassword(password)
@@ -1279,22 +1279,13 @@ private fun extract7zProgressive(
                     }
                 }
                 if (bytes.isNotEmpty()) {
-                    File(pageDir, "incoming_%05d.jpg".format(arrivalIndex)).writeBytes(bytes)
-                    arrivalNameOrder.add(name)
-                    arrivalIndex++
+                    finalIndexByName[name]?.let { finalIdx -> writePage(pageDir, finalIdx, bytes) }
                 }
             }
             entry = sevenZFile.nextEntry
         }
     }
 
-    val finalIndexByName = targetEntries.withIndex().associate { (i, info) -> info.name to i }
-    arrivalNameOrder.forEachIndexed { arrivalIdx, name ->
-        val finalIdx = finalIndexByName[name] ?: return@forEachIndexed
-        val src = File(pageDir, "incoming_%05d.jpg".format(arrivalIdx))
-        val dst = File(pageDir, "%05d.jpg".format(finalIdx))
-        src.renameTo(dst)
-    }
     File(pageDir, "complete").writeText(targetEntries.size.toString())
 }
 
