@@ -251,6 +251,18 @@ class AppPrefs(context: Context) {
         }.getOrDefault(NasStreamCacheLimit.GB3)
         set(value) = prefs.edit { putString(KEY_NAS_STREAM_CACHE_LIMIT, value.name) }
 
+    // ─── アプリ全体の配色テーマ ───────────────────────────────────────────
+    // ビューワー画面（実際に読む画面本体）は対象外で常にダーク固定。
+    // ここでの選択が反映されるのはHOME・設定・履歴・転送などアプリ全体のUI。
+
+    enum class AppTheme { DARK, LIGHT }
+
+    var appTheme: AppTheme
+        get() = runCatching {
+            AppTheme.valueOf(prefs.getString(KEY_APP_THEME, AppTheme.DARK.name) ?: AppTheme.DARK.name)
+        }.getOrDefault(AppTheme.DARK)
+        set(value) = prefs.edit { putString(KEY_APP_THEME, value.name) }
+
     // ─── アプリロック（PIN／生体認証） ───────────────────────────────────
 
     /**
@@ -321,6 +333,7 @@ class AppPrefs(context: Context) {
         private const val KEY_VIEWER_BRIGHTNESS      = "viewer_brightness"
         private const val KEY_PAGE_CACHE_LIMIT       = "page_cache_limit"
         private const val KEY_NAS_STREAM_CACHE_LIMIT = "nas_stream_cache_limit"
+        private const val KEY_APP_THEME              = "app_theme"
         private const val KEY_LOCK_MODE              = "lock_mode"
         private const val KEY_PIN_HASH               = "lock_pin_hash"
         private const val KEY_PIN_SALT               = "lock_pin_salt"

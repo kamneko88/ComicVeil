@@ -63,18 +63,43 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // このアプリはダークテーマなので、システムバーのアイコンは白にする。
-        // 引数なしの enableEdgeToEdge() は端末のライト/ダーク設定に合わせて
-        // 「明るい背景用＝黒いアイコン」を選ぶことがあり、
-        // その場合、暗い背景の上で時刻やWi-Fiが見えなくなる。
-        enableEdgeToEdge(
-            statusBarStyle     = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
-        )
         requestNotificationPermissionIfNeeded()
         setContent {
-            ComicVeilTheme {
-                ComicVeilApp(intent = intent)
+            val context = LocalContext.current
+            val appPrefs = remember { AppPrefs(context) }
+            var appTheme by remember { mutableStateOf(appPrefs.appTheme) }
+            val isDark = appTheme == AppPrefs.AppTheme.DARK
+
+            // システムバーのアイコン色をテーマに合わせて切り替える。
+            // ダーク：背景が暗いのでアイコンは白（dark style）。
+            // 白系：背景が明るいのでアイコンは黒（light style）。
+            // enableEdgeToEdge() は何度でも呼び直せるため、テーマが変わるたびに再適用する。
+            LaunchedEffect(isDark) {
+                if (isDark) {
+                    enableEdgeToEdge(
+                        statusBarStyle     = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+                        navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                    )
+                } else {
+                    enableEdgeToEdge(
+                        statusBarStyle     = SystemBarStyle.light(
+                            android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT
+                        ),
+                        navigationBarStyle = SystemBarStyle.light(
+                            android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT
+                        )
+                    )
+                }
+            }
+
+            ComicVeilTheme(darkTheme = isDark) {
+                ComicVeilApp(
+                    intent        = intent,
+                    onThemeChange = { newTheme ->
+                        appTheme = newTheme
+                        appPrefs.appTheme = newTheme
+                    }
+                )
             }
         }
     }
@@ -101,7 +126,10 @@ class MainActivity : FragmentActivity() {
 }
 
 @Composable
-fun ComicVeilApp(intent: Intent? = null) {
+fun ComicVeilApp(
+    intent: Intent? = null,
+    onThemeChange: (AppPrefs.AppTheme) -> Unit = {}
+) {
     val navController = rememberNavController()
     val transferViewModel: TransferViewModel = viewModel()
     val homeViewModel: com.kamneko88.comicveil.ui.home.HomeViewModel = viewModel()
@@ -186,11 +214,14 @@ fun ComicVeilApp(intent: Intent? = null) {
         ) { backStackEntry ->
             val encodedPath = backStackEntry.arguments?.getString("filePath") ?: ""
             val filePath    = URLDecoder.decode(encodedPath, "UTF-8")
-            ViewerScreen(
-                filePath       = filePath,
-                onClose        = { navController.popBackStack() },
-                onOpenSettings = { navController.navigate("settings") }
-            )
+            // ビューワー（実際に読む画面）はアプリ全体のテーマ設定に関わらず常にダーク固定
+            ComicVeilTheme(darkTheme = true) {
+                ViewerScreen(
+                    filePath       = filePath,
+                    onClose        = { navController.popBackStack() },
+                    onOpenSettings = { navController.navigate("settings") }
+                )
+            }
         }
 
         composable(
@@ -212,7 +243,8 @@ fun ComicVeilApp(intent: Intent? = null) {
             SettingsScreen(
                 viewModel              = homeViewModel,
                 onClose                = { navController.popBackStack() },
-                onNavigateToLockSetup  = { activate -> navController.navigate("lock_setup/$activate") }
+                onNavigateToLockSetup  = { activate -> navController.navigate("lock_setup/$activate") },
+                onThemeChange          = onThemeChange
             )
         }
 

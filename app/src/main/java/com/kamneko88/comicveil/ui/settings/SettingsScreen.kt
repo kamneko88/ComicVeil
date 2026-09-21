@@ -60,11 +60,15 @@ import java.io.File
 fun SettingsScreen(
     viewModel: HomeViewModel,
     onClose: () -> Unit,
-    onNavigateToLockSetup: (activate: Boolean) -> Unit
+    onNavigateToLockSetup: (activate: Boolean) -> Unit,
+    onThemeChange: (AppPrefs.AppTheme) -> Unit = {}
 ) {
     val context = LocalContext.current
     val thumbnailCacheDir = remember { File(context.cacheDir, "thumbnails") }
     val appPrefs = remember { viewModel.appPrefs }
+
+    // ── 外観 ──────────────────────────────────────────────────────────────
+    var appTheme by remember { mutableStateOf(appPrefs.appTheme) }
 
     // ── セキュリティ ──────────────────────────────────────────────────────
     // PIN設定画面（別のNavHostエントリ）から戻ったときにlockModeが変わっている
@@ -582,6 +586,36 @@ fun SettingsScreen(
                     }
                 )
             }
+
+            // ════════════════════════════════════════════════════
+            // 🎨 外観
+            // ════════════════════════════════════════════════════
+            Spacer(Modifier.height(24.dp))
+            SettingsSectionHeader("外観")
+
+            SettingsRadioItem(
+                label       = "ダーク",
+                description = "黒基調の配色（従来どおり）",
+                selected    = appTheme == AppPrefs.AppTheme.DARK,
+                onSelect    = {
+                    appTheme          = AppPrefs.AppTheme.DARK
+                    appPrefs.appTheme = AppPrefs.AppTheme.DARK
+                    onThemeChange(AppPrefs.AppTheme.DARK)
+                }
+            )
+            SettingsRadioItem(
+                label       = "白系",
+                description = "白基調の配色（ビューワー画面は対象外で常にダーク表示のまま）",
+                selected    = appTheme == AppPrefs.AppTheme.LIGHT,
+                onSelect    = {
+                    appTheme          = AppPrefs.AppTheme.LIGHT
+                    appPrefs.appTheme = AppPrefs.AppTheme.LIGHT
+                    onThemeChange(AppPrefs.AppTheme.LIGHT)
+                }
+            )
+
+            Spacer(Modifier.height(24.dp))
+            SettingsDivider()
 
             // ════════════════════════════════════════════════════
             // 🔒 セキュリティ
