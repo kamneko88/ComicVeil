@@ -63,9 +63,20 @@
 -keep class org.slf4j.** { *; }
 -dontwarn org.slf4j.**
 
-# --- smbjが内部で使うイベントバス（net.engio.mbassy）が任意機能として参照する
-#     JavaEEのEL API（javax.el.*）。Androidには存在せず、ComicVeilはEL機能を
-#     使わないため実害なし。R8のmissing_rules.txtの指示に従いdontwarnのみ ---
+# --- smbjが内部で使うイベントバス（net.engio.mbassy）本体 ---
+# SubscriptionFactoryがReflectiveHandlerInvocation等の実装クラスを
+# 「SubscriptionContextを1引数に取るコンストラクタ」でリフレクション生成するため、
+# クラス名・コンストラクタを完全に保持する必要がある。
+# 未keepだと実機で「接続に失敗しました：... did not specify the necessary
+# constructor h62(SubscriptionContext)」が発生し、SMB(NAS)接続が全滅する
+# （2026-09-20、T-018のR8導入直後に発覚。h62はReflectiveHandlerInvocationの
+# 難読化後の名前）
+-keep class net.engio.mbassy.** { *; }
+-dontwarn net.engio.mbassy.**
+
+# --- 上記mbassyが任意機能として参照するJavaEEのEL API（javax.el.*）。
+#     Androidには存在せず、ComicVeilはEL機能を使わないため実害なし。
+#     R8のmissing_rules.txtの指示に従いdontwarnのみ ---
 -dontwarn javax.el.BeanELResolver
 -dontwarn javax.el.ELContext
 -dontwarn javax.el.ELResolver
