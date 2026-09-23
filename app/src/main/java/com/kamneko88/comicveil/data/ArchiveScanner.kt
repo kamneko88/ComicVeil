@@ -249,8 +249,11 @@ object ArchiveScanner {
                     ArchiveEntry.free(entry)
                     break
                 }
-                val name  = ArchiveEntry.pathnameUtf8(entry) ?: ""
-                val isDir = ArchiveEntry.filetype(entry) == ArchiveEntry.AE_IFDIR
+                val rawName = ArchiveEntry.pathnameUtf8(entry) ?: ""
+                val isDir   = ArchiveEntry.filetype(entry) == ArchiveEntry.AE_IFDIR
+                // RAR5で日本語名のUTF-16→UTF-8変換が失敗すると空文字になる。エントリを捨てず、
+                // 物理的な読み取り順（index）から合成名を作って代用する（RarSupport.kt参照）。
+                val name = if (!isDir && rawName.isEmpty()) RarSupport.rar5FallbackEntryName(index) else rawName
                 Log.d("ComicVeil", "scan[$index] $name dir=$isDir")
                 if (!isDir && isImage(name)) names.add(name)
                 // 次のreadNextHeader2呼び出し時に未消費データは自動でスキップされるため、
@@ -270,7 +273,8 @@ object ArchiveScanner {
         return names
     }
 
-    private fun isImage(name: String): Boolean {
+    /** internal: RAR5位置ベースフォールバック名の単体テストから直接検証するため */
+    internal fun isImage(name: String): Boolean {
         val fileName = name.substringAfterLast("/")
         if (fileName.startsWith(".") || name.startsWith("__") || name.contains("..")) return false
         return name.substringAfterLast(".").lowercase() in IMAGE_EXTENSIONS

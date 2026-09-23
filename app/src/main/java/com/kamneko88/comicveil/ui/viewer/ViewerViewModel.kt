@@ -1124,6 +1124,10 @@ private fun extractWithLibarchive(
         }
         Archive.readOpenFileName(archive, file.absolutePath.toByteArray(Charsets.UTF_8), 10240L)
 
+        // ArchiveScanner.scanWithLibarchive()の物理読み取り順indexと完全に同じ数え方
+        // （ディレクトリ・ファイル問わず1エントリごとに1増加）でなければ、
+        // RAR5フォールバック名の対応がスキャン結果とズレてしまう。
+        var index = 0
         while (true) {
             val entry = ArchiveEntry.new1()
             var isEof = false
@@ -1155,7 +1159,13 @@ private fun extractWithLibarchive(
                 break
             }
 
-            val name     = ArchiveEntry.pathnameUtf8(entry)
+            val rawName = ArchiveEntry.pathnameUtf8(entry)
+            val isDir   = ArchiveEntry.filetype(entry) == ArchiveEntry.AE_IFDIR
+            // RAR5で日本語名の変換が失敗し空文字/nullになった場合、ArchiveScanner側と同じ
+            // 合成名（物理indexのみに依存）を生成してfinalIndexByNameを引く。
+            val name = if (!isDir && rawName.isNullOrEmpty())
+                RarSupport.rar5FallbackEntryName(index)
+            else rawName
             val finalIdx = name?.let { finalIndexByName[it] }
 
             if (finalIdx != null) {
@@ -1184,6 +1194,7 @@ private fun extractWithLibarchive(
             }
 
             ArchiveEntry.free(entry)
+            index++
         }
     } finally {
         if (archive != 0L) {

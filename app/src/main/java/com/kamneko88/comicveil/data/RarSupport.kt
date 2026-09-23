@@ -164,6 +164,24 @@ object RarSupport {
     /** [isEncrypted]のRAR5判定ロジック（ピュア関数・テスト用に分離）。libarchiveのarchive_read_has_encrypted_entries()の戻り値を解釈する（1件以上あれば正の値） */
     internal fun libarchiveHasEncryptedEntries(code: Int): Boolean = code > 0
 
+    /**
+     * RAR5で日本語ファイル名を含む場合、libarchiveのUTF-16→UTF-8変換がAndroid上で失敗し、
+     * ArchiveEntry.pathnameUtf8()が空文字列を返すことがある。この場合、名前が使えないため
+     * エントリを丸ごと捨てるのではなく、「物理的な読み取り順のN番目＝Nページ目」とみなして
+     * 位置だけから合成ファイル名を作り、代わりに使う（ZIPストリーミング展開の既存フォールバックと同じ考え方）。
+     *
+     * スキャン時・展開時・「表紙に設定」機能による再スキャン時のいずれでも、同じ物理インデックスに
+     * 対して必ず同じ名前を返す必要があるため、[physicalIndex]以外の状態には一切依存しない。
+     *
+     * 命名規則（ArchiveScanner.isImage()を通過させるための制約）：
+     * - `.jpg`で終わる（対応拡張子）
+     * - `__`で始まらない
+     * - `..`を含まない
+     * - NaturalOrder.COMPARATORで物理順どおりにソートされるよう、インデックスを8桁ゼロ埋めする
+     */
+    fun rar5FallbackEntryName(physicalIndex: Int): String =
+        "comicveil_rar5_fallback_%08d.jpg".format(physicalIndex)
+
     private fun readRar4EncryptedFlags(file: File): List<Boolean> {
         val flags = mutableListOf<Boolean>()
         JunrarArchive(file).use { archive ->
