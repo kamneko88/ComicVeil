@@ -12,8 +12,8 @@ android {
         applicationId = "com.kamneko88.comicveil"
         minSdk = 26
         targetSdk = 36
-        versionCode = 92
-        versionName = "1.16.1"
+        versionCode = 93
+        versionName = "1.17.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -111,6 +111,9 @@ dependencies {
 
     // テスト
     testImplementation(libs.junit)
+    // org.json はAndroid SDKのスタブ実装のみで、JVM単体テストではそのままだと未実装例外になるため、
+    // バックアップのJSON往復テスト用に実体を持つ実装を追加する
+    testImplementation("org.json:json:20231013")
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

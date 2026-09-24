@@ -30,6 +30,10 @@ interface FileTitleDao {
     @Upsert
     suspend fun save(title: FileTitle)
 
+    /** 複数件を一括保存（バックアップ復元用。なければ追加、あれば更新） */
+    @Upsert
+    suspend fun saveAll(titles: List<FileTitle>)
+
     @Query("SELECT * FROM file_titles")
     suspend fun getAll(): List<FileTitle>
 

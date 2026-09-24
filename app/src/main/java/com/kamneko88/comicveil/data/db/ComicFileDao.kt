@@ -19,6 +19,14 @@ interface ComicFileDao {
     @Upsert
     suspend fun upsertComicFile(comicFile: ComicFile)
 
+    /** 全レコードを取得（バックアップ書き出し用） */
+    @Query("SELECT * FROM files")
+    suspend fun getAll(): List<ComicFile>
+
+    /** 複数件を一括保存（バックアップ復元用。なければ追加、あれば更新） */
+    @Upsert
+    suspend fun upsertAll(comicFiles: List<ComicFile>)
+
     /** 読書状態だけ更新 */
     @Query("UPDATE files SET status = :status WHERE filePath = :filePath")
     suspend fun updateStatus(filePath: String, status: Int)

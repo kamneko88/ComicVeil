@@ -725,6 +725,13 @@ fun HomeScreen(
                                         }
                                     )
                                     DropdownMenuItem(
+                                        text    = { Text("バックアップと復元") },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            navController.navigate("backup")
+                                        }
+                                    )
+                                    DropdownMenuItem(
                                         text    = { Text("このアプリについて") },
                                         onClick = {
                                             showMoreMenu = false

@@ -20,6 +20,14 @@ interface ReadingProgressDao {
     @Upsert
     suspend fun saveProgress(progress: ReadingProgress)
 
+    /** 全レコードを取得（バックアップ書き出し用） */
+    @Query("SELECT * FROM reading_progress")
+    suspend fun getAll(): List<ReadingProgress>
+
+    /** 複数件を一括保存（バックアップ復元用。なければ追加、あれば更新） */
+    @Upsert
+    suspend fun saveAll(progressList: List<ReadingProgress>)
+
     /** 読書位置を削除（ファイル削除時など） */
     @Query("DELETE FROM reading_progress WHERE filePath = :filePath")
     suspend fun deleteProgress(filePath: String)
