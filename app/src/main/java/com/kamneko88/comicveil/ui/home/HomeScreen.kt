@@ -2110,7 +2110,13 @@ fun ShelfFileItem(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.71f)   // 本の形
-                .shadow(elevation = 14.dp, shape = RoundedCornerShape(6.dp), clip = false)  // 棚に置かれている落ち影
+                .shadow(
+                    elevation   = 14.dp,
+                    shape       = RoundedCornerShape(6.dp),
+                    clip        = false,
+                    ambientColor = Color.Black.copy(alpha = 0.3f),
+                    spotColor    = Color.Black.copy(alpha = 0.5f)
+                )  // 棚に置かれている落ち影
                 .clip(RoundedCornerShape(6.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
@@ -2255,7 +2261,13 @@ private fun ShelfServerItem(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.71f)
-                .shadow(elevation = 14.dp, shape = RoundedCornerShape(6.dp), clip = false)
+                .shadow(
+                    elevation   = 14.dp,
+                    shape       = RoundedCornerShape(6.dp),
+                    clip        = false,
+                    ambientColor = Color.Black.copy(alpha = 0.3f),
+                    spotColor    = Color.Black.copy(alpha = 0.5f)
+                )
                 .clip(RoundedCornerShape(6.dp))
                 .background(MaterialTheme.colorScheme.primaryContainer)
         ) {
@@ -2338,7 +2350,13 @@ private fun DlFolderShelfItem(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.71f)
-                .shadow(elevation = 14.dp, shape = RoundedCornerShape(6.dp), clip = false)
+                .shadow(
+                    elevation   = 14.dp,
+                    shape       = RoundedCornerShape(6.dp),
+                    clip        = false,
+                    ambientColor = Color.Black.copy(alpha = 0.3f),
+                    spotColor    = Color.Black.copy(alpha = 0.5f)
+                )
                 .clip(RoundedCornerShape(6.dp))
                 .background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center
