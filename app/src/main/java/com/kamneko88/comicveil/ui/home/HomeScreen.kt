@@ -22,7 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -88,13 +88,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import android.graphics.BitmapShader
+import android.graphics.BlurMaskFilter
+import android.graphics.Paint
 import android.graphics.Shader
+import androidx.core.graphics.createBitmap
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -2064,6 +2072,57 @@ private fun ShelfBoard() {
     }
 }
 
+// ─── 本棚タイルの落ち影（Canvas自前描画） ────────────────────────────────────
+
+/**
+ * 本棚モードの本タイルの落ち影をBlurMaskFilterで自前描画するModifier。
+ *
+ * Modifier.shadow()（RenderNodeベース）はelevation・alpha強化を2回試しても
+ * 実機でほぼ視認できなかったため、ソフトウェアCanvas上にぼかし付きの角丸矩形を
+ * 描いてImageBitmap化し、drawWithCacheでdrawBehindする方式に切り替えた。
+ * BlurMaskFilterはハードウェアアクセラレーションの効いたCanvasでは無視されるため、
+ * 一度android.graphics.Bitmap＋Canvasに描いてからComposeへ持ち込む必要がある。
+ * drawWithCacheはタイルの実測pxサイズ（size）が変わらない限りBitmap生成を
+ * 再実行しないため、再コンポーズやスクロールのたびに生成し直されることはない。
+ */
+private fun Modifier.shelfDropShadow(
+    cornerRadius: Dp = 6.dp,
+    offsetX: Dp = 3.dp,
+    offsetY: Dp = 10.dp,
+    blurRadius: Dp = 14.dp,
+    color: Color = Color.Black.copy(alpha = 0.65f)
+): Modifier = this.drawWithCache {
+    val blurPx   = blurRadius.toPx()
+    val offsetXPx = offsetX.toPx()
+    val offsetYPx = offsetY.toPx()
+    val marginPx = blurPx * 2f + maxOf(abs(offsetXPx), abs(offsetYPx))
+
+    val bitmapWidth  = (size.width  + marginPx * 2f).roundToInt().coerceAtLeast(1)
+    val bitmapHeight = (size.height + marginPx * 2f).roundToInt().coerceAtLeast(1)
+
+    val shadowBitmap = createBitmap(bitmapWidth, bitmapHeight).apply {
+        val canvas = android.graphics.Canvas(this)
+        val paint = Paint().apply {
+            isAntiAlias = true
+            this.color = color.toArgb()
+            maskFilter = BlurMaskFilter(blurPx, BlurMaskFilter.Blur.NORMAL)
+        }
+        canvas.drawRoundRect(
+            marginPx + offsetXPx,
+            marginPx + offsetYPx,
+            marginPx + offsetXPx + size.width,
+            marginPx + offsetYPx + size.height,
+            cornerRadius.toPx(),
+            cornerRadius.toPx(),
+            paint
+        )
+    }.asImageBitmap()
+
+    onDrawBehind {
+        drawImage(image = shadowBitmap, topLeft = Offset(-marginPx, -marginPx))
+    }
+}
+
 // ─── 本棚タイル ────────────────────────────────────
 
 /**
@@ -2110,13 +2169,7 @@ fun ShelfFileItem(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.71f)   // 本の形
-                .shadow(
-                    elevation   = 14.dp,
-                    shape       = RoundedCornerShape(6.dp),
-                    clip        = false,
-                    ambientColor = Color.Black.copy(alpha = 0.3f),
-                    spotColor    = Color.Black.copy(alpha = 0.5f)
-                )  // 棚に置かれている落ち影
+                .shelfDropShadow()  // 棚に置かれている落ち影
                 .clip(RoundedCornerShape(6.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
@@ -2261,13 +2314,7 @@ private fun ShelfServerItem(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.71f)
-                .shadow(
-                    elevation   = 14.dp,
-                    shape       = RoundedCornerShape(6.dp),
-                    clip        = false,
-                    ambientColor = Color.Black.copy(alpha = 0.3f),
-                    spotColor    = Color.Black.copy(alpha = 0.5f)
-                )
+                .shelfDropShadow()
                 .clip(RoundedCornerShape(6.dp))
                 .background(MaterialTheme.colorScheme.primaryContainer)
         ) {
@@ -2350,13 +2397,7 @@ private fun DlFolderShelfItem(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.71f)
-                .shadow(
-                    elevation   = 14.dp,
-                    shape       = RoundedCornerShape(6.dp),
-                    clip        = false,
-                    ambientColor = Color.Black.copy(alpha = 0.3f),
-                    spotColor    = Color.Black.copy(alpha = 0.5f)
-                )
+                .shelfDropShadow()
                 .clip(RoundedCornerShape(6.dp))
                 .background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center
