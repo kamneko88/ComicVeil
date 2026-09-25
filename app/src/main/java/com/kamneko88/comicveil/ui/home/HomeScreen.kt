@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.ArrowLeft
 import com.composables.icons.lucide.List
+import com.composables.icons.lucide.Lock
 import com.composables.icons.lucide.Bookmark
 import com.composables.icons.lucide.Check
 import com.composables.icons.lucide.SquareCheck
@@ -118,6 +119,7 @@ import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.FileItemType
 import com.kamneko88.comicveil.data.LocalFileRepository
 import com.kamneko88.comicveil.data.SortPrefs
+import com.kamneko88.comicveil.data.ThumbnailOutcome
 import com.kamneko88.comicveil.data.ThumbnailRepository
 import com.kamneko88.comicveil.data.db.ColorLabel
 import com.kamneko88.comicveil.data.db.ReadStatus
@@ -1660,10 +1662,10 @@ fun FileListItem(
     val repository = remember { LocalFileRepository() }
     val (title, author) = remember(fileItem.name) { repository.parseFileName(fileItem.name) }
 
-    var thumbnailFile by remember(fileItem.path) { mutableStateOf<File?>(null) }
+    var thumbnailOutcome by remember(fileItem.path) { mutableStateOf<ThumbnailOutcome?>(null) }
     LaunchedEffect(fileItem.path, generateThumbnail) {
         if (generateThumbnail) {
-            thumbnailFile = thumbnailRepository.getOrGenerateThumbnail(fileItem)
+            thumbnailOutcome = thumbnailRepository.getOrGenerateThumbnail(fileItem)
         }
     }
 
@@ -1717,15 +1719,20 @@ fun FileListItem(
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
-            if (thumbnailFile != null) {
-                AsyncImage(
-                    model              = thumbnailFile,
+            when (val outcome = thumbnailOutcome) {
+                is ThumbnailOutcome.Ready -> AsyncImage(
+                    model              = outcome.file,
                     contentDescription = null,
                     modifier           = Modifier.fillMaxSize(),
                     contentScale       = ContentScale.Crop
                 )
-            } else {
-                Icon(
+                ThumbnailOutcome.Encrypted -> Icon(
+                    imageVector        = Lucide.Lock,
+                    contentDescription = "パスワード付き",
+                    modifier           = Modifier.size(28.dp),
+                    tint               = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                else -> Icon(
                     imageVector        = when (fileItem.type) {
                         FileItemType.FOLDER -> Lucide.Folder
                         else                -> Lucide.File
@@ -1882,10 +1889,10 @@ fun CompactFileListItem(
     isDlSelected: Boolean = false,
     generateThumbnail: Boolean = true
 ) {
-    var thumbnailFile by remember(fileItem.path) { mutableStateOf<File?>(null) }
+    var thumbnailOutcome by remember(fileItem.path) { mutableStateOf<ThumbnailOutcome?>(null) }
     LaunchedEffect(fileItem.path, generateThumbnail) {
         if (generateThumbnail) {
-            thumbnailFile = thumbnailRepository.getOrGenerateThumbnail(fileItem)
+            thumbnailOutcome = thumbnailRepository.getOrGenerateThumbnail(fileItem)
         }
     }
 
@@ -1923,15 +1930,20 @@ fun CompactFileListItem(
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
-            if (thumbnailFile != null) {
-                AsyncImage(
-                    model              = thumbnailFile,
+            when (val outcome = thumbnailOutcome) {
+                is ThumbnailOutcome.Ready -> AsyncImage(
+                    model              = outcome.file,
                     contentDescription = null,
                     modifier           = Modifier.fillMaxSize(),
                     contentScale       = ContentScale.Crop
                 )
-            } else {
-                Icon(
+                ThumbnailOutcome.Encrypted -> Icon(
+                    imageVector        = Lucide.Lock,
+                    contentDescription = "パスワード付き",
+                    modifier           = Modifier.size(20.dp),
+                    tint               = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                else -> Icon(
                     imageVector        = when (fileItem.type) {
                         FileItemType.FOLDER -> Lucide.Folder
                         else                -> Lucide.File
@@ -2149,10 +2161,10 @@ fun ShelfFileItem(
     val repository = remember { LocalFileRepository() }
     val (title, _) = remember(fileItem.name) { repository.parseFileName(fileItem.name) }
 
-    var thumbnailFile by remember(fileItem.path) { mutableStateOf<File?>(null) }
+    var thumbnailOutcome by remember(fileItem.path) { mutableStateOf<ThumbnailOutcome?>(null) }
     LaunchedEffect(fileItem.path, generateThumbnail) {
         if (generateThumbnail) {
-            thumbnailFile = thumbnailRepository.getOrGenerateThumbnail(fileItem)
+            thumbnailOutcome = thumbnailRepository.getOrGenerateThumbnail(fileItem)
         }
     }
 
@@ -2183,15 +2195,22 @@ fun ShelfFileItem(
                         tint               = MaterialTheme.colorScheme.primary
                     )
                 }
-            } else if (thumbnailFile != null) {
-                AsyncImage(
-                    model              = thumbnailFile,
+            } else when (val outcome = thumbnailOutcome) {
+                is ThumbnailOutcome.Ready -> AsyncImage(
+                    model              = outcome.file,
                     contentDescription = title,
                     modifier           = Modifier.fillMaxSize(),
                     contentScale       = ContentScale.Crop
                 )
-            } else {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                ThumbnailOutcome.Encrypted -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector        = Lucide.Lock,
+                        contentDescription = "パスワード付き",
+                        modifier           = Modifier.size(32.dp),
+                        tint               = MaterialTheme.colorScheme.secondary
+                    )
+                }
+                else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector        = Lucide.File,
                         contentDescription = null,

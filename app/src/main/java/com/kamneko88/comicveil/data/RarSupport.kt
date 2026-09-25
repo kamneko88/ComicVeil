@@ -1,5 +1,6 @@
 package com.kamneko88.comicveil.data
 
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.github.junrar.Archive as JunrarArchive
 import com.github.junrar.rarfile.FileHeader
@@ -218,5 +219,163 @@ object RarSupport {
                 runCatching { Archive.readFree(archive) }
             }
         }
+    }
+
+    /** サムネイル用の表紙1枚として抽出してよいサイズの上限（ThumbnailRepositoryのMAX_THUMBNAIL_SOURCE_BYTESと同じ値） */
+    private const val MAX_COVER_BYTES = 30L * 1024 * 1024
+
+    /**
+     * RAR5の表紙（名前順で一番若い画像）を1枚だけ取り出す（libarchive経由）。
+     *
+     * 【なぜ2回読むか】libarchiveは前方読み取り専用でシークできないため、ZIP/RAR4の
+     * サムネイル生成（名前順で一番若い画像を選ぶ）と同じ選び方をするには、
+     * 1回目のパスで対象エントリ名を決め、2回目のパスでそのエントリだけを読む必要がある。
+     * ヘッダーだけ読む1回目のパスはエントリのデータを読まないため、件数が多くても軽い
+     * （ArchiveScanner.scanWithLibarchiveの一覧取得と同じ考え方）。
+     */
+    fun extractFirstImageRar5(file: File): ByteArray? {
+        val targetName = findCoverEntryNameRar5(file) ?: return null
+        return readEntryBytesRar5(file, targetName)
+    }
+
+    /** [extractFirstImageRar5]の1回目のパス：対象エントリ名（名前順で一番若い画像）を決める */
+    private fun findCoverEntryNameRar5(file: File): String? {
+        var bestName : String? = null
+        var bestLower: String? = null
+        var archive = 0L
+        try {
+            archive = Archive.readNew()
+            Archive.readSupportFormatRar(archive)
+            Archive.readSupportFormatRar5(archive)
+            Archive.readOpenFileName(archive, file.absolutePath.toByteArray(Charsets.UTF_8), 10240L)
+
+            var index = 0
+            while (true) {
+                val entry = ArchiveEntry.new1()
+                val step = readHeaderStep(archive, entry, "RAR5表紙検索", index)
+                if (step == HeaderStep.EOF) {
+                    ArchiveEntry.free(entry)
+                    break
+                }
+                val name = entryNameOrFallback(entry, index)
+                if (name != null) {
+                    val lower = name.lowercase()
+                    if (bestLower == null || lower < bestLower!!) {
+                        bestName  = name
+                        bestLower = lower
+                    }
+                }
+                ArchiveEntry.free(entry)
+                index++
+            }
+        } catch (e: Exception) {
+            Log.e("ComicVeil", "RAR5表紙検索失敗: ${e::class.simpleName}: ${e.message}", e)
+        } finally {
+            if (archive != 0L) {
+                runCatching { Archive.readClose(archive) }
+                runCatching { Archive.readFree(archive) }
+            }
+        }
+        return bestName
+    }
+
+    /** [extractFirstImageRar5]の2回目のパス：対象エントリのバイト列だけを読み取る */
+    private fun readEntryBytesRar5(file: File, targetName: String): ByteArray? {
+        var archive  = 0L
+        var tempFile: File? = null
+        try {
+            archive = Archive.readNew()
+            Archive.readSupportFormatRar(archive)
+            Archive.readSupportFormatRar5(archive)
+            Archive.readOpenFileName(archive, file.absolutePath.toByteArray(Charsets.UTF_8), 10240L)
+
+            var index = 0
+            while (true) {
+                val entry = ArchiveEntry.new1()
+                val step = readHeaderStep(archive, entry, "RAR5表紙抽出", index)
+                if (step == HeaderStep.EOF) {
+                    ArchiveEntry.free(entry)
+                    break
+                }
+                val name = entryNameOrFallback(entry, index)
+                if (name == targetName) {
+                    val sizeKnown = ArchiveEntry.sizeIsSet(entry)
+                    val size      = if (sizeKnown) ArchiveEntry.size(entry) else -1L
+                    if (sizeKnown && size > MAX_COVER_BYTES) {
+                        Log.e("ComicVeil", "RAR5表紙サイズが上限を超えたためスキップ: $name ($size bytes)")
+                    } else {
+                        tempFile = File.createTempFile("comicveil_rar5_cover", ".bin")
+                        var outPfd: ParcelFileDescriptor? = null
+                        try {
+                            outPfd = ParcelFileDescriptor.open(
+                                tempFile,
+                                ParcelFileDescriptor.MODE_CREATE or
+                                    ParcelFileDescriptor.MODE_TRUNCATE or
+                                    ParcelFileDescriptor.MODE_READ_WRITE
+                            )
+                            Archive.readDataIntoFd(archive, outPfd.fd)
+                        } finally {
+                            runCatching { outPfd?.close() }
+                        }
+                    }
+                    ArchiveEntry.free(entry)
+                    break
+                }
+                ArchiveEntry.free(entry)
+                index++
+            }
+        } catch (e: Exception) {
+            Log.e("ComicVeil", "RAR5表紙抽出失敗: ${e::class.simpleName}: ${e.message}", e)
+        } finally {
+            if (archive != 0L) {
+                runCatching { Archive.readClose(archive) }
+                runCatching { Archive.readFree(archive) }
+            }
+        }
+        val result = tempFile?.let { tf ->
+            if (tf.exists() && tf.length() > 0) tf.readBytes() else null
+        }
+        tempFile?.delete()
+        return result
+    }
+
+    /** ディレクトリでなく画像として使える名前（RAR5フォールバック名含む）を返す。対象外ならnull */
+    private fun entryNameOrFallback(entry: Long, physicalIndex: Int): String? {
+        val isDir = ArchiveEntry.filetype(entry) == ArchiveEntry.AE_IFDIR
+        if (isDir) return null
+        val rawName = ArchiveEntry.pathnameUtf8(entry)
+        val name = if (rawName.isNullOrEmpty()) rar5FallbackEntryName(physicalIndex) else rawName
+        return if (ArchiveScanner.isImage(name)) name else null
+    }
+
+    private enum class HeaderStep { CONTINUE, EOF }
+
+    /**
+     * readNextHeader2()を1件読み、続行/終了を判定する共通処理。
+     * ArchiveScanner.scanWithLibarchive・ViewerViewModel.extractWithLibarchiveと同じ
+     * 例外分類（警告は続行、パス名変換警告(code=84/EILSEQ)も続行、それ以外は終了扱い）。
+     */
+    private fun readHeaderStep(archive: Long, entry: Long, label: String, index: Int): HeaderStep {
+        return try {
+            val ret = Archive.readNextHeader2(archive, entry)
+            if (ret.toInt() == Archive.ERRNO_EOF) HeaderStep.EOF else HeaderStep.CONTINUE
+        } catch (e: ArchiveException) {
+            when {
+                e.code == Archive.ERRNO_WARN -> HeaderStep.CONTINUE
+                e.message?.contains("eof", ignoreCase = true) == true -> HeaderStep.EOF
+                isPathnameConversionWarning(e) -> HeaderStep.CONTINUE
+                else -> {
+                    Log.e("ComicVeil", "$label 中断(index=$index, code=${e.code}): ${e.message}")
+                    HeaderStep.EOF
+                }
+            }
+        }
+    }
+
+    /** パス名の文字コード変換警告か（UTF-16→端末ロケール変換失敗・code=84/EILSEQ）。継続してよい */
+    private fun isPathnameConversionWarning(e: ArchiveException): Boolean {
+        if (e.code == 84) return true
+        val msg = e.message?.lowercase() ?: return false
+        return msg.contains("pathname") && (msg.contains("convert") || msg.contains("locale"))
     }
 }

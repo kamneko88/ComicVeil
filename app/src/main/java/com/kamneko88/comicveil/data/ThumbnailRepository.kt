@@ -3,7 +3,11 @@ package com.kamneko88.comicveil.data
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
 import android.util.Log
+import androidx.core.graphics.createBitmap
 import androidx.core.graphics.scale
 import com.github.junrar.Archive
 import com.kamneko88.comicveil.data.nas.NasServer
@@ -13,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import org.apache.commons.compress.archivers.sevenz.SevenZFile
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -20,6 +25,21 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
+
+/**
+ * サムネイル取得の結果。
+ *
+ * 暗号化されたアーカイブ・PDFはバックグラウンド生成中にパスワードを聞けないため、
+ * 復号を試みず[Encrypted]として呼び出し元（HomeScreen）に伝える（鍵アイコン表示用）。
+ */
+sealed class ThumbnailOutcome {
+    data class Ready(val file: File) : ThumbnailOutcome()
+    data object Encrypted : ThumbnailOutcome()
+    data object Unavailable : ThumbnailOutcome()
+}
+
+private fun File?.toThumbnailOutcome(): ThumbnailOutcome =
+    this?.let { ThumbnailOutcome.Ready(it) } ?: ThumbnailOutcome.Unavailable
 
 class ThumbnailRepository(private val cacheDir: File, private val context: Context? = null) {
 
@@ -70,13 +90,13 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
      * NASファイルは STRキャッシュ → 部分取得 の順で生成する
      * SAFファイルは 先頭部分取得（ZIPのみ）で生成する
      */
-    suspend fun getOrGenerateThumbnail(fileItem: FileItem): File? =
+    suspend fun getOrGenerateThumbnail(fileItem: FileItem): ThumbnailOutcome =
         withContext(Dispatchers.IO) {
             // 非圧縮の画像ファイル単体（ローカルのみ）も表紙候補にする。NAS・SAFはスコープ外
             val isLocalImageFile = fileItem.type == FileItemType.IMAGE_FILE && fileItem.file != null
-            if (!fileItem.isComic && !isLocalImageFile) return@withContext null
+            if (!fileItem.isComic && !isLocalImageFile) return@withContext ThumbnailOutcome.Unavailable
 
-            if (hasCustomCover(fileItem)) return@withContext customCoverFile(fileItem)
+            if (hasCustomCover(fileItem)) return@withContext ThumbnailOutcome.Ready(customCoverFile(fileItem))
 
             if (fileItem.isNas) {
                 return@withContext getOrGenerateNasThumbnail(fileItem)
@@ -86,7 +106,7 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
                 return@withContext getOrGenerateSafThumbnail(fileItem)
             }
 
-            val file = fileItem.file ?: return@withContext null
+            val file = fileItem.file ?: return@withContext ThumbnailOutcome.Unavailable
 
             val cacheFile = getCacheFile(fileItem.path)
             val metaFile  = getMetaFile(fileItem.path)
@@ -94,7 +114,7 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
             // キャッシュ有効確認
             if (cacheFile.exists()) {
                 val cachedModified = runCatching { metaFile.readText().toLong() }.getOrNull()
-                if (cachedModified == fileItem.lastModified) return@withContext cacheFile
+                if (cachedModified == fileItem.lastModified) return@withContext ThumbnailOutcome.Ready(cacheFile)
                 cacheFile.delete()
                 metaFile.delete()
             }
@@ -113,8 +133,8 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
      * 1. STRキャッシュ済みならそこから生成
      * 2. 未キャッシュならNASから先頭2MBだけ取得して生成
      */
-    private suspend fun getOrGenerateNasThumbnail(fileItem: FileItem): File? {
-        val server  = fileItem.nasServer ?: return null
+    private suspend fun getOrGenerateNasThumbnail(fileItem: FileItem): ThumbnailOutcome {
+        val server  = fileItem.nasServer ?: return ThumbnailOutcome.Unavailable
         val nasPath = fileItem.nasPath
         val ext     = fileItem.name.substringAfterLast(".").lowercase()
 
@@ -123,7 +143,7 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
         val metaFile  = File(cacheDir, "nas_${nasPath.hashCode()}.meta")
 
         // キャッシュがあればそのまま返す
-        if (cacheFile.exists()) return cacheFile
+        if (cacheFile.exists()) return ThumbnailOutcome.Ready(cacheFile)
 
         return generationSemaphore.withPermit {
             // 1. NASストリーミングキャッシュがあればそこから生成
@@ -133,12 +153,14 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
             }
 
             // 2. NASから先頭部分だけ取得して生成
-            if (ext !in setOf("zip", "cbz")) return@withPermit null  // ZIPのみ対応（RARは全体必要なためスキップ）
+            if (ext !in setOf("zip", "cbz")) return@withPermit ThumbnailOutcome.Unavailable  // ZIPのみ対応（RARは全体必要なためスキップ）
 
-            val partialBytes = smbRepository.fetchPartialBytes(server, nasPath) ?: return@withPermit null
-            val imageBytes   = extractFirstImageFromZipBytes(partialBytes) ?: return@withPermit null
+            val partialBytes = smbRepository.fetchPartialBytes(server, nasPath) ?: return@withPermit ThumbnailOutcome.Unavailable
+            val scan = extractFirstImageFromZipBytes(partialBytes)
+            if (scan.encrypted) return@withPermit ThumbnailOutcome.Encrypted
+            val imageBytes = scan.bytes ?: return@withPermit ThumbnailOutcome.Unavailable
 
-            generateCacheFromBytes(imageBytes, cacheFile)
+            generateCacheFromBytes(imageBytes, cacheFile).toThumbnailOutcome()
         }
     }
 
@@ -147,13 +169,13 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
      * 1. すでに閲覧済み（app_cacheにコピー済み）ならそこから生成
      * 2. 未コピーならSAF経由で先頭2MBだけ読み取って生成（ZIPのみ対応）
      */
-    private suspend fun getOrGenerateSafThumbnail(fileItem: FileItem): File? {
-        val uri = fileItem.uri ?: return null
-        val ctx = context ?: return null
+    private suspend fun getOrGenerateSafThumbnail(fileItem: FileItem): ThumbnailOutcome {
+        val uri = fileItem.uri ?: return ThumbnailOutcome.Unavailable
+        val ctx = context ?: return ThumbnailOutcome.Unavailable
         val ext = fileItem.name.substringAfterLast(".").lowercase()
 
         val cacheFile = File(cacheDir, "saf_${uri.toString().hashCode()}.jpg")
-        if (cacheFile.exists()) return cacheFile
+        if (cacheFile.exists()) return ThumbnailOutcome.Ready(cacheFile)
 
         return generationSemaphore.withPermit {
             // 1. すでに閲覧用にキャッシュ済みならそこから生成（他形式も含めて対応可能）
@@ -166,16 +188,18 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
             }
 
             // 2. 未キャッシュならSAF経由で先頭2MBだけ読み取る（ZIPのみ対応）
-            if (ext !in setOf("zip", "cbz")) return@withPermit null
+            if (ext !in setOf("zip", "cbz")) return@withPermit ThumbnailOutcome.Unavailable
 
             try {
                 val bytes = ctx.contentResolver.openInputStream(uri)?.use { input ->
                     input.readUpTo(2 * 1024 * 1024)
-                } ?: return@withPermit null
-                val imageBytes = extractFirstImageFromZipBytes(bytes) ?: return@withPermit null
-                generateCacheFromBytes(imageBytes, cacheFile)
+                } ?: return@withPermit ThumbnailOutcome.Unavailable
+                val scan = extractFirstImageFromZipBytes(bytes)
+                if (scan.encrypted) return@withPermit ThumbnailOutcome.Encrypted
+                val imageBytes = scan.bytes ?: return@withPermit ThumbnailOutcome.Unavailable
+                generateCacheFromBytes(imageBytes, cacheFile).toThumbnailOutcome()
             } catch (e: Exception) {
-                null
+                ThumbnailOutcome.Unavailable
             }
         }
     }
@@ -217,19 +241,40 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
         lastModified: Long,
         cacheFile: File,
         metaFile: File
-    ): File? {
+    ): ThumbnailOutcome {
         return try {
-            val imageBytes = when (FormatDetector.effectiveExtension(file)) {
-                "zip", "cbz" -> extractFirstImageFromZip(file)
-                "rar", "cbr" -> extractFirstImageFromRar(file)
-                else -> null
-            } ?: return null
-
-            generateCacheFromBytes(imageBytes, cacheFile)?.also {
-                metaFile.writeText(lastModified.toString())
+            when (FormatDetector.effectiveExtension(file)) {
+                "zip", "cbz" -> {
+                    val scan = extractFirstImageFromZip(file)
+                    if (scan.encrypted) return ThumbnailOutcome.Encrypted
+                    val bytes = scan.bytes ?: return ThumbnailOutcome.Unavailable
+                    cacheBytes(bytes, lastModified, cacheFile, metaFile)
+                }
+                "rar", "cbr" -> {
+                    if (RarSupport.isEncrypted(file)) return ThumbnailOutcome.Encrypted
+                    val bytes = when (RarSupport.detectVersion(file)) {
+                        RarVersion.RAR4 -> extractFirstImageFromRar(file)
+                        else            -> RarSupport.extractFirstImageRar5(file)
+                    } ?: return ThumbnailOutcome.Unavailable
+                    cacheBytes(bytes, lastModified, cacheFile, metaFile)
+                }
+                "7z" -> {
+                    if (ArchiveScanner.is7zEncrypted(file)) return ThumbnailOutcome.Encrypted
+                    val bytes = extractFirstImageFrom7z(file) ?: return ThumbnailOutcome.Unavailable
+                    cacheBytes(bytes, lastModified, cacheFile, metaFile)
+                }
+                "pdf" -> {
+                    val bitmap = try {
+                        renderFirstPdfPage(file)
+                    } catch (e: SecurityException) {
+                        return ThumbnailOutcome.Encrypted
+                    } ?: return ThumbnailOutcome.Unavailable
+                    cacheBitmap(bitmap, lastModified, cacheFile, metaFile)
+                }
+                else -> ThumbnailOutcome.Unavailable
             }
         } catch (e: Exception) {
-            null
+            ThumbnailOutcome.Unavailable
         }
     }
 
@@ -239,15 +284,26 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
         lastModified: Long,
         cacheFile: File,
         metaFile: File
-    ): File? {
+    ): ThumbnailOutcome {
         return try {
-            val imageBytes = file.readBytes()
-            generateCacheFromBytes(imageBytes, cacheFile)?.also {
-                metaFile.writeText(lastModified.toString())
-            }
+            cacheBytes(file.readBytes(), lastModified, cacheFile, metaFile)
         } catch (e: Exception) {
-            null
+            ThumbnailOutcome.Unavailable
         }
+    }
+
+    /** バイト列からサムネイルを生成し、成功したらmetaFileに更新日時を記録する */
+    private fun cacheBytes(bytes: ByteArray, lastModified: Long, cacheFile: File, metaFile: File): ThumbnailOutcome {
+        val result = generateCacheFromBytes(bytes, cacheFile) ?: return ThumbnailOutcome.Unavailable
+        metaFile.writeText(lastModified.toString())
+        return ThumbnailOutcome.Ready(result)
+    }
+
+    /** デコード済みBitmapからサムネイルを生成し、成功したらmetaFileに更新日時を記録する */
+    private fun cacheBitmap(bitmap: Bitmap, lastModified: Long, cacheFile: File, metaFile: File): ThumbnailOutcome {
+        val result = generateCacheFromBitmap(bitmap, cacheFile) ?: return ThumbnailOutcome.Unavailable
+        metaFile.writeText(lastModified.toString())
+        return ThumbnailOutcome.Ready(result)
     }
 
     private fun generateCacheFromBytes(imageBytes: ByteArray, cacheFile: File): File? {
@@ -263,6 +319,21 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
             // 2回目：inSampleSizeで縮小しながら実際にデコード
             val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
             val original  = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, decodeOptions) ?: return null
+            val thumbnail = createScaledBitmap(original, TARGET_WIDTH, TARGET_HEIGHT)
+            original.recycle()
+            FileOutputStream(cacheFile).use { out ->
+                thumbnail.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            }
+            thumbnail.recycle()
+            cacheFile
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** デコード済みBitmap（PDFページ等）から、既存のJPEGキャッシュと同じダウンスケール処理でサムネイルを保存する */
+    private fun generateCacheFromBitmap(original: Bitmap, cacheFile: File): File? {
+        return try {
             val thumbnail = createScaledBitmap(original, TARGET_WIDTH, TARGET_HEIGHT)
             original.recycle()
             FileOutputStream(cacheFile).use { out ->
@@ -360,6 +431,14 @@ private fun readBounded(input: java.io.InputStream, cap: Long): ByteArray? {
 }
 
 /**
+ * ZIPスキャン1回分の結果。
+ * [encrypted]は、走査した画像エントリの中に暗号化されたものが1件でもあったか
+ * （ArchiveScanner.scanZipのgeneralPurposeBit.usesEncryption()判定と同じ考え方）。
+ * 暗号化エントリはバイト列を読まず（読んでも復号されない生データにしかならないため）スキップする。
+ */
+private data class ZipCoverScan(val bytes: ByteArray?, val encrypted: Boolean)
+
+/**
  * ZIPから「名前順で一番若い画像」（＝表紙）を１枚だけ取り出す。
  *
  * 【重要】以前は全ページをメモリに溜めてから名前順で選んでいたため、
@@ -371,7 +450,8 @@ private fun readBounded(input: java.io.InputStream, cap: Long): ByteArray? {
  */
 private fun pickCoverImage(
     openStream: (charsetName: String) -> ZipArchiveInputStream
-): ByteArray? {
+): ZipCoverScan {
+    var anyEncrypted = false
     for (cs in listOf(kotlin.text.Charsets.UTF_8.name(), "Shift_JIS")) {
         var bestName : String? = null
         var bestBytes: ByteArray? = null
@@ -385,13 +465,18 @@ private fun pickCoverImage(
                     val ext  = name.substringAfterLast(".").lowercase()
                     if (!entry.isDirectory && ext in IMAGE_EXTENSIONS) {
                         examined++
-                        val current = bestName
-                        // 名前順でこれまでより若ければ、この1枚だけ読む（上限付き）
-                        if (current == null || name.lowercase() < current) {
-                            val bytes = readBounded(zis, MAX_THUMBNAIL_SOURCE_BYTES)
-                            if (bytes != null && bytes.isNotEmpty()) {
-                                bestName  = name.lowercase()
-                                bestBytes = bytes
+                        if (entry.generalPurposeBit.usesEncryption()) {
+                            // 暗号化エントリは復号できないため読み飛ばす（呼び出し元にはencryptedで伝える）
+                            anyEncrypted = true
+                        } else {
+                            val current = bestName
+                            // 名前順でこれまでより若ければ、この1枚だけ読む（上限付き）
+                            if (current == null || name.lowercase() < current) {
+                                val bytes = readBounded(zis, MAX_THUMBNAIL_SOURCE_BYTES)
+                                if (bytes != null && bytes.isNotEmpty()) {
+                                    bestName  = name.lowercase()
+                                    bestBytes = bytes
+                                }
                             }
                         }
                     }
@@ -399,17 +484,17 @@ private fun pickCoverImage(
                 }
             }
         }
-        if (bestBytes != null) return bestBytes
+        if (bestBytes != null) return ZipCoverScan(bestBytes, encrypted = false)
     }
-    return null
+    return ZipCoverScan(null, encrypted = anyEncrypted)
 }
 
-private fun extractFirstImageFromZipBytes(bytes: ByteArray): ByteArray? =
+private fun extractFirstImageFromZipBytes(bytes: ByteArray): ZipCoverScan =
     pickCoverImage { cs ->
         ZipArchiveInputStream(ByteArrayInputStream(bytes), cs, false, true)
     }
 
-private fun extractFirstImageFromZip(file: File): ByteArray? =
+private fun extractFirstImageFromZip(file: File): ZipCoverScan =
     // Shift-JISエントリ名に対応するため Apache Commons Compress を使用
     pickCoverImage { cs ->
         ZipArchiveInputStream(FileInputStream(file), cs, false, true)
@@ -427,3 +512,51 @@ private fun extractFirstImageFromRar(file: File): ByteArray? {
             }
     }
 }
+
+/**
+ * 7zから「名前順で一番若い画像」（＝表紙）を１枚だけ取り出す。
+ * 7zは先頭に完全なヘッダー（エントリ一覧）を持つため、ZIP/RAR5と違い
+ * SevenZFile#getEntries()で一覧を先に取得してからgetInputStream()でランダムアクセスできる
+ * （2パス方式にする必要が無い）。
+ */
+private fun extractFirstImageFrom7z(file: File): ByteArray? {
+    return SevenZFile.builder().setFile(file).get().use { sevenZFile ->
+        val cover = sevenZFile.entries
+            .filter { !it.isDirectory && it.hasStream() && (it.name ?: "").substringAfterLast(".").lowercase() in IMAGE_EXTENSIONS }
+            .minByOrNull { (it.name ?: "").lowercase() }
+            ?: return@use null
+        sevenZFile.getInputStream(cover).use { input ->
+            readBounded(input, MAX_THUMBNAIL_SOURCE_BYTES)
+        }
+    }
+}
+
+/**
+ * PDFの1ページ目をレンダリングする。
+ * パスワード付きPDFはPdfRenderer生成時にSecurityExceptionを投げる
+ * （ViewerViewModel.isPdfPasswordErrorと同じ挙動）ため、呼び出し元でcatchして暗号化扱いにする。
+ */
+private fun renderFirstPdfPage(file: File): Bitmap? {
+    val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+    var result: Bitmap? = null
+    PdfRenderer(pfd).use { renderer ->
+        if (renderer.pageCount == 0) return@use
+        renderer.openPage(0).use { page ->
+            val scale = minOf(
+                THUMBNAIL_PDF_TARGET_WIDTH.toFloat()  / page.width,
+                THUMBNAIL_PDF_TARGET_HEIGHT.toFloat() / page.height
+            )
+            val width  = (page.width  * scale).toInt().coerceAtLeast(1)
+            val height = (page.height * scale).toInt().coerceAtLeast(1)
+            val bitmap = createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            bitmap.eraseColor(Color.WHITE)
+            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            result = bitmap
+        }
+    }
+    return result
+}
+
+/** PDFページ描画時の目標サイズ（サムネイル目標サイズの2倍で描画し、後段でTARGET_WIDTH/HEIGHTへ収める） */
+private const val THUMBNAIL_PDF_TARGET_WIDTH  = 480
+private const val THUMBNAIL_PDF_TARGET_HEIGHT = 680
