@@ -2,6 +2,7 @@ package com.kamneko88.comicveil.ui.home
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import com.kamneko88.comicveil.R
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -86,9 +87,15 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import android.graphics.BitmapShader
+import android.graphics.Shader
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -1980,7 +1987,7 @@ fun CompactFileListItem(
  * アダプティブグリッドと違い列数・タイル幅を呼び出し側で確定させているので、
  * 棚板が必ず本の行の真下に揃う。
  *
- * 段ごとに壁面の色味をわずかに変えて単調さを避けている（rowIndexで交互に切り替え）。
+ * 壁面は木目テクスチャ（shelf_wood）をタイル張りして描画する。
  */
 @Composable
 private fun <T> ShelfRow(
@@ -1992,10 +1999,15 @@ private fun <T> ShelfRow(
     spacing: Dp,
     itemContent: @Composable (T) -> Unit
 ) {
-    val wallColors = if (rowIndex % 2 == 0) {
-        listOf(Color(0xFF8A5A34), Color(0xFF6B4327))
-    } else {
-        listOf(Color(0xFF7E5230), Color(0xFF603D22))
+    val woodBitmap = ImageBitmap.imageResource(id = R.drawable.shelf_wood)
+    val woodBrush = remember(woodBitmap) {
+        ShaderBrush(
+            BitmapShader(
+                woodBitmap.asAndroidBitmap(),
+                Shader.TileMode.REPEAT,
+                Shader.TileMode.REPEAT
+            )
+        )
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -2003,7 +2015,7 @@ private fun <T> ShelfRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Brush.verticalGradient(wallColors))
+                .background(woodBrush)
                 .padding(horizontal = sidePadding, vertical = 10.dp),
             verticalAlignment       = Alignment.Bottom,
             horizontalArrangement   = Arrangement.spacedBy(spacing)
