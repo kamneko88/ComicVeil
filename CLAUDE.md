@@ -96,6 +96,11 @@ Android向けコミックビューアです。ローカルフォルダに加え�
 - `spec.md` は公開リポジトリのトラッキング対象（`_local/`には移動しない）
 - GitHub: `kamneko88/ComicVeil`（**Public**。README.md / LICENSE / CONTRIBUTING.md / spec.md 整備済み）
 - パッケージ名: `com.kamneko88.comicveil`
+- **Windowsのプログラム（Java/Python/.exe/gradlew等）へパスを文字列の中に埋めて渡すときは、ドライブ名つき（`D:/Data/...`）で書くこと。**
+  Git Bash上で`/d/Data/...`の形は、単独の引数ならパス変換されるが、他の文字列の中に埋め込むと変換されず
+  `D:\d\Data\...`という誤った場所に書かれる。エラーは出ない（回覧板T-033。2026-09-27時点、本プロジェクトの
+  ソース内に該当パターン〔`--args`・`ProcessBuilder`〕は無いことを確認済みだが、今後ヘッドレスでパスを
+  Windowsプログラムへ渡す工程を追加する際は必ず守ること）
 
 ---
 
