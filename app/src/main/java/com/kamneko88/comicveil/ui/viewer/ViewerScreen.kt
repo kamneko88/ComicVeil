@@ -802,7 +802,13 @@ fun ViewerScreen(
                             Spacer(Modifier.height(8.dp))
 
                             Button(
-                                onClick = { slideshowActive = !slideshowActive },
+                                onClick = {
+                                    val startingNow = !slideshowActive
+                                    slideshowActive = startingNow
+                                    if (startingNow) {
+                                        menuVisible = false
+                                    }
+                                },
                                 shape   = RoundedCornerShape(28.dp),
                                 colors  = ButtonDefaults.buttonColors(
                                     containerColor = Color.Black.copy(alpha = 0.6f),
