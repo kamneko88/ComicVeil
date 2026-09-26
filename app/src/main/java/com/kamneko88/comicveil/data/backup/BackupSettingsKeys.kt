@@ -43,6 +43,7 @@ object BackupSettingsKeys {
         KeyDef("shelf_show_title", Kind.BOOLEAN),
         KeyDef("viewer_brightness", Kind.FLOAT),
         KeyDef("page_cache_limit", Kind.ENUM, AppPrefs.PageCacheLimit.entries.map { it.name }.toSet()),
+        KeyDef("slideshow_interval", Kind.ENUM, AppPrefs.SlideshowInterval.entries.map { it.name }.toSet()),
         KeyDef("nas_stream_cache_limit", Kind.ENUM, AppPrefs.NasStreamCacheLimit.entries.map { it.name }.toSet()),
         KeyDef("app_theme", Kind.ENUM, AppPrefs.AppTheme.entries.map { it.name }.toSet())
     )

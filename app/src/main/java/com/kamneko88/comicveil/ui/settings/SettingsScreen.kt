@@ -101,6 +101,7 @@ fun SettingsScreen(
     var backgroundColor   by remember { mutableStateOf(appPrefs.backgroundColor) }
     var pageTurnAnimation by remember { mutableStateOf(appPrefs.pageTurnAnimation) }
     var shelfShowTitle    by remember { mutableStateOf(appPrefs.shelfShowTitle) }
+    var slideshowInterval by remember { mutableStateOf(appPrefs.slideshowInterval) }
 
     // ── ファイル・フォルダ ────────────────────────────────────────────────
     var homeFolderType     by remember { mutableStateOf(appPrefs.homeFolderType) }
@@ -456,6 +457,25 @@ fun SettingsScreen(
                     appPrefs.shelfShowTitle = it
                 }
             )
+
+            SettingsDivider()
+
+            // ── スライドショー ──────────────────────────────
+            SettingsItemHeader(
+                title       = "スライドショー",
+                description = "自動でページを送る間隔"
+            )
+            AppPrefs.SlideshowInterval.entries.forEach { interval ->
+                SettingsRadioItem(
+                    label       = interval.label,
+                    description = "",
+                    selected    = slideshowInterval == interval,
+                    onSelect    = {
+                        slideshowInterval          = interval
+                        appPrefs.slideshowInterval = interval
+                    }
+                )
+            }
 
             Spacer(Modifier.height(24.dp))
 

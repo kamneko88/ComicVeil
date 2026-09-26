@@ -230,6 +230,25 @@ class AppPrefs(context: Context) {
         }.getOrDefault(PageCacheLimit.GB1)
         set(value) = prefs.edit { putString(KEY_PAGE_CACHE_LIMIT, value.name) }
 
+    // ─── スライドショーの自動送り間隔 ───────────────────────────────────────
+
+    enum class SlideshowInterval(val seconds: Int, val label: String) {
+        SEC3(3, "3秒"),
+        SEC5(5, "5秒"),
+        SEC8(8, "8秒"),
+        SEC15(15, "15秒"),
+        SEC30(30, "30秒")
+    }
+
+    var slideshowInterval: SlideshowInterval
+        get() = runCatching {
+            SlideshowInterval.valueOf(
+                prefs.getString(KEY_SLIDESHOW_INTERVAL, SlideshowInterval.SEC8.name)
+                    ?: SlideshowInterval.SEC8.name
+            )
+        }.getOrDefault(SlideshowInterval.SEC8)
+        set(value) = prefs.edit { putString(KEY_SLIDESHOW_INTERVAL, value.name) }
+
     // ─── NASストリーミングキャッシュの上限 ─────────────────────────────────
 
     /** nas_stream_cache の合計サイズがこれを超えたら、古い順に本のディレクトリごと削除する */
@@ -332,6 +351,7 @@ class AppPrefs(context: Context) {
         private const val KEY_SHELF_SHOW_TITLE       = "shelf_show_title"
         private const val KEY_VIEWER_BRIGHTNESS      = "viewer_brightness"
         private const val KEY_PAGE_CACHE_LIMIT       = "page_cache_limit"
+        private const val KEY_SLIDESHOW_INTERVAL     = "slideshow_interval"
         private const val KEY_NAS_STREAM_CACHE_LIMIT = "nas_stream_cache_limit"
         private const val KEY_APP_THEME              = "app_theme"
         private const val KEY_LOCK_MODE              = "lock_mode"

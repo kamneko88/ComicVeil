@@ -60,6 +60,8 @@ import com.composables.icons.lucide.BookOpen
 import com.composables.icons.lucide.Bookmark
 import com.composables.icons.lucide.GalleryHorizontal
 import com.composables.icons.lucide.Lock
+import com.composables.icons.lucide.Pause
+import com.composables.icons.lucide.Play
 import com.composables.icons.lucide.RotateCcw
 import com.composables.icons.lucide.Smartphone
 import com.composables.icons.lucide.Settings
@@ -184,6 +186,12 @@ fun ViewerScreen(
     var showPageStrip        by remember { mutableStateOf(false) }
     var orientationLocked    by remember { mutableStateOf(false) }
     var showSetCoverDialog   by remember { mutableStateOf(false) }
+
+    // スライドショー（自動ページ送り）。slideshowAutoTargetPageは、
+    // 自身の自動送りで移動した先のページ番号を覚えておき、それ以外の理由で
+    // ページ番号が変わった（スワイプ・スライダー等のユーザー操作）ときだけ自動停止するための目印。
+    var slideshowActive         by remember { mutableStateOf(false) }
+    var slideshowAutoTargetPage by remember { mutableIntStateOf(-1) }
 
     // 明るさを調整したら、少しして自動で引っ込める。
     // 出しっぱなしだとページ移動スライダーと近くて誤タップのもとになるし、画面もうるさい。
@@ -322,7 +330,10 @@ fun ViewerScreen(
         }
     }
 
-    BackHandler { onClose() }
+    BackHandler {
+        slideshowActive = false
+        onClose()
+    }
 
     LaunchedEffect(Unit) {
         viewModel.pageLimitEvent.collect { event ->
@@ -502,6 +513,37 @@ fun ViewerScreen(
             val currentPageIndex = spreads.getOrNull(pagerState.currentPage)?.firstOrNull() ?: 0
 
             LaunchedEffect(pagerState.currentPage) { viewModel.savePage(currentPageIndex) }
+
+            // スライドショー再生中に、自身の自動送り以外の理由でページが変わったら停止する
+            // （スワイプ・タップ送り・スライダー・ページ移動ストリップ等、手段を問わず一律で検知できる）
+            LaunchedEffect(pagerState.currentPage) {
+                if (slideshowActive && pagerState.currentPage != slideshowAutoTargetPage) {
+                    slideshowActive = false
+                }
+            }
+
+            // スライドショーの自動送りタイマー。メニューの表示/非表示とは独立して動作する。
+            LaunchedEffect(slideshowActive, appPrefs.slideshowInterval) {
+                if (!slideshowActive) return@LaunchedEffect
+                val intervalMs = appPrefs.slideshowInterval.seconds * 1000L
+                while (slideshowActive) {
+                    kotlinx.coroutines.delay(intervalMs)
+                    if (!slideshowActive) break
+                    val target = pagerState.currentPage + 1
+                    if (target > spreads.size - 1) {
+                        slideshowActive = false
+                        menuVisible = true
+                        break
+                    }
+                    slideshowAutoTargetPage = target
+                    pagerState.animateScrollToPage(target)
+                    if (target >= spreads.size - 1) {
+                        slideshowActive = false
+                        menuVisible = true
+                        break
+                    }
+                }
+            }
 
             var hasScrolled by remember { mutableStateOf(false) }
             LaunchedEffect(pagerState.isScrollInProgress) {
@@ -725,28 +767,58 @@ fun ViewerScreen(
                         )
                     }
 
-                    // 上部：本を閉じる（幅広のピルボタン）
+                    // 上部：本を閉じる（幅広のピルボタン）＋ スライドショー再生（2段目）
                     AnimatedVisibility(
                         visible  = menuVisible,
                         enter    = slideInVertically(tween(200)) { -it } + fadeIn(tween(200)),
                         exit     = slideOutVertically(tween(200)) { -it } + fadeOut(tween(200)),
                         modifier = Modifier.align(Alignment.TopCenter)
                     ) {
-                        Button(
-                            onClick = onClose,
-                            shape   = RoundedCornerShape(28.dp),
-                            colors  = ButtonDefaults.buttonColors(
-                                containerColor = Color.Black.copy(alpha = 0.6f),
-                                contentColor   = Color.White
-                            ),
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
+                                .fillMaxWidth()
                                 .statusBarsPadding()
                                 .padding(16.dp)
-                                .fillMaxWidth(0.85f)
-                                .height(52.dp)
                         ) {
-                            Icon(Lucide.ArrowLeft, contentDescription = null)
-                            Text(text = "  本を閉じる", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Button(
+                                onClick = {
+                                    slideshowActive = false
+                                    onClose()
+                                },
+                                shape   = RoundedCornerShape(28.dp),
+                                colors  = ButtonDefaults.buttonColors(
+                                    containerColor = Color.Black.copy(alpha = 0.6f),
+                                    contentColor   = Color.White
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth(0.85f)
+                                    .height(52.dp)
+                            ) {
+                                Icon(Lucide.ArrowLeft, contentDescription = null)
+                                Text(text = "  本を閉じる", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            Spacer(Modifier.height(8.dp))
+
+                            Button(
+                                onClick = { slideshowActive = !slideshowActive },
+                                shape   = RoundedCornerShape(28.dp),
+                                colors  = ButtonDefaults.buttonColors(
+                                    containerColor = Color.Black.copy(alpha = 0.6f),
+                                    contentColor   = Color.White
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth(0.85f)
+                                    .height(52.dp)
+                            ) {
+                                Icon(if (slideshowActive) Lucide.Pause else Lucide.Play, contentDescription = null)
+                                Text(
+                                    text = if (slideshowActive) "  ❚❚ 停止" else "  ▶ スライドショー再生",
+                                    fontSize   = 16.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
 
