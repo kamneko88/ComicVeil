@@ -12,8 +12,8 @@ android {
         applicationId = "com.kamneko88.comicveil"
         minSdk = 26
         targetSdk = 36
-        versionCode = 98
-        versionName = "1.18.0"
+        versionCode = 99
+        versionName = "1.18.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
