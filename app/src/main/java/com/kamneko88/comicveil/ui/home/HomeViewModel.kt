@@ -13,6 +13,7 @@ import com.kamneko88.comicveil.data.calcDirSize
 import com.kamneko88.comicveil.data.isFullyCached
 import com.kamneko88.comicveil.data.selectDirsToEvict
 import com.kamneko88.comicveil.data.FileItem
+import com.kamneko88.comicveil.data.FileItemType
 import com.kamneko88.comicveil.data.ImageFolderScanner
 import com.kamneko88.comicveil.data.canonicalStatusKey
 import com.kamneko88.comicveil.data.FormatDetector
@@ -727,6 +728,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun confirmOpenImageFolder() {
         val fileItem = _imageFolderDialogState.value ?: return
         _imageFolderDialogState.value = null
+
+        if (fileItem.isNas) {
+            openNasImageFolder(fileItem)
+            return
+        }
+
         val file = fileItem.file ?: return
         val folder = file.parentFile ?: return
         viewModelScope.launch {
@@ -734,6 +741,77 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             val startIndex = images.indexOfFirst { it.absolutePath == file.absolutePath }.coerceAtLeast(0)
             val navKey = "${folder.absolutePath}${ViewerViewModel.PAGE_MARKER_PUBLIC}$startIndex"
             _navigateEvent.tryEmit(navKey)
+        }
+    }
+
+    /**
+     * NASの非圧縮画像フォルダ（親フォルダ内の画像ファイル一覧）をキャッシュへダウンロードしてから開く。
+     * 既存のNASコミック（アーカイブ）の「ダウンロードしてから開く」方式
+     * （[downloadThenOpenNasComic]）と同じ_downloadProgress・downloadJobに乗せる。
+     * 画像は複数枚あるため、進捗は全ファイル合計のバイト数で表示する。
+     */
+    private fun openNasImageFolder(fileItem: FileItem) {
+        val parentNasPath = fileItem.nasPath.substringBeforeLast("/", "")
+        val server = fileItem.nasServer ?: run {
+            _nasError.value = "リモートサーバー情報がありません"
+            return
+        }
+        val bookDir = NasStreamCache.bookDir(getApplication(), parentNasPath)
+
+        downloadJob?.cancel()
+        downloadJob = viewModelScope.launch {
+            val images = withContext(Dispatchers.IO) {
+                val entries = smbRepository.listDirectory(server, parentNasPath)
+                ImageFolderScanner.sortNasImages(entries.filter { it.type == FileItemType.IMAGE_FILE })
+            }
+
+            if (NasStreamCache.isComplete(bookDir)) {
+                NasStreamCache.touchComplete(bookDir)
+            } else {
+                _downloadProgress.value = DownloadProgress(
+                    fileName   = fileItem.name,
+                    downloaded = 0L,
+                    total      = -1L
+                )
+                try {
+                    val totalBytes = images.sumOf { it.size }
+                    var doneBytes = 0L
+                    for (image in images) {
+                        smbRepository.downloadFile(
+                            server     = server,
+                            nasPath    = image.nasPath,
+                            destFile   = File(bookDir, image.name),
+                            onProgress = { downloaded, _ ->
+                                _downloadProgress.value = DownloadProgress(
+                                    fileName   = fileItem.name,
+                                    downloaded = doneBytes + downloaded,
+                                    total      = totalBytes
+                                )
+                            }
+                        )
+                        doneBytes += image.size
+                    }
+                    _downloadProgress.value = null
+                    NasStreamCache.markComplete(bookDir)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    _downloadProgress.value = null
+                    runCatching { bookDir.deleteRecursively() }
+                    downloadJob = null
+                    return@launch
+                } catch (e: Exception) {
+                    _downloadProgress.value = null
+                    _nasError.value = "接続に失敗しました\n${e.message}"
+                    runCatching { bookDir.deleteRecursively() }
+                    downloadJob = null
+                    return@launch
+                }
+            }
+
+            val startIndex = images.indexOfFirst { it.nasPath == fileItem.nasPath }.coerceAtLeast(0)
+            val navKey = "${bookDir.absolutePath}${ViewerViewModel.PAGE_MARKER_PUBLIC}$startIndex"
+            _navigateEvent.tryEmit(navKey)
+            downloadJob = null
+            evictNasStreamCacheIfNeeded()
         }
     }
 

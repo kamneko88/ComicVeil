@@ -1,5 +1,6 @@
 package com.kamneko88.comicveil.data
 
+import com.kamneko88.comicveil.data.nas.NasServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -68,5 +69,28 @@ class ImageFolderScannerTest {
         File(root, "sub2").mkdirs()
 
         assertEquals(emptyList<File>(), ImageFolderScanner.scan(root))
+    }
+
+    private val fakeServer = NasServer(
+        displayName = "test",
+        host        = "test-host",
+        username    = "user",
+        password    = "pass"
+    )
+
+    private fun nasImage(name: String): FileItem = FileItem.fromNas(
+        name        = name,
+        nasPath     = "folder/$name",
+        isDirectory = false,
+        size        = 1L,
+        server      = fakeServer
+    )
+
+    @Test
+    fun `sortNasImages sorts in natural order regardless of input order`() {
+        val items = listOf(nasImage("page2.jpg"), nasImage("page1.jpg"), nasImage("page10.jpg"))
+
+        val result = ImageFolderScanner.sortNasImages(items).map { it.name }
+        assertEquals(listOf("page1.jpg", "page2.jpg", "page10.jpg"), result)
     }
 }

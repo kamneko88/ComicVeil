@@ -1865,14 +1865,14 @@ private fun handleFileClick(
         }
         fileItem.isComic -> viewModel.onComicTapped(fileItem)
         fileItem.type == FileItemType.IMAGE_FILE &&
-            fileItem.file != null &&
+            (fileItem.file != null || fileItem.isNas) &&
             fileItem.extension.lowercase() in IMAGE_FILE_EXTENSIONS -> {
             viewModel.onImageFileTapped(fileItem)
         }
     }
 }
 
-/** 非圧縮画像フォルダとして開ける拡張子（大文字小文字問わず）。NAS・SAF直接閲覧はスコープ外のため対象外 */
+/** 非圧縮画像フォルダとして開ける拡張子（大文字小文字問わず）。SAF直接閲覧はスコープ外のため対象外 */
 private val IMAGE_FILE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
 
 @OptIn(ExperimentalFoundationApi::class)

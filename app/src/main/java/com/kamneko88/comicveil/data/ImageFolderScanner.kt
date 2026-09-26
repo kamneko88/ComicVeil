@@ -20,4 +20,8 @@ object ImageFolderScanner {
     /** 拡張子が対象の画像形式か（大文字小文字問わず） */
     fun isImage(name: String): Boolean =
         name.substringAfterLast(".", "").lowercase() in IMAGE_EXTENSIONS
+
+    /** NASのフォルダ一覧（FileItem）を自然順ソートして返す */
+    fun sortNasImages(items: List<FileItem>): List<FileItem> =
+        items.sortedWith(compareBy(NaturalOrder.COMPARATOR) { it.name })
 }
