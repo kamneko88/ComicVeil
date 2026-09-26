@@ -7,11 +7,14 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.KeyEvent
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -19,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
@@ -37,6 +41,7 @@ import com.kamneko88.comicveil.ui.history.HistoryScreen
 import com.kamneko88.comicveil.ui.lock.AppLockState
 import com.kamneko88.comicveil.ui.lock.LockScreen
 import com.kamneko88.comicveil.ui.lock.PinSetupScreen
+import com.kamneko88.comicveil.ui.lock.shouldRelockOnResume
 import com.kamneko88.comicveil.ui.settings.SettingsScreen
 import com.kamneko88.comicveil.ui.theme.ComicVeilTheme
 import com.kamneko88.comicveil.ui.transfer.TransferScreen
@@ -136,8 +141,9 @@ fun ComicVeilApp(
     val homeViewModel: com.kamneko88.comicveil.ui.home.HomeViewModel = viewModel()
 
     // ─── アプリロック ───────────────────────────────────────────────────
-    // バックグラウンドに一度でも行ったら再ロックする。ProcessLifecycleOwnerで
-    // アプリ全体（個々のActivityではなく）のフォアグラウンド/バックグラウンドを監視する。
+    // バックグラウンドに入った時刻を記録し、フォアグラウンド復帰時に猶予期間（5分）を
+    // 超えていた場合のみ再ロックする。ProcessLifecycleOwnerでアプリ全体
+    // （個々のActivityではなく）のフォアグラウンド/バックグラウンドを監視する。
     val lockContext = LocalContext.current
     val appPrefs = remember { AppPrefs(lockContext) }
     var locked by remember {
@@ -145,25 +151,30 @@ fun ComicVeilApp(
     }
     DisposableEffect(Unit) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP && appPrefs.lockMode != AppPrefs.LockMode.OFF) {
-                AppLockState.isUnlocked = false
-                locked = true
+            when (event) {
+                Lifecycle.Event.ON_STOP -> {
+                    if (appPrefs.lockMode != AppPrefs.LockMode.OFF) {
+                        AppLockState.backgroundedAt = System.currentTimeMillis()
+                    }
+                }
+                Lifecycle.Event.ON_START -> {
+                    if (appPrefs.lockMode != AppPrefs.LockMode.OFF && AppLockState.isUnlocked &&
+                        shouldRelockOnResume(AppLockState.backgroundedAt, System.currentTimeMillis())
+                    ) {
+                        AppLockState.isUnlocked = false
+                        locked = true
+                    }
+                    AppLockState.backgroundedAt = null
+                }
+                else -> {}
             }
         }
         ProcessLifecycleOwner.get().lifecycle.addObserver(observer)
         onDispose { ProcessLifecycleOwner.get().lifecycle.removeObserver(observer) }
     }
 
-    if (locked) {
-        LockScreen(
-            appPrefs   = appPrefs,
-            onUnlocked = {
-                AppLockState.isUnlocked = true
-                locked = false
-            }
-        )
-        return
-    }
+    // ロック中は裏のNavHostへの戻る操作をブロックする（何もしない）
+    BackHandler(enabled = locked) { }
 
     // 他アプリからの Intentファイルを受け取って直接ビューワーを起動
     LaunchedEffect(intent) {
@@ -195,94 +206,108 @@ fun ComicVeilApp(
         }
     }
 
-    NavHost(
-        navController    = navController,
-        startDestination = "home"
-    ) {
-        composable("home") {
-            HomeScreen(
-                navController     = navController,
-                viewModel         = homeViewModel,
-                transferViewModel = transferViewModel
-            )
-        }
+    Box(modifier = Modifier.fillMaxSize()) {
+        NavHost(
+            navController    = navController,
+            startDestination = "home"
+        ) {
+            composable("home") {
+                HomeScreen(
+                    navController     = navController,
+                    viewModel         = homeViewModel,
+                    transferViewModel = transferViewModel
+                )
+            }
 
-        composable(
-            route     = "viewer/{filePath}",
-            arguments = listOf(
-                navArgument("filePath") { type = NavType.StringType }
-            )
-        ) { backStackEntry ->
-            val encodedPath = backStackEntry.arguments?.getString("filePath") ?: ""
-            val filePath    = URLDecoder.decode(encodedPath, "UTF-8")
-            // ビューワー（実際に読む画面）はアプリ全体のテーマ設定に関わらず常にダーク固定
-            ComicVeilTheme(darkTheme = true) {
-                ViewerScreen(
-                    filePath       = filePath,
-                    onClose        = { navController.popBackStack() },
-                    onOpenSettings = { navController.navigate("settings") }
+            composable(
+                route     = "viewer/{filePath}",
+                arguments = listOf(
+                    navArgument("filePath") { type = NavType.StringType }
+                )
+            ) { backStackEntry ->
+                val encodedPath = backStackEntry.arguments?.getString("filePath") ?: ""
+                val filePath    = URLDecoder.decode(encodedPath, "UTF-8")
+                // ビューワー（実際に読む画面）はアプリ全体のテーマ設定に関わらず常にダーク固定
+                ComicVeilTheme(darkTheme = true) {
+                    ViewerScreen(
+                        filePath       = filePath,
+                        onClose        = { navController.popBackStack() },
+                        onOpenSettings = { navController.navigate("settings") }
+                    )
+                }
+            }
+
+            composable(
+                route     = "volumes/{archivePath}",
+                arguments = listOf(
+                    navArgument("archivePath") { type = NavType.StringType }
+                )
+            ) { backStackEntry ->
+                val encodedPath = backStackEntry.arguments?.getString("archivePath") ?: ""
+                val archivePath = URLDecoder.decode(encodedPath, "UTF-8")
+                ArchiveVolumeScreen(
+                    archivePath   = archivePath,
+                    navController = navController,
+                    onClose       = { navController.popBackStack() }
+                )
+            }
+
+            composable("settings") {
+                SettingsScreen(
+                    viewModel              = homeViewModel,
+                    onClose                = { navController.popBackStack() },
+                    onNavigateToLockSetup  = { activate -> navController.navigate("lock_setup/$activate") },
+                    onThemeChange          = onThemeChange
+                )
+            }
+
+            composable(
+                route     = "lock_setup/{activate}",
+                arguments = listOf(navArgument("activate") { type = NavType.BoolType })
+            ) { backStackEntry ->
+                val activate = backStackEntry.arguments?.getBoolean("activate") ?: false
+                PinSetupScreen(
+                    appPrefs           = appPrefs,
+                    activateLockOnSave = activate,
+                    onDone             = { navController.popBackStack() },
+                    onCancel           = { navController.popBackStack() }
+                )
+            }
+
+            composable("history") {
+                HistoryScreen(navController = navController)
+            }
+
+            composable("backup") {
+                BackupScreen(onClose = { navController.popBackStack() })
+            }
+
+            composable(
+                route     = "transfer/{folderName}",
+                arguments = listOf(
+                    navArgument("folderName") { type = NavType.StringType }
+                )
+            ) { backStackEntry ->
+                val encoded    = backStackEntry.arguments?.getString("folderName") ?: ""
+                val folderName = URLDecoder.decode(encoded, "UTF-8")
+                    .let { if (it == "home") null else it.ifEmpty { null } }
+                TransferScreen(
+                    viewModel      = transferViewModel,
+                    fromFolderName = folderName,
+                    onClose        = { navController.popBackStack() }
                 )
             }
         }
 
-        composable(
-            route     = "volumes/{archivePath}",
-            arguments = listOf(
-                navArgument("archivePath") { type = NavType.StringType }
-            )
-        ) { backStackEntry ->
-            val encodedPath = backStackEntry.arguments?.getString("archivePath") ?: ""
-            val archivePath = URLDecoder.decode(encodedPath, "UTF-8")
-            ArchiveVolumeScreen(
-                archivePath   = archivePath,
-                navController = navController,
-                onClose       = { navController.popBackStack() }
-            )
-        }
-
-        composable("settings") {
-            SettingsScreen(
-                viewModel              = homeViewModel,
-                onClose                = { navController.popBackStack() },
-                onNavigateToLockSetup  = { activate -> navController.navigate("lock_setup/$activate") },
-                onThemeChange          = onThemeChange
-            )
-        }
-
-        composable(
-            route     = "lock_setup/{activate}",
-            arguments = listOf(navArgument("activate") { type = NavType.BoolType })
-        ) { backStackEntry ->
-            val activate = backStackEntry.arguments?.getBoolean("activate") ?: false
-            PinSetupScreen(
-                appPrefs           = appPrefs,
-                activateLockOnSave = activate,
-                onDone             = { navController.popBackStack() },
-                onCancel           = { navController.popBackStack() }
-            )
-        }
-
-        composable("history") {
-            HistoryScreen(navController = navController)
-        }
-
-        composable("backup") {
-            BackupScreen(onClose = { navController.popBackStack() })
-        }
-
-        composable(
-            route     = "transfer/{folderName}",
-            arguments = listOf(
-                navArgument("folderName") { type = NavType.StringType }
-            )
-        ) { backStackEntry ->
-            val encoded    = backStackEntry.arguments?.getString("folderName") ?: ""
-            val folderName = URLDecoder.decode(encoded, "UTF-8")
-                .let { if (it == "home") null else it.ifEmpty { null } }
-            TransferScreen(
-                viewModel      = transferViewModel,
-                fromFolderName = folderName,
-                onClose        = { navController.popBackStack() }
+        // ロック中はNavHostの上にLockScreenを不透明な背景で重ねる（差し替えではなくオーバーレイ）。
+        // こうすることで裏のNavHost（ViewerScreenのページ位置等）が破棄されない。
+        if (locked) {
+            LockScreen(
+                appPrefs   = appPrefs,
+                onUnlocked = {
+                    AppLockState.isUnlocked = true
+                    locked = false
+                }
             )
         }
     }
