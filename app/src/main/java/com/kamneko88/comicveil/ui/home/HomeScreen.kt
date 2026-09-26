@@ -1,6 +1,5 @@
 package com.kamneko88.comicveil.ui.home
 
-import android.net.Uri
 import androidx.activity.compose.BackHandler
 import com.kamneko88.comicveil.R
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -93,6 +92,7 @@ import android.graphics.BlurMaskFilter
 import android.graphics.Paint
 import android.graphics.Shader
 import androidx.core.graphics.createBitmap
+import androidx.core.net.toUri
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -192,7 +192,7 @@ fun HomeScreen(
     val openDlFolder: () -> Unit = {
         val safUri = appPrefs.downloadFolderSafUri
         if (safUri != null) {
-            viewModel.loadSafFolder(Uri.parse(safUri), "DLフォルダ")
+            viewModel.loadSafFolder(safUri.toUri(), "DLフォルダ")
         } else {
             dlFolderNotConfigured = true
         }
