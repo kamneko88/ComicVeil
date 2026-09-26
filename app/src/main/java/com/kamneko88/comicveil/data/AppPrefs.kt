@@ -243,10 +243,10 @@ class AppPrefs(context: Context) {
     var slideshowInterval: SlideshowInterval
         get() = runCatching {
             SlideshowInterval.valueOf(
-                prefs.getString(KEY_SLIDESHOW_INTERVAL, SlideshowInterval.SEC8.name)
-                    ?: SlideshowInterval.SEC8.name
+                prefs.getString(KEY_SLIDESHOW_INTERVAL, SlideshowInterval.SEC3.name)
+                    ?: SlideshowInterval.SEC3.name
             )
-        }.getOrDefault(SlideshowInterval.SEC8)
+        }.getOrDefault(SlideshowInterval.SEC3)
         set(value) = prefs.edit { putString(KEY_SLIDESHOW_INTERVAL, value.name) }
 
     // ─── NASストリーミングキャッシュの上限 ─────────────────────────────────
