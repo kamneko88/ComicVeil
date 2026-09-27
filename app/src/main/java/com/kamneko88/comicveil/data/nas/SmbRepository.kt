@@ -186,6 +186,83 @@ class SmbRepository {
         }
     }
 
+    /** [downloadFiles]に渡すダウンロード対象1件分（NAS上のパス・保存先・サイズ）。 */
+    data class NasDownloadTarget(
+        val nasPath: String,
+        val destFile: File,
+        val size: Long
+    )
+
+    /**
+     * 複数ファイルを**1回のSMB接続**でまとめてダウンロードする。
+     *
+     * [downloadFile]をファイルの数だけ呼ぶと、呼び出しごとに接続・認証・共有マウントを
+     * やり直すことになり、ファイル数が多い（NASの非圧縮画像フォルダ等）場合に大幅な遅延が生じる。
+     * この関数は接続・共有マウントを1回だけ行い、その中でファイルを順番にダウンロードする。
+     *
+     * サイズは呼び出し側が一覧取得時に既に持っている値をそのまま使う（個別に再取得しない）。
+     * 進捗は全ファイル合計のダウンロード済みバイト数／合計バイト数で通知する。
+     */
+    suspend fun downloadFiles(
+        server: NasServer,
+        targets: List<NasDownloadTarget>,
+        onProgress: ((downloaded: Long, total: Long) -> Unit)? = null
+    ): Unit = withContext(Dispatchers.IO) {
+        val client = SMBClient()
+        try {
+            val connection = client.connect(server.host)
+            val auth = AuthenticationContext(
+                server.username,
+                server.password.toCharArray(),
+                null
+            )
+            val session = connection.authenticate(auth)
+            val share = session.connectShare(server.shareName) as DiskShare
+
+            val totalSize = targets.sumOf { it.size }
+            val buffer = ByteArray(256 * 1024)
+            var totalDownloaded = 0L
+            var lastReportedAt = 0L
+
+            for (target in targets) {
+                val smbPath = target.nasPath.replace("/", "\\")
+                val smbFile = share.openFile(
+                    smbPath,
+                    setOf(AccessMask.GENERIC_READ),
+                    null,
+                    setOf(SMB2ShareAccess.FILE_SHARE_READ),
+                    SMB2CreateDisposition.FILE_OPEN,
+                    null
+                )
+
+                target.destFile.parentFile?.mkdirs()
+
+                smbFile.inputStream.use { input ->
+                    FileOutputStream(target.destFile).use { output ->
+                        while (true) {
+                            if (!isActive) {
+                                throw CancellationException("ダウンロードがキャンセルされました")
+                            }
+                            val read = input.read(buffer)
+                            if (read == -1) break
+                            output.write(buffer, 0, read)
+                            totalDownloaded += read
+                            val now = System.currentTimeMillis()
+                            if (now - lastReportedAt >= 100L) {
+                                lastReportedAt = now
+                                onProgress?.invoke(totalDownloaded, totalSize)
+                            }
+                        }
+                    }
+                }
+            }
+            // 完了時は必ず最終値（100%）を通知する
+            onProgress?.invoke(totalDownloaded, totalSize)
+        } finally {
+            runCatching { client.close() }
+        }
+    }
+
     /**
      * サムネイル生成用に先頭部分だけ取得する
      * ZIPの先頭エントリは先頭部分にあるため、大部分のケースでサムネイル取得が可能

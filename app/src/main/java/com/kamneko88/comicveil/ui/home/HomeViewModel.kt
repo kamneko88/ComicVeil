@@ -774,23 +774,24 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     total      = -1L
                 )
                 try {
-                    val totalBytes = images.sumOf { it.size }
-                    var doneBytes = 0L
-                    for (image in images) {
-                        smbRepository.downloadFile(
-                            server     = server,
-                            nasPath    = image.nasPath,
-                            destFile   = File(bookDir, image.name),
-                            onProgress = { downloaded, _ ->
-                                _downloadProgress.value = DownloadProgress(
-                                    fileName   = fileItem.name,
-                                    downloaded = doneBytes + downloaded,
-                                    total      = totalBytes
-                                )
-                            }
+                    val targets = images.map { image ->
+                        SmbRepository.NasDownloadTarget(
+                            nasPath  = image.nasPath,
+                            destFile = File(bookDir, image.name),
+                            size     = image.size
                         )
-                        doneBytes += image.size
                     }
+                    smbRepository.downloadFiles(
+                        server     = server,
+                        targets    = targets,
+                        onProgress = { downloaded, total ->
+                            _downloadProgress.value = DownloadProgress(
+                                fileName   = fileItem.name,
+                                downloaded = downloaded,
+                                total      = total
+                            )
+                        }
+                    )
                     _downloadProgress.value = null
                     NasStreamCache.markComplete(bookDir)
                 } catch (e: kotlinx.coroutines.CancellationException) {
