@@ -7,6 +7,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -830,6 +832,7 @@ fun HomeScreen(
                     val available    = maxWidth - sidePadding * 2
                     val columns      = ((available + spacing) / (minTileWidth + spacing)).toInt().coerceAtLeast(2)
                     val tileWidth    = (available - spacing * (columns - 1)) / columns
+                    val compactTileWidth = tileWidth / 2
 
                     LazyColumn(
                         state    = listState,
@@ -870,62 +873,57 @@ fun HomeScreen(
                             }
                         }
 
-                        // リモートサーバーも本棚モードでは他の本と同じく棚に並べる
+                        // リモートサーバー・DLフォルダは、コミック本体より上に来る省スペースな1行にまとめる
+                        // （以前は通常タイルと同じ大きさの棚を1段以上占有していたため、初見でコミックが
+                        // 表示される位置が下がりすぎていた）
                         if (isRoot) {
-                            if (nasServers.isNotEmpty()) {
-                                item {
-                                    Text(
-                                        text     = "リモートサーバー",
-                                        style    = MaterialTheme.typography.labelMedium,
-                                        color    = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
-                                    )
-                                }
-                                itemsIndexed(nasServers.chunked(columns)) { rowIndex, rowItems ->
-                                    ShelfRow(
-                                        rowItems    = rowItems,
-                                        columns     = columns,
-                                        tileWidth   = tileWidth,
-                                        rowIndex    = rowIndex,
-                                        sidePadding = sidePadding,
-                                        spacing     = spacing
-                                    ) { server ->
-                                        val isServerSelected = server.id in selectedPaths
-                                        ShelfServerItem(
-                                            server         = server,
-                                            isEditMode     = isEditMode,
-                                            isSelected     = isServerSelected,
-                                            onToggleSelect = {
-                                                selectedPaths = if (isServerSelected)
-                                                    selectedPaths - server.id
-                                                else
-                                                    selectedPaths + server.id
-                                            },
-                                            onClick  = {
-                                                isEditMode    = false
-                                                selectedPaths = emptySet()
-                                                viewModel.navigateToNas(server)
-                                            },
-                                            onEdit   = { editingServer = server; showAddNasDialog = true },
-                                            onDelete = { viewModel.deleteNasServer(server.id) },
-                                            onTestConnection = { viewModel.testNasConnection(it) }
+                            item {
+                                Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                                    if (nasServers.isNotEmpty()) {
+                                        Text(
+                                            text     = "リモートサーバー",
+                                            style    = MaterialTheme.typography.labelMedium,
+                                            color    = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.padding(bottom = 4.dp)
                                         )
                                     }
-                                }
-                            }
-                            item {
-                                ShelfRow(
-                                    rowItems    = listOf(Unit),
-                                    columns     = columns,
-                                    tileWidth   = tileWidth,
-                                    rowIndex    = if (nasServers.isNotEmpty()) 1 else 0,
-                                    sidePadding = sidePadding,
-                                    spacing     = spacing
-                                ) {
-                                    DlFolderShelfItem(
-                                        enabled = !isEditMode,
-                                        onClick = openDlFolder
-                                    )
+                                    Row(
+                                        modifier              = Modifier
+                                            .fillMaxWidth()
+                                            .horizontalScroll(rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        nasServers.forEach { server ->
+                                            val isServerSelected = server.id in selectedPaths
+                                            Box(modifier = Modifier.width(compactTileWidth)) {
+                                                ShelfServerItem(
+                                                    server         = server,
+                                                    isEditMode     = isEditMode,
+                                                    isSelected     = isServerSelected,
+                                                    onToggleSelect = {
+                                                        selectedPaths = if (isServerSelected)
+                                                            selectedPaths - server.id
+                                                        else
+                                                            selectedPaths + server.id
+                                                    },
+                                                    onClick  = {
+                                                        isEditMode    = false
+                                                        selectedPaths = emptySet()
+                                                        viewModel.navigateToNas(server)
+                                                    },
+                                                    onEdit   = { editingServer = server; showAddNasDialog = true },
+                                                    onDelete = { viewModel.deleteNasServer(server.id) },
+                                                    onTestConnection = { viewModel.testNasConnection(it) }
+                                                )
+                                            }
+                                        }
+                                        Box(modifier = Modifier.width(compactTileWidth)) {
+                                            DlFolderShelfItem(
+                                                enabled = !isEditMode,
+                                                onClick = openDlFolder
+                                            )
+                                        }
+                                    }
                                 }
                             }
                             item {
