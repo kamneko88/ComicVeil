@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.House
 import com.composables.icons.lucide.List
 import com.composables.icons.lucide.Lock
 import com.composables.icons.lucide.Bookmark
@@ -538,56 +539,71 @@ fun HomeScreen(
                     }
                 },
                 navigationIcon = {
-                    if (!isRoot) {
-                        var showNavMenu by remember { mutableStateOf(false) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clickable {
+                                    isEditMode    = false
+                                    selectedPaths = emptySet()
+                                    viewModel.navigateToHome()
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Lucide.House, contentDescription = "HOME")
+                        }
 
-                        Box {
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .combinedClickable(
-                                        onClick     = {
-                                            isEditMode    = false
-                                            selectedPaths = emptySet()
-                                            viewModel.navigateUp()
-                                        },
-                                        onLongClick = { showNavMenu = true }
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(Lucide.ArrowLeft, contentDescription = "戻る")
-                            }
-                            DropdownMenu(
-                                expanded         = showNavMenu,
-                                onDismissRequest = { showNavMenu = false }
-                            ) {
-                                // NASの場合のみ「サーバールートへ」のショートカットを表示
-                                // （ローカル/SAFのルートはHOMEと同一なので不要）
-                                val rootLabel = (currentLocation as? ViewLocation.NasFolder)?.server?.displayName
-                                if (rootLabel != null) {
+                        if (!isRoot) {
+                            var showNavMenu by remember { mutableStateOf(false) }
+
+                            Box {
+                                Box(
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .combinedClickable(
+                                            onClick     = {
+                                                isEditMode    = false
+                                                selectedPaths = emptySet()
+                                                viewModel.navigateUp()
+                                            },
+                                            onLongClick = { showNavMenu = true }
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Lucide.ArrowLeft, contentDescription = "戻る")
+                                }
+                                DropdownMenu(
+                                    expanded         = showNavMenu,
+                                    onDismissRequest = { showNavMenu = false }
+                                ) {
+                                    // NASの場合のみ「サーバールートへ」のショートカットを表示
+                                    // （ローカル/SAFのルートはHOMEと同一なので不要）
+                                    val rootLabel = (currentLocation as? ViewLocation.NasFolder)?.server?.displayName
+                                    if (rootLabel != null) {
+                                        DropdownMenuItem(
+                                            text    = { Text(rootLabel) },
+                                            onClick = {
+                                                showNavMenu   = false
+                                                isEditMode    = false
+                                                selectedPaths = emptySet()
+                                                (currentLocation as? ViewLocation.NasFolder)?.let {
+                                                    viewModel.navigateToNas(it.server, "")
+                                                }
+                                            }
+                                        )
+                                        HorizontalDivider()
+                                    }
+                                    // 下に表示：HOME
                                     DropdownMenuItem(
-                                        text    = { Text(rootLabel) },
+                                        text    = { Text("HOME") },
                                         onClick = {
                                             showNavMenu   = false
                                             isEditMode    = false
                                             selectedPaths = emptySet()
-                                            (currentLocation as? ViewLocation.NasFolder)?.let {
-                                                viewModel.navigateToNas(it.server, "")
-                                            }
+                                            viewModel.navigateToHome()
                                         }
                                     )
-                                    HorizontalDivider()
                                 }
-                                // 下に表示：HOME
-                                DropdownMenuItem(
-                                    text    = { Text("HOME") },
-                                    onClick = {
-                                        showNavMenu   = false
-                                        isEditMode    = false
-                                        selectedPaths = emptySet()
-                                        viewModel.navigateToHome()
-                                    }
-                                )
                             }
                         }
                     }
