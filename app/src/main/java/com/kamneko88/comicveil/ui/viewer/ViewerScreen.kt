@@ -767,7 +767,7 @@ fun ViewerScreen(
                         )
                     }
 
-                    // 上部：本を閉じる（幅広のピルボタン）＋ スライドショー再生（2段目）
+                    // 上部：本を閉じる（幅広のピルボタン）
                     AnimatedVisibility(
                         visible  = menuVisible,
                         enter    = slideInVertically(tween(200)) { -it } + fadeIn(tween(200)),
@@ -798,33 +798,39 @@ fun ViewerScreen(
                                 Icon(Lucide.ArrowLeft, contentDescription = null)
                                 Text(text = "  本を閉じる", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                             }
+                        }
+                    }
 
-                            Spacer(Modifier.height(8.dp))
-
-                            Button(
-                                onClick = {
-                                    val startingNow = !slideshowActive
-                                    slideshowActive = startingNow
-                                    if (startingNow) {
-                                        menuVisible = false
-                                    }
-                                },
-                                shape   = RoundedCornerShape(28.dp),
-                                colors  = ButtonDefaults.buttonColors(
-                                    containerColor = Color.Black.copy(alpha = 0.6f),
-                                    contentColor   = Color.White
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth(0.85f)
-                                    .height(52.dp)
-                            ) {
-                                Icon(if (slideshowActive) Lucide.Pause else Lucide.Play, contentDescription = null)
-                                Text(
-                                    text = if (slideshowActive) "  ❚❚ 停止" else "  ▶ スライドショー再生",
-                                    fontSize   = 16.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
+                    // 中央：スライドショー再生（「本を閉じる」ボタンとの誤タップを避けるため画面中央に独立配置）
+                    AnimatedVisibility(
+                        visible  = menuVisible,
+                        enter    = fadeIn(tween(200)),
+                        exit     = fadeOut(tween(200)),
+                        modifier = Modifier.align(Alignment.Center)
+                    ) {
+                        Button(
+                            onClick = {
+                                val startingNow = !slideshowActive
+                                slideshowActive = startingNow
+                                if (startingNow) {
+                                    menuVisible = false
+                                }
+                            },
+                            shape   = RoundedCornerShape(28.dp),
+                            colors  = ButtonDefaults.buttonColors(
+                                containerColor = Color.Black.copy(alpha = 0.6f),
+                                contentColor   = Color.White
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth(0.85f)
+                                .height(52.dp)
+                        ) {
+                            Icon(if (slideshowActive) Lucide.Pause else Lucide.Play, contentDescription = null)
+                            Text(
+                                text = if (slideshowActive) "  ❚❚ 停止" else "  ▶ スライドショー再生",
+                                fontSize   = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
 
