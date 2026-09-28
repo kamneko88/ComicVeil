@@ -158,6 +158,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _sortKey     = MutableStateFlow(sortPrefs.sortKey)
     val sortKey: StateFlow<SortPrefs.SortKey> = _sortKey.asStateFlow()
 
+    private val _nameSortAlgorithm = MutableStateFlow(sortPrefs.nameSortAlgorithm)
+    val nameSortAlgorithm: StateFlow<SortPrefs.NameSortAlgorithm> = _nameSortAlgorithm.asStateFlow()
+
     private val _ascending   = MutableStateFlow(sortPrefs.ascending)
     val ascending: StateFlow<Boolean> = _ascending.asStateFlow()
 
@@ -246,20 +249,21 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             kotlinx.coroutines.flow.combine(
-                _files, _sortKey, _ascending, _folderOrder,
+                _files, _sortKey, _nameSortAlgorithm, _ascending, _folderOrder,
                 _statusFilter, _colorLabelFilter, _fileStatuses, _fileMetaMap, _searchQuery
             ) { arr ->
                 @Suppress("UNCHECKED_CAST")
                 val rawFiles     = arr[0] as List<FileItem>
                 val key          = arr[1] as SortPrefs.SortKey
-                val asc          = arr[2] as Boolean
-                val order        = arr[3] as SortPrefs.FolderOrder
-                val statusF      = arr[4] as Set<String>
-                val colorF       = arr[5] as Set<String>
-                val statuses     = arr[6] as Map<String, com.kamneko88.comicveil.data.db.ReadStatus>
-                val metas        = arr[7] as Map<String, com.kamneko88.comicveil.data.db.ComicFile>
-                val query        = arr[8] as String
-                applySort(rawFiles, key, asc, order, statusF, colorF, statuses, metas, query)
+                val nameAlgo     = arr[2] as SortPrefs.NameSortAlgorithm
+                val asc          = arr[3] as Boolean
+                val order        = arr[4] as SortPrefs.FolderOrder
+                val statusF      = arr[5] as Set<String>
+                val colorF       = arr[6] as Set<String>
+                val statuses     = arr[7] as Map<String, com.kamneko88.comicveil.data.db.ReadStatus>
+                val metas        = arr[8] as Map<String, com.kamneko88.comicveil.data.db.ComicFile>
+                val query        = arr[9] as String
+                applySort(rawFiles, key, nameAlgo, asc, order, statusF, colorF, statuses, metas, query)
             }.collect { sorted ->
                 _displayFiles.value = sorted
             }
@@ -301,6 +305,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         sortPrefs.folderOrder = order
     }
 
+    fun setNameSortAlgorithm(algorithm: SortPrefs.NameSortAlgorithm) {
+        _nameSortAlgorithm.value = algorithm
+        sortPrefs.nameSortAlgorithm = algorithm
+    }
+
     fun toggleStatusFilter(statusName: String) {
         val current = _statusFilter.value.toMutableSet()
         if (statusName in current) current.remove(statusName) else current.add(statusName)
@@ -321,9 +330,23 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         sortPrefs.clearFilters()
     }
 
+    /**
+     * 「Natural」名前ソート用のコレーター。
+     * numericCollation により数字列は桁数によらず値の大きさで比較され、
+     * ICUのUnicode照合順により記号（★など）と文字も区別して並ぶ
+     * （iOS版Comic Glassの「Natural（Unicode）」に近い挙動を狙ったもの。
+     * 内部アルゴリズムは非公開のため完全な再現は保証しない）。
+     */
+    private val naturalNameCollator: android.icu.text.Collator by lazy {
+        (android.icu.text.Collator.getInstance(java.util.Locale.JAPAN) as android.icu.text.RuleBasedCollator).apply {
+            numericCollation = true
+        }
+    }
+
     private fun applySort(
         raw: List<FileItem>,
         key: SortPrefs.SortKey,
+        nameSortAlgorithm: SortPrefs.NameSortAlgorithm,
         ascending: Boolean,
         folderOrder: SortPrefs.FolderOrder,
         statusFilter: Set<String>,
@@ -352,7 +375,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val comparator: Comparator<FileItem> = when (key) {
-            SortPrefs.SortKey.NAME   -> compareBy { it.name.lowercase() }
+            SortPrefs.SortKey.NAME   -> when (nameSortAlgorithm) {
+                SortPrefs.NameSortAlgorithm.LEGACY  -> compareBy { it.name.lowercase() }
+                SortPrefs.NameSortAlgorithm.NATURAL -> Comparator { a, b -> naturalNameCollator.compare(a.name, b.name) }
+            }
             SortPrefs.SortKey.DATE   -> compareBy { it.lastModified }
             SortPrefs.SortKey.RATING -> compareBy { metas[it.path]?.rating ?: 0 }
         }

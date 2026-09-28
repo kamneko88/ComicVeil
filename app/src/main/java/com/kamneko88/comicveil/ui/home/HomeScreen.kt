@@ -158,6 +158,7 @@ fun HomeScreen(
     val fileStatuses     by viewModel.fileStatuses.collectAsState()
     val fileMetaMap      by viewModel.fileMetaMap.collectAsState()
     val sortKey           by viewModel.sortKey.collectAsState()
+    val nameSortAlgorithm by viewModel.nameSortAlgorithm.collectAsState()
     val ascending         by viewModel.ascending.collectAsState()
     val statusFilter      by viewModel.statusFilter.collectAsState()
     val colorLabelFilter  by viewModel.colorLabelFilter.collectAsState()
@@ -1208,17 +1209,19 @@ fun HomeScreen(
             dragHandle       = { BottomSheetDefaults.DragHandle() }
         ) {
             SortFilterSheet(
-                sortKey          = sortKey,
-                ascending        = ascending,
-                folderOrder      = folderOrder,
-                statusFilter     = statusFilter,
-                colorLabelFilter = colorLabelFilter,
-                onSortKey        = { viewModel.setSortKey(it) },
-                onFolderOrder    = { viewModel.setFolderOrder(it) },
-                onStatusFilter   = { viewModel.toggleStatusFilter(it) },
-                onColorFilter    = { viewModel.toggleColorLabelFilter(it) },
-                onClearFilter    = { viewModel.clearFilters() },
-                onClose          = { showSortSheet = false }
+                sortKey             = sortKey,
+                ascending           = ascending,
+                nameSortAlgorithm   = nameSortAlgorithm,
+                folderOrder         = folderOrder,
+                statusFilter        = statusFilter,
+                colorLabelFilter    = colorLabelFilter,
+                onSortKey           = { viewModel.setSortKey(it) },
+                onNameSortAlgorithm = { viewModel.setNameSortAlgorithm(it) },
+                onFolderOrder       = { viewModel.setFolderOrder(it) },
+                onStatusFilter      = { viewModel.toggleStatusFilter(it) },
+                onColorFilter       = { viewModel.toggleColorLabelFilter(it) },
+                onClearFilter       = { viewModel.clearFilters() },
+                onClose             = { showSortSheet = false }
             )
         }
     }
@@ -2462,10 +2465,12 @@ private fun DlFolderShelfItem(
 fun SortFilterSheet(
     sortKey: SortPrefs.SortKey,
     ascending: Boolean,
+    nameSortAlgorithm: SortPrefs.NameSortAlgorithm,
     folderOrder: SortPrefs.FolderOrder,
     statusFilter: Set<String>,
     colorLabelFilter: Set<String>,
     onSortKey: (SortPrefs.SortKey) -> Unit,
+    onNameSortAlgorithm: (SortPrefs.NameSortAlgorithm) -> Unit,
     onFolderOrder: (SortPrefs.FolderOrder) -> Unit,
     onStatusFilter: (String) -> Unit,
     onColorFilter: (String) -> Unit,
@@ -2501,6 +2506,19 @@ fun SortFilterSheet(
                         }
                     } else null
                 )
+            }
+        }
+
+        if (sortKey == SortPrefs.SortKey.NAME) {
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SortPrefs.NameSortAlgorithm.entries.forEach { algorithm ->
+                    FilterChip(
+                        selected = nameSortAlgorithm == algorithm,
+                        onClick  = { onNameSortAlgorithm(algorithm) },
+                        label    = { Text(algorithm.label) }
+                    )
+                }
             }
         }
 

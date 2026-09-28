@@ -25,6 +25,22 @@ class SortPrefs(context: Context) {
         get() = SortKey.valueOf(prefs.getString("sort_key", SortKey.NAME.name) ?: SortKey.NAME.name)
         set(v) = prefs.edit { putString("sort_key", v.name) }
 
+    // ── 名前ソートのアルゴリズム ─────────────────────────────────────────
+    // LEGACY = 単純な小文字文字列比較（従来の挙動）
+    // NATURAL = 数字列を桁数によらず値で比較し、記号と文字を区別するUnicode相当の並び順
+
+    enum class NameSortAlgorithm(val label: String) {
+        LEGACY("従来"),
+        NATURAL("Natural")
+    }
+
+    var nameSortAlgorithm: NameSortAlgorithm
+        get() = NameSortAlgorithm.valueOf(
+            prefs.getString("name_sort_algorithm", NameSortAlgorithm.LEGACY.name)
+                ?: NameSortAlgorithm.LEGACY.name
+        )
+        set(v) = prefs.edit { putString("name_sort_algorithm", v.name) }
+
     // ── 昇順/降順 ────────────────────────────────────────────────────────
 
     var ascending: Boolean
