@@ -11,6 +11,7 @@ import com.kamneko88.comicveil.data.ArchiveScanner
 import com.kamneko88.comicveil.data.CacheDirInfo
 import com.kamneko88.comicveil.data.calcDirSize
 import com.kamneko88.comicveil.data.isFullyCached
+import com.kamneko88.comicveil.data.isNasFolderCached
 import com.kamneko88.comicveil.data.isNasImageCachedInFolder
 import com.kamneko88.comicveil.data.selectDirsToEvict
 import com.kamneko88.comicveil.data.FileItem
@@ -1213,6 +1214,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 folderComplete = NasStreamCache.isComplete(bookDir),
                 cachedLength   = if (imageFile.exists()) imageFile.length() else 0L,
                 expectedSize   = fileItem.size
+            )
+        }
+        if (fileItem.type == FileItemType.FOLDER) {
+            val bookDir = NasStreamCache.bookDir(getApplication(), fileItem.nasPath)
+            return isNasFolderCached(
+                folderComplete  = NasStreamCache.isComplete(bookDir),
+                cachedFileCount = NasStreamCache.contentFileCount(bookDir)
             )
         }
         val ext  = fileItem.name.substringAfterLast(".")

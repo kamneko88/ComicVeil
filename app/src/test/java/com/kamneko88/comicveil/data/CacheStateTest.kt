@@ -67,4 +67,25 @@ class CacheStateTest {
             isNasImageCachedInFolder(folderComplete = true, cachedLength = 1L, expectedSize = -1L)
         )
     }
+
+    @Test
+    fun `nas folder is cached when complete and has content files`() {
+        assertEquals(true, isNasFolderCached(folderComplete = true, cachedFileCount = 1))
+        assertEquals(true, isNasFolderCached(folderComplete = true, cachedFileCount = 5))
+    }
+
+    @Test
+    fun `nas folder is not cached when not complete`() {
+        assertEquals(false, isNasFolderCached(folderComplete = false, cachedFileCount = 5))
+    }
+
+    @Test
+    fun `nas folder is not cached when complete but empty`() {
+        assertEquals(false, isNasFolderCached(folderComplete = true, cachedFileCount = 0))
+    }
+
+    @Test
+    fun `nas folder is not cached when neither complete nor has files`() {
+        assertEquals(false, isNasFolderCached(folderComplete = false, cachedFileCount = 0))
+    }
 }

@@ -20,3 +20,11 @@ fun isFullyCached(cachedLength: Long, expectedSize: Long): Boolean =
  */
 fun isNasImageCachedInFolder(folderComplete: Boolean, cachedLength: Long, expectedSize: Long): Boolean =
     folderComplete && isFullyCached(cachedLength, expectedSize)
+
+/**
+ * NASの一覧に並ぶ「画像フォルダの行（ディレクトリそのもの）」が、キャッシュ済みと判定できるかを返す。
+ * 完了マーカーが立っているだけでは、ダウンロード前の空フォルダと区別できないため、
+ * マーカー以外のファイルが1つ以上存在することも併せて確認する。
+ */
+fun isNasFolderCached(folderComplete: Boolean, cachedFileCount: Int): Boolean =
+    folderComplete && cachedFileCount > 0
