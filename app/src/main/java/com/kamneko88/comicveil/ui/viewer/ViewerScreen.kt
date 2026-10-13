@@ -190,16 +190,12 @@ fun ViewerScreen(
     // スライドショー（自動ページ送り）。slideshowAutoTargetPageは、
     // 自身の自動送りで移動した先のページ番号を覚えておき、それ以外の理由で
     // ページ番号が変わった（スワイプ・スライダー等のユーザー操作）ときだけ自動停止するための目印。
+    // 再生中にタップ等でメニューが出ている間は自動送りタイマーだけが一時停止し
+    // （下のLaunchedEffect(slideshowActive, menuVisible, ...)参照）、
+    // slideshowActive自体はtrueのまま保たれる。メニューを閉じれば自動で再開する。
+    // 完全に終了するのはメニュー内の「停止」ボタンでslideshowActiveをfalseにしたときのみ。
     var slideshowActive         by remember { mutableStateOf(false) }
     var slideshowAutoTargetPage by remember { mutableIntStateOf(-1) }
-
-    // 再生中にタップ等でメニューが出たら、スライドショーを一時停止する。
-    // 再開はメニュー内の再生ボタンのみ（メニューを閉じるだけでは再開しない）。
-    LaunchedEffect(menuVisible) {
-        if (menuVisible) {
-            slideshowActive = false
-        }
-    }
 
     // 明るさを調整したら、少しして自動で引っ込める。
     // 出しっぱなしだとページ移動スライダーと近くて誤タップのもとになるし、画面もうるさい。
@@ -530,14 +526,20 @@ fun ViewerScreen(
                 }
             }
 
-            // スライドショーの自動送りタイマー。メニューが表示されると上のLaunchedEffect(menuVisible)で
-            // slideshowActiveがfalseになり、このタイマーも停止する。
-            LaunchedEffect(slideshowActive, appPrefs.slideshowInterval) {
-                if (!slideshowActive) return@LaunchedEffect
+            // スライドショーの自動送りタイマー。menuVisibleをキーに加えているので、
+            // メニューが表示されるとこのタイマーだけが一時停止し（slideshowActiveはtrueのまま）、
+            // メニューが閉じると最初からタイマーが再開する。
+            // 自動送りのアニメーション中にメニューが開いてタイマーが一時停止に切り替わっても、
+            // NonCancellableでanimateScrollToPageだけは必ず完了させる。
+            // 途中で打ち切ると、pagerStateのcurrentPageがslideshowAutoTargetPageと食い違ったまま残り、
+            // 上の「自動送り以外の理由でページが変わったら停止する」処理が誤って
+            // slideshowActiveをfalseにしてしまう（一時停止のつもりが完全終了になる）ため。
+            LaunchedEffect(slideshowActive, menuVisible, appPrefs.slideshowInterval) {
+                if (!slideshowActive || menuVisible) return@LaunchedEffect
                 val intervalMs = appPrefs.slideshowInterval.seconds * 1000L
-                while (slideshowActive) {
+                while (slideshowActive && !menuVisible) {
                     kotlinx.coroutines.delay(intervalMs)
-                    if (!slideshowActive) break
+                    if (!slideshowActive || menuVisible) break
                     val target = pagerState.currentPage + 1
                     if (target > spreads.size - 1) {
                         slideshowActive = false
@@ -545,7 +547,9 @@ fun ViewerScreen(
                         break
                     }
                     slideshowAutoTargetPage = target
-                    pagerState.animateScrollToPage(target)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                        pagerState.animateScrollToPage(target)
+                    }
                     if (target >= spreads.size - 1) {
                         slideshowActive = false
                         menuVisible = true
