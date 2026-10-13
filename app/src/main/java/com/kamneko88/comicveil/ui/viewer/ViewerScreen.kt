@@ -193,6 +193,14 @@ fun ViewerScreen(
     var slideshowActive         by remember { mutableStateOf(false) }
     var slideshowAutoTargetPage by remember { mutableIntStateOf(-1) }
 
+    // 再生中にタップ等でメニューが出たら、スライドショーを一時停止する。
+    // 再開はメニュー内の再生ボタンのみ（メニューを閉じるだけでは再開しない）。
+    LaunchedEffect(menuVisible) {
+        if (menuVisible) {
+            slideshowActive = false
+        }
+    }
+
     // 明るさを調整したら、少しして自動で引っ込める。
     // 出しっぱなしだとページ移動スライダーと近くて誤タップのもとになるし、画面もうるさい。
     LaunchedEffect(showBrightnessSlider, brightness) {
@@ -522,7 +530,8 @@ fun ViewerScreen(
                 }
             }
 
-            // スライドショーの自動送りタイマー。メニューの表示/非表示とは独立して動作する。
+            // スライドショーの自動送りタイマー。メニューが表示されると上のLaunchedEffect(menuVisible)で
+            // slideshowActiveがfalseになり、このタイマーも停止する。
             LaunchedEffect(slideshowActive, appPrefs.slideshowInterval) {
                 if (!slideshowActive) return@LaunchedEffect
                 val intervalMs = appPrefs.slideshowInterval.seconds * 1000L
