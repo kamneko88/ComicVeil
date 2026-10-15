@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -121,6 +122,8 @@ import coil3.compose.AsyncImage
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.FileItemType
 import com.kamneko88.comicveil.data.LocalFileRepository
+import com.kamneko88.comicveil.data.SafFileRepository
+import com.kamneko88.comicveil.data.ShelfFolderCovers
 import com.kamneko88.comicveil.data.SortPrefs
 import com.kamneko88.comicveil.data.ThumbnailOutcome
 import com.kamneko88.comicveil.data.ThumbnailRepository
@@ -128,6 +131,8 @@ import com.kamneko88.comicveil.data.db.ColorLabel
 import com.kamneko88.comicveil.data.db.ReadStatus
 import com.kamneko88.comicveil.data.nas.NasServer
 import com.kamneko88.comicveil.ui.transfer.TransferViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
@@ -2177,11 +2182,32 @@ fun ShelfFileItem(
 ) {
     val repository = remember { LocalFileRepository() }
     val (title, _) = remember(fileItem.name) { repository.parseFileName(fileItem.name) }
+    val context = LocalContext.current
 
     var thumbnailOutcome by remember(fileItem.path) { mutableStateOf<ThumbnailOutcome?>(null) }
     LaunchedEffect(fileItem.path, generateThumbnail) {
         if (generateThumbnail) {
             thumbnailOutcome = thumbnailRepository.getOrGenerateThumbnail(fileItem)
+        }
+    }
+
+    // フォルダタイルに表示する中身の表紙（最大4枚）。NASフォルダは新規通信をしないため対象外
+    // （既存キャッシュだけで中身の一覧が分かる手段が無く、フォルダアイコンのままにする）。
+    var folderCovers by remember(fileItem.path) { mutableStateOf<List<java.io.File>?>(null) }
+    LaunchedEffect(fileItem.path, generateThumbnail) {
+        folderCovers = if (!generateThumbnail || !fileItem.isFolder || fileItem.isNas) {
+            emptyList()
+        } else {
+            withContext(Dispatchers.IO) {
+                val children = when {
+                    fileItem.file != null -> LocalFileRepository().getFiles(fileItem.file)
+                    fileItem.uri  != null -> SafFileRepository().getFiles(context, fileItem.uri)
+                    else -> emptyList()
+                }
+                ShelfFolderCovers.collectCovers(children) { candidate ->
+                    thumbnailRepository.getOrGenerateThumbnail(candidate)
+                }
+            }
         }
     }
 
@@ -2203,14 +2229,19 @@ fun ShelfFileItem(
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
             if (fileItem.isFolder) {
-                // フォルダは表紙がないのでアイコンを中央に
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector        = Lucide.Folder,
-                        contentDescription = null,
-                        modifier           = Modifier.size(48.dp),
-                        tint               = MaterialTheme.colorScheme.primary
-                    )
+                val covers = folderCovers
+                if (covers.isNullOrEmpty()) {
+                    // 表紙が0枚（未確定中も含む）のフォルダは、現行どおりアイコンを中央に
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector        = Lucide.Folder,
+                            contentDescription = null,
+                            modifier           = Modifier.size(48.dp),
+                            tint               = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                } else {
+                    ShelfFolderCoverGrid(covers = covers)
                 }
             } else when (val outcome = thumbnailOutcome) {
                 is ThumbnailOutcome.Ready -> AsyncImage(
@@ -2296,6 +2327,61 @@ fun ShelfFileItem(
                 overflow  = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
                 modifier  = Modifier.padding(top = 4.dp)
+            )
+        }
+    }
+}
+
+/**
+ * 本棚モードのフォルダタイルの中身。
+ * 上端左に小さなフォルダの「耳」を付け、その下に中身のコミックの表紙を2×2のグリッドで並べる
+ * （左上→右上→左下→右下の順）。取れなかった枠はsurface系の薄い色で空ける。
+ */
+@Composable
+private fun ShelfFolderCoverGrid(covers: List<java.io.File>) {
+    Column(modifier = Modifier.fillMaxSize().padding(7.dp)) {
+        Box(
+            modifier = Modifier
+                .size(width = 30.dp, height = 9.dp)
+                .clip(RoundedCornerShape(bottomStart = 3.dp, bottomEnd = 3.dp))
+                .background(MaterialTheme.colorScheme.primary)
+        )
+        Spacer(Modifier.height(3.dp))
+        Column(
+            modifier             = Modifier.fillMaxWidth().weight(1f),
+            verticalArrangement  = Arrangement.spacedBy(3.dp)
+        ) {
+            Row(
+                modifier              = Modifier.fillMaxWidth().weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                ShelfFolderCoverCell(covers.getOrNull(0), Modifier.weight(1f).fillMaxHeight())
+                ShelfFolderCoverCell(covers.getOrNull(1), Modifier.weight(1f).fillMaxHeight())
+            }
+            Row(
+                modifier              = Modifier.fillMaxWidth().weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                ShelfFolderCoverCell(covers.getOrNull(2), Modifier.weight(1f).fillMaxHeight())
+                ShelfFolderCoverCell(covers.getOrNull(3), Modifier.weight(1f).fillMaxHeight())
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShelfFolderCoverCell(cover: java.io.File?, modifier: Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(2.dp))
+            .background(MaterialTheme.colorScheme.surface)
+    ) {
+        if (cover != null) {
+            AsyncImage(
+                model              = cover,
+                contentDescription = null,
+                modifier           = Modifier.fillMaxSize(),
+                contentScale       = ContentScale.Crop
             )
         }
     }
