@@ -61,10 +61,6 @@ object NasStreamCache {
 
     fun isComplete(bookDir: File): Boolean = File(bookDir, COMPLETE_MARKER).exists()
 
-    /** 完了マーカーを除いた実ファイルの数（NASの画像フォルダ行のキャッシュ済み判定用） */
-    fun contentFileCount(bookDir: File): Int =
-        bookDir.listFiles { f -> f.isFile && f.name != COMPLETE_MARKER }?.size ?: 0
-
     fun totalSize(context: Context): Long = calcDirSize(baseDir(context))
 
     /** 全て削除する（設定画面の手動削除ボタン用） */

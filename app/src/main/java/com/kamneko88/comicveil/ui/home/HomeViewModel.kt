@@ -11,8 +11,6 @@ import com.kamneko88.comicveil.data.ArchiveScanner
 import com.kamneko88.comicveil.data.CacheDirInfo
 import com.kamneko88.comicveil.data.calcDirSize
 import com.kamneko88.comicveil.data.isFullyCached
-import com.kamneko88.comicveil.data.isNasFolderCached
-import com.kamneko88.comicveil.data.isNasImageCachedInFolder
 import com.kamneko88.comicveil.data.selectDirsToEvict
 import com.kamneko88.comicveil.data.FileItem
 import com.kamneko88.comicveil.data.FileItemType
@@ -1206,23 +1204,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun isNasCached(fileItem: FileItem): Boolean {
         if (!fileItem.isNas) return false
-        if (fileItem.type == FileItemType.IMAGE_FILE) {
-            val parentNasPath = fileItem.nasPath.substringBeforeLast("/", "")
-            val bookDir = NasStreamCache.bookDir(getApplication(), parentNasPath)
-            val imageFile = File(bookDir, fileItem.name)
-            return isNasImageCachedInFolder(
-                folderComplete = NasStreamCache.isComplete(bookDir),
-                cachedLength   = if (imageFile.exists()) imageFile.length() else 0L,
-                expectedSize   = fileItem.size
-            )
-        }
-        if (fileItem.type == FileItemType.FOLDER) {
-            val bookDir = NasStreamCache.bookDir(getApplication(), fileItem.nasPath)
-            return isNasFolderCached(
-                folderComplete  = NasStreamCache.isComplete(bookDir),
-                cachedFileCount = NasStreamCache.contentFileCount(bookDir)
-            )
-        }
         val ext  = fileItem.name.substringAfterLast(".")
         val file = NasStreamCache.destFile(getApplication(), fileItem.nasPath, ext)
         return file.exists() && isFullyCached(file.length(), fileItem.size)
