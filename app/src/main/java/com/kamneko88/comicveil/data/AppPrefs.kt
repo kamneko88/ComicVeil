@@ -196,9 +196,10 @@ class AppPrefs(context: Context) {
         )
         set(value) = prefs.edit { putString(KEY_LIST_DISPLAY_MODE, value.name) }
 
-    /** 本棚モードで表紙の下にタイトルを表示するか（初期値は表紙のみ） */
+    /** 本棚モードで表紙の下にタイトルを表示するか（初期値はON。フォルダだらけの本棚でどれを開けばいいか
+     * 分からないという困りごとが実機確認で解消したため、既定を表紙のみから変更した） */
     var shelfShowTitle: Boolean
-        get() = prefs.getBoolean(KEY_SHELF_SHOW_TITLE, false)
+        get() = prefs.getBoolean(KEY_SHELF_SHOW_TITLE, true)
         set(value) = prefs.edit { putBoolean(KEY_SHELF_SHOW_TITLE, value) }
 
     /**
