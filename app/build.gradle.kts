@@ -12,8 +12,8 @@ android {
         applicationId = "com.kamneko88.comicveil"
         minSdk = 26
         targetSdk = 36
-        versionCode = 117
-        versionName = "1.22.0"
+        versionCode = 118
+        versionName = "1.22.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -114,6 +114,8 @@ dependencies {
     // org.json はAndroid SDKのスタブ実装のみで、JVM単体テストではそのままだと未実装例外になるため、
     // バックアップのJSON往復テスト用に実体を持つ実装を追加する
     testImplementation("org.json:json:20231013")
+    // Room MigrationのSQL（新テーブルの作成・既存データ保持）を実SQLiteで確認するJVM単体テスト用
+    testImplementation("org.xerial:sqlite-jdbc:3.41.2.2")
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

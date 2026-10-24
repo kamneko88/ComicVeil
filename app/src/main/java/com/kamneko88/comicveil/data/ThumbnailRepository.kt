@@ -129,6 +129,31 @@ class ThumbnailRepository(private val cacheDir: File, private val context: Conte
         }
 
     /**
+     * NASコミックの表紙を、通信なしで取れる範囲だけで返す（NASフォルダのタイル用）。
+     * 順に ①カスタム表紙 ②保存済みのNASサムネイル ③端末内に取得完了しているコミック本体から生成。
+     * どれも無ければUnavailable（NASへは一切問い合わせない・部分取得もしない）。
+     */
+    suspend fun peekNasThumbnail(fileItem: FileItem): ThumbnailOutcome =
+        withContext(Dispatchers.IO) {
+            if (!fileItem.isNas || !fileItem.isComic) return@withContext ThumbnailOutcome.Unavailable
+            if (hasCustomCover(fileItem)) return@withContext ThumbnailOutcome.Ready(customCoverFile(fileItem))
+
+            val nasPath   = fileItem.nasPath
+            val cacheFile = File(cacheDir, "nas_${nasPath.hashCode()}.jpg")
+            if (cacheFile.exists()) return@withContext ThumbnailOutcome.Ready(cacheFile)
+
+            val ctx = context ?: return@withContext ThumbnailOutcome.Unavailable
+            val strCacheFile = NasStreamCache.destFile(ctx, nasPath, fileItem.name.substringAfterLast("."))
+            val cachedComplete = NasStreamCache.isComplete(NasStreamCache.bookDir(ctx, nasPath)) &&
+                strCacheFile.exists() && strCacheFile.length() > 0
+            if (!cachedComplete) return@withContext ThumbnailOutcome.Unavailable
+
+            generationSemaphore.withPermit {
+                generateAndCache(strCacheFile, 0L, cacheFile, File(cacheDir, "nas_${nasPath.hashCode()}.meta"))
+            }
+        }
+
+    /**
      * NASファイルのサムネイル生成
      * 1. STRキャッシュ済みならそこから生成
      * 2. 未キャッシュならNASから先頭2MBだけ取得して生成

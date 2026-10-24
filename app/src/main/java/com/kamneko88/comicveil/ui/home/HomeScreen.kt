@@ -124,6 +124,7 @@ import com.kamneko88.comicveil.data.FileItemType
 import com.kamneko88.comicveil.data.LocalFileRepository
 import com.kamneko88.comicveil.data.SafFileRepository
 import com.kamneko88.comicveil.data.ShelfFolderCovers
+import com.kamneko88.comicveil.data.db.ComicVeilDatabase
 import com.kamneko88.comicveil.data.SortPrefs
 import com.kamneko88.comicveil.data.ThumbnailOutcome
 import com.kamneko88.comicveil.data.ThumbnailRepository
@@ -2191,12 +2192,20 @@ fun ShelfFileItem(
         }
     }
 
-    // フォルダタイルに表示する中身の表紙（最大4枚）。NASフォルダは新規通信をしないため対象外
-    // （既存キャッシュだけで中身の一覧が分かる手段が無く、フォルダアイコンのままにする）。
+    // フォルダタイルに表示する中身の表紙（最大4枚）。NASフォルダは新規通信をしない：
+    // 一度開いたときに端末内へ保存した一覧と、端末内にある表紙だけで並べる（未保存・表紙0枚ならアイコンのまま）。
     var folderCovers by remember(fileItem.path) { mutableStateOf<List<java.io.File>?>(null) }
     LaunchedEffect(fileItem.path, generateThumbnail) {
-        folderCovers = if (!generateThumbnail || !fileItem.isFolder || fileItem.isNas) {
+        folderCovers = if (!generateThumbnail || !fileItem.isFolder) {
             emptyList()
+        } else if (fileItem.nasServer != null) {
+            withContext(Dispatchers.IO) {
+                val listing = ComicVeilDatabase.getDatabase(context).nasFolderListingDao()
+                    .getListing(fileItem.nasPath)
+                ShelfFolderCovers.collectNasCovers(listing, fileItem.nasServer) { candidate ->
+                    thumbnailRepository.peekNasThumbnail(candidate)
+                }
+            }
         } else {
             withContext(Dispatchers.IO) {
                 val children = when {

@@ -18,6 +18,7 @@ import com.kamneko88.comicveil.data.ImageFolderScanner
 import com.kamneko88.comicveil.data.canonicalStatusKey
 import com.kamneko88.comicveil.data.FormatDetector
 import com.kamneko88.comicveil.data.SafFileRepository
+import com.kamneko88.comicveil.data.ShelfFolderCovers
 import com.kamneko88.comicveil.data.SortPrefs
 import com.kamneko88.comicveil.data.LocalFileRepository
 import com.kamneko88.comicveil.data.db.ColorLabel
@@ -138,6 +139,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val progressRepository  : ReadingProgressRepository
     private val comicFileRepository : ComicFileRepository
     private val fileTitleDao        : com.kamneko88.comicveil.data.db.FileTitleDao
+    private val nasFolderListingDao : com.kamneko88.comicveil.data.db.NasFolderListingDao
     private val smbRepository       = SmbRepository()
     private val nasServerPrefs      = NasServerPrefs(application)
     private val remoteBookmarkPrefs = RemoteBookmarkPrefs(application)
@@ -243,6 +245,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         progressRepository  = ReadingProgressRepository(db.readingProgressDao())
         comicFileRepository = ComicFileRepository(db.comicFileDao())
         fileTitleDao        = db.fileTitleDao()
+        nasFolderListingDao = db.nasFolderListingDao()
         refreshNasServers()
         evictPageCacheIfNeeded()
         evictNasStreamCacheIfNeeded()
@@ -610,6 +613,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _isLoading.value = true
             try {
                 _files.value = smbRepository.listDirectory(server, nasPath)
+                saveNasFolderListing(nasPath, _files.value)
                 loadFileStatuses(_files.value)
             } catch (e: Exception) {
                 _nasError.value = "接続に失敗しました\n${e.message}"
@@ -617,6 +621,17 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 _isLoading.value = false
             }
+        }
+    }
+
+    /**
+     * 取得した一覧の中身（先頭のコミック）を端末内に控える。本棚モードのNASフォルダのタイルが、
+     * 通信なしで表紙を並べるための元データ。一覧の表示を遅らせないよう別スレッドで保存し、失敗しても無視する。
+     */
+    private fun saveNasFolderListing(nasPath: String, items: List<FileItem>) {
+        val comics = ShelfFolderCovers.listingComics(nasPath, items)
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { nasFolderListingDao.replaceListing(nasPath, comics) }
         }
     }
 
